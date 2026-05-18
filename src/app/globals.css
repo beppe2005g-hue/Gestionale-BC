@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body { @apply bg-gray-50 text-gray-900 antialiased; }
+}
+
+@layer components {
+  .card { @apply bg-white rounded-xl border border-gray-200 p-4; }
+  .btn { @apply px-3 py-2 rounded-lg text-sm font-medium border border-gray-200 bg-white hover:bg-gray-50 transition-colors cursor-pointer; }
+  .btn-primary { @apply bg-blue-700 text-white border-blue-700 hover:bg-blue-800; }
+  .btn-success { @apply bg-green-700 text-white border-green-700 hover:bg-green-800; }
+  .btn-danger { @apply bg-red-700 text-white border-red-700 hover:bg-red-800; }
+  .btn-sm { @apply px-2 py-1 text-xs; }
+  .input { @apply w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white; }
+  .label { @apply text-xs text-gray-500 font-medium mb-1 block; }
+  .badge { @apply inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium; }
+  .badge-green { @apply bg-green-100 text-green-800; }
+  .badge-red { @apply bg-red-100 text-red-800; }
+  .badge-amber { @apply bg-amber-100 text-amber-800; }
+  .badge-blue { @apply bg-blue-100 text-blue-800; }
+  .badge-gray { @apply bg-gray-100 text-gray-700; }
+  .table-base { @apply w-full text-sm border-collapse; }
+  .table-base th { @apply text-left px-3 py-2 text-xs font-medium text-gray-500 bg-gray-50 border-b border-gray-200; }
+  .table-base td { @apply px-3 py-2 border-b border-gray-100; }
+  .table-base tr:last-child td { @apply border-b-0; }
+  .table-base tr:hover td { @apply bg-gray-50; }
+}
