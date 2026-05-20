@@ -12,6 +12,7 @@ const nav = [
     { href: '/ddt', label: 'DDT / Bolle', icon: '📋' },
     { href: '/da-ricevere', label: 'Da ricevere', icon: '⏳' },
     { href: '/fatture-fornitori', label: 'Fatt. fornitori', icon: '📄' },
+    { href: '/import-sdi', label: 'Import SDI', icon: '📥' },
   ]},
   { section: 'Ciclo Attivo', items: [
     { href: '/fatture-clienti', label: 'Fatt. clienti', icon: '🧾' },
