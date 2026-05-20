@@ -37,7 +37,7 @@ export default function DaRiceverePage() {
       setGruppi(Object.values(mappa).sort((a, b) => b.totale - a.totale))
     }
 
-    // Fatture chiuse con DDT abbinati
+    // Fatture chiuse con DDT abbinati — mostra SOLO quelle che hanno almeno un DDT
     const { data: ff } = await supabase.from('fatture_fornitori').select('*').order('data', { ascending: false })
     if (ff) {
       const arricchite = await Promise.all(ff.map(async (f: any) => {
@@ -45,7 +45,8 @@ export default function DaRiceverePage() {
           .select('*').eq('fattura_abbinata', f.numero).order('data', { ascending: true })
         return { ...f, ddt_abbinati: ddtAbbinati || [] }
       }))
-      setFattureChiuse(arricchite)
+      // Filtra: mostra solo fatture con almeno un DDT abbinato
+      setFattureChiuse(arricchite.filter(f => f.ddt_abbinati.length > 0))
     }
   }
 
