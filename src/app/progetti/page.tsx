@@ -5,37 +5,119 @@ import Sidebar from '@/components/Sidebar'
 
 const euro = (n: number) => '€ ' + Math.round(n || 0).toLocaleString('it-IT')
 
+const FASI = [
+  { key: 'avanzamento_scavi', label: 'Scavi' },
+  { key: 'avanzamento_fondazioni', label: 'Fondazioni' },
+  { key: 'avanzamento_struttura', label: 'Struttura' },
+  { key: 'avanzamento_finiture', label: 'Finiture' },
+  { key: 'avanzamento_impianti', label: 'Impianti' },
+]
+
+function BarraAvanzamento({ valore, label }: { valore: number, label: string }) {
+  const colore = valore >= 90 ? '#3B6D11' : valore >= 50 ? '#185FA5' : valore >= 80 ? '#854F0B' : '#185FA5'
+  return (
+    <div className="mb-2">
+      <div className="flex justify-between text-xs mb-1">
+        <span className="text-gray-600">{label}</span>
+        <span className="font-medium">{valore}%</span>
+      </div>
+      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all" style={{ width: `${valore}%`, background: colore }} />
+      </div>
+    </div>
+  )
+}
+
 export default function Progetti() {
   const [progetti, setProgetti] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
+  const [utenti, setUtenti] = useState<any[]>([])
   const [modal, setModal] = useState(false)
+  const [modalDettaglio, setModalDettaglio] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  const [note, setNote] = useState<any[]>([])
+  const [nuovaNota, setNuovaNota] = useState('')
+  const [utenteCorrente, setUtenteCorrente] = useState<any>(null)
   const [form, setForm] = useState({
     codice: '', nome: '', cliente_id: '', tipo: 'Privato', responsabile: '',
     valore_contratto: '', budget_costi: '', data_inizio: '', data_fine: '',
-    stato: 'In Corso', note: ''
+    stato: 'In Corso', note: '', geometra_id: '', geometra_nome: ''
   })
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { loadAll() }, [])
 
-  async function load() {
-    const [{ data: p }, { data: c }] = await Promise.all([
-      supabase.from('progetti').select('*').order('created_at', { ascending: false }),
+  async function loadAll() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profilo } = await supabase.from('utenti').select('*').eq('id', user.id).single()
+      setUtenteCorrente({ ...user, profilo })
+    }
+
+    const [{ data: p }, { data: c }, { data: u }] = await Promise.all([
+      supabase.from('progetti').select('*').order('codice'),
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true),
+      supabase.from('utenti').select('id,nome,ruolo,capo_geometra'),
     ])
-    // Calcola ricavi e costi per ogni progetto
-    const [{ data: fc }, { data: ff }] = await Promise.all([
+
+    // Arricchisci con ricavi e costi
+    const [{ data: fc }, { data: ff }, { data: ddt }] = await Promise.all([
       supabase.from('fatture_clienti').select('progetto_id,imponibile'),
       supabase.from('fatture_fornitori').select('progetto_id,imponibile'),
+      supabase.from('ddt').select('progetto_id,importo,stato'),
     ])
+
     const enhanced = (p || []).map(proj => {
       const ric = (fc || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
-      const cos = (ff || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
-      const marg = ric > 0 ? Math.round((ric - cos) / ric * 100) : 0
-      return { ...proj, ricavi_attuali: ric, costi_attuali: cos, margine_perc: marg }
+      const cosFF = (ff || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
+      const cosDDT = (ddt || []).filter(d => d.progetto_id === proj.id && d.stato === 'Da Fatturare').reduce((s, d) => s + (d.importo || 0), 0)
+      const cos = cosFF + cosDDT
+      const margPerc = ric > 0 ? Math.round((ric - cos) / ric * 100) : 0
+      const budgetPerc = proj.budget_costi > 0 ? Math.round(cos / proj.budget_costi * 100) : 0
+      const avanzamentoMedio = Math.round(
+        (FASI.reduce((s, f) => s + (proj[f.key] || 0), 0)) / FASI.length
+      )
+      return { ...proj, ricavi: ric, costi: cos, marg_perc: margPerc, budget_perc: budgetPerc, avanzamento_medio: avanzamentoMedio }
     })
     setProgetti(enhanced)
     setClienti(c || [])
+    setUtenti(u || [])
+  }
+
+  async function apriDettaglio(proj: any) {
+    setModalDettaglio(proj)
+    const { data: n } = await supabase.from('note_cantiere')
+      .select('*').eq('progetto_id', proj.id).order('created_at', { ascending: false })
+    setNote(n || [])
+  }
+
+  async function salvaAvanzamento(projId: string, campo: string, valore: number) {
+    await supabase.from('progetti').update({ [campo]: valore }).eq('id', projId)
+    const updated = progetti.map(p => p.id === projId ? { ...p, [campo]: valore } : p)
+    setProgetti(updated)
+    if (modalDettaglio?.id === projId) setModalDettaglio((prev: any) => ({ ...prev, [campo]: valore }))
+  }
+
+  async function salvaNota() {
+    if (!nuovaNota.trim() || !modalDettaglio) return
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: profilo } = await supabase.from('utenti').select('nome').eq('id', user?.id).single()
+    await supabase.from('note_cantiere').insert({
+      progetto_id: modalDettaglio.id,
+      autore_id: user?.id,
+      autore_nome: profilo?.nome || user?.email,
+      testo: nuovaNota.trim(),
+      data: new Date().toISOString().split('T')[0]
+    })
+    setNuovaNota('')
+    const { data: n } = await supabase.from('note_cantiere')
+      .select('*').eq('progetto_id', modalDettaglio.id).order('created_at', { ascending: false })
+    setNote(n || [])
+  }
+
+  async function eliminaNota(id: string) {
+    if (!confirm('Eliminare questa nota?')) return
+    await supabase.from('note_cantiere').delete().eq('id', id)
+    setNote(prev => prev.filter(n => n.id !== id))
   }
 
   async function generaCodice() {
@@ -55,6 +137,7 @@ export default function Progetti() {
     if (!form.nome || !form.codice) { alert('Inserisci almeno codice e nome cantiere'); return }
     setLoading(true)
     const cli = clienti.find(c => c.id === form.cliente_id)
+    const geo = utenti.find(u => u.id === form.geometra_id)
     await supabase.from('progetti').insert({
       codice: form.codice, nome: form.nome,
       cliente_id: form.cliente_id || null, cliente_nome: cli?.ragione_sociale || '',
@@ -62,11 +145,19 @@ export default function Progetti() {
       valore_contratto: parseFloat(form.valore_contratto) || 0,
       budget_costi: parseFloat(form.budget_costi) || 0,
       data_inizio: form.data_inizio || null, data_fine: form.data_fine || null,
-      stato: form.stato, note: form.note
+      stato: form.stato, note: form.note,
+      geometra_id: form.geometra_id || null,
+      geometra_nome: geo?.nome || ''
     })
     setModal(false); setLoading(false)
-    setForm({ codice: '', nome: '', cliente_id: '', tipo: 'Privato', responsabile: '', valore_contratto: '', budget_costi: '', data_inizio: '', data_fine: '', stato: 'In Corso', note: '' })
-    load()
+    setForm({ codice: '', nome: '', cliente_id: '', tipo: 'Privato', responsabile: '', valore_contratto: '', budget_costi: '', data_inizio: '', data_fine: '', stato: 'In Corso', note: '', geometra_id: '', geometra_nome: '' })
+    loadAll()
+  }
+
+  async function elimina(id: string) {
+    if (!confirm('Eliminare questo progetto? Verranno eliminate anche le note associate.')) return
+    await supabase.from('progetti').delete().eq('id', id)
+    loadAll()
   }
 
   const statoBadge = (s: string) => {
@@ -74,6 +165,12 @@ export default function Progetti() {
     if (s === 'Sospeso') return <span className="badge badge-red">Sospeso</span>
     if (s === 'Offerta') return <span className="badge badge-gray">Offerta</span>
     return <span className="badge badge-blue">In Corso</span>
+  }
+
+  const budgetColore = (perc: number) => {
+    if (perc >= 100) return 'bg-red-500'
+    if (perc >= 80) return 'bg-amber-500'
+    return 'bg-blue-600'
   }
 
   return (
@@ -84,31 +181,93 @@ export default function Progetti() {
           <h1 className="text-xl font-semibold">Progetti / Cantieri</h1>
           <button className="btn btn-primary text-sm" onClick={apriModal}>+ Nuovo progetto</button>
         </div>
-        <div className="card overflow-x-auto">
-          <table className="table-base">
-            <thead><tr><th>Codice</th><th>Nome</th><th>Cliente</th><th>Tipo</th><th>Contratto</th><th>Ricavi</th><th>Costi</th><th>Margine</th><th>Stato</th></tr></thead>
-            <tbody>
-              {progetti.length === 0 ? (
-                <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessun progetto. Crea il primo cantiere.</td></tr>
-              ) : progetti.map(p => (
-                <tr key={p.id}>
-                  <td className="font-medium text-sm text-blue-700">{p.codice}</td>
-                  <td className="font-medium text-sm">{p.nome}</td>
-                  <td className="text-xs text-gray-600">{p.cliente_nome || '—'}</td>
-                  <td className="text-xs"><span className="badge badge-gray">{p.tipo}</span></td>
-                  <td className="text-sm">{euro(p.valore_contratto)}</td>
-                  <td className="text-sm text-green-700">{euro(p.ricavi_attuali)}</td>
-                  <td className="text-sm text-red-700">{euro(p.costi_attuali)}</td>
-                  <td className={`font-medium text-sm ${p.margine_perc >= 15 ? 'text-green-700' : p.margine_perc >= 8 ? 'text-amber-700' : 'text-red-700'}`}>
-                    {p.margine_perc}%
-                  </td>
-                  <td>{statoBadge(p.stato)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+
+        {/* Cards cantieri */}
+        <div className="grid grid-cols-1 gap-4">
+          {progetti.length === 0 ? (
+            <div className="card text-center py-12 text-gray-400">Nessun progetto. Crea il primo cantiere.</div>
+          ) : progetti.map(p => (
+            <div key={p.id} className="card hover:shadow-md transition-shadow cursor-pointer"
+              onClick={() => apriDettaglio(p)}>
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded">{p.codice}</span>
+                    {statoBadge(p.stato)}
+                    <span className="badge badge-gray">{p.tipo}</span>
+                  </div>
+                  <h3 className="font-semibold text-base">{p.nome}</h3>
+                  <p className="text-sm text-gray-500">{p.cliente_nome || '—'}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-gray-400">Contratto</p>
+                  <p className="font-semibold text-sm">{euro(p.valore_contratto)}</p>
+                  {p.geometra_nome && (
+                    <p className="text-xs text-gray-400 mt-1">👷 {p.geometra_nome}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Avanzamento medio */}
+              <div className="mb-3">
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-gray-500">Avanzamento lavori</span>
+                  <span className="font-medium">{p.avanzamento_medio}%</span>
+                </div>
+                <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full rounded-full bg-blue-600 transition-all"
+                    style={{ width: `${p.avanzamento_medio}%` }} />
+                </div>
+              </div>
+
+              {/* KPI finanziari */}
+              <div className="grid grid-cols-4 gap-3 mb-3">
+                <div className="bg-gray-50 rounded-lg p-2 text-center">
+                  <p className="text-xs text-gray-400">Ricavi</p>
+                  <p className="text-sm font-medium text-green-700">{euro(p.ricavi)}</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-2 text-center">
+                  <p className="text-xs text-gray-400">Costi</p>
+                  <p className="text-sm font-medium text-red-700">{euro(p.costi)}</p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-2 text-center">
+                  <p className="text-xs text-gray-400">Margine</p>
+                  <p className={`text-sm font-medium ${p.marg_perc >= 15 ? 'text-green-700' : p.marg_perc >= 8 ? 'text-amber-700' : 'text-red-700'}`}>
+                    {p.marg_perc}%
+                  </p>
+                </div>
+                <div className="bg-gray-50 rounded-lg p-2 text-center">
+                  <p className="text-xs text-gray-400">Budget usato</p>
+                  <p className={`text-sm font-medium ${p.budget_perc >= 100 ? 'text-red-700' : p.budget_perc >= 80 ? 'text-amber-700' : 'text-gray-700'}`}>
+                    {p.budget_perc}%
+                  </p>
+                </div>
+              </div>
+
+              {/* Barra budget */}
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-gray-400">Utilizzo budget</span>
+                  <span className={p.budget_perc >= 100 ? 'text-red-600 font-medium' : 'text-gray-500'}>
+                    {euro(p.costi)} / {euro(p.budget_costi)}
+                  </span>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className={`h-full rounded-full transition-all ${budgetColore(p.budget_perc)}`}
+                    style={{ width: `${Math.min(p.budget_perc, 100)}%` }} />
+                </div>
+              </div>
+
+              <div className="flex justify-end mt-3">
+                <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
+                  onClick={e => { e.stopPropagation(); elimina(p.id) }}>Elimina</button>
+              </div>
+            </div>
+          ))}
         </div>
       </main>
+
+      {/* Modal nuovo progetto */}
       {modal && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -128,20 +287,173 @@ export default function Progetti() {
                 <select className="input" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})}>
                   <option>Privato</option><option>Corporate</option><option>Pubblica</option><option>Movimenti Terra</option><option>Gestione Completa</option>
                 </select></div>
+              <div><label className="label">Geometra assegnato</label>
+                <select className="input" value={form.geometra_id} onChange={e => setForm({...form, geometra_id: e.target.value})}>
+                  <option value="">-- nessuno --</option>
+                  {utenti.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}
+                </select></div>
               <div><label className="label">Responsabile cantiere</label><input className="input" value={form.responsabile} onChange={e => setForm({...form, responsabile: e.target.value})} /></div>
               <div><label className="label">Stato</label>
                 <select className="input" value={form.stato} onChange={e => setForm({...form, stato: e.target.value})}>
                   <option>Offerta</option><option>In Corso</option><option>Completato</option><option>Sospeso</option><option>Annullato</option>
                 </select></div>
+              <div></div>
               <div><label className="label">Valore contratto (€)</label><input className="input" type="number" step="0.01" value={form.valore_contratto} onChange={e => setForm({...form, valore_contratto: e.target.value})} /></div>
               <div><label className="label">Budget costi (€)</label><input className="input" type="number" step="0.01" value={form.budget_costi} onChange={e => setForm({...form, budget_costi: e.target.value})} /></div>
               <div><label className="label">Data inizio</label><input className="input" type="date" value={form.data_inizio} onChange={e => setForm({...form, data_inizio: e.target.value})} /></div>
               <div><label className="label">Data fine prevista</label><input className="input" type="date" value={form.data_fine} onChange={e => setForm({...form, data_fine: e.target.value})} /></div>
-              <div className="col-span-2"><label className="label">Note</label><input className="input" value={form.note} onChange={e => setForm({...form, note: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Note</label><textarea className="input h-20 resize-none" value={form.note} onChange={e => setForm({...form, note: e.target.value})} /></div>
             </div>
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModal(false)}>Annulla</button>
               <button className="btn btn-primary" onClick={salva} disabled={loading}>{loading ? 'Salvataggio...' : 'Crea progetto'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal dettaglio cantiere - vista geometra */}
+      {modalDettaglio && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="bg-gray-900 rounded-t-xl p-5 text-white">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-mono bg-white/20 px-2 py-0.5 rounded">{modalDettaglio.codice}</span>
+                    <span className="text-xs text-gray-300">{modalDettaglio.tipo}</span>
+                  </div>
+                  <h2 className="text-xl font-semibold">{modalDettaglio.nome}</h2>
+                  <p className="text-gray-300 text-sm mt-0.5">{modalDettaglio.cliente_nome || '—'}</p>
+                </div>
+                <button onClick={() => setModalDettaglio(null)} className="text-gray-400 hover:text-white text-2xl">×</button>
+              </div>
+              <div className="grid grid-cols-3 gap-4 mt-4">
+                <div className="bg-white/10 rounded-lg p-3">
+                  <p className="text-xs text-gray-400">Contratto</p>
+                  <p className="font-semibold">{euro(modalDettaglio.valore_contratto)}</p>
+                </div>
+                <div className="bg-white/10 rounded-lg p-3">
+                  <p className="text-xs text-gray-400">Budget costi</p>
+                  <p className="font-semibold">{euro(modalDettaglio.budget_costi)}</p>
+                </div>
+                <div className="bg-white/10 rounded-lg p-3">
+                  <p className="text-xs text-gray-400">Geometra</p>
+                  <p className="font-semibold">{modalDettaglio.geometra_nome || '—'}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-5">
+              {/* Avanzamento fasi */}
+              <div className="card">
+                <h3 className="font-medium text-sm mb-4">📊 Avanzamento per fase — aggiorna i valori</h3>
+                <div className="space-y-4">
+                  {FASI.map(f => (
+                    <div key={f.key}>
+                      <div className="flex items-center gap-3 mb-1">
+                        <span className="text-sm text-gray-600 w-24 flex-shrink-0">{f.label}</span>
+                        <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
+                          <div className="h-full rounded-full transition-all"
+                            style={{
+                              width: `${modalDettaglio[f.key] || 0}%`,
+                              background: (modalDettaglio[f.key] || 0) >= 80 ? '#3B6D11' : '#185FA5'
+                            }} />
+                        </div>
+                        <span className="text-sm font-medium w-10 text-right">{modalDettaglio[f.key] || 0}%</span>
+                        <input type="range" min="0" max="100" step="5"
+                          value={modalDettaglio[f.key] || 0}
+                          onChange={e => salvaAvanzamento(modalDettaglio.id, f.key, parseInt(e.target.value))}
+                          className="w-24 accent-blue-600" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <div className="flex justify-between text-xs text-gray-500 mb-1">
+                    <span>Avanzamento medio complessivo</span>
+                    <span className="font-semibold text-gray-700">
+                      {Math.round(FASI.reduce((s, f) => s + (modalDettaglio[f.key] || 0), 0) / FASI.length)}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="h-full rounded-full bg-blue-600"
+                      style={{ width: `${Math.round(FASI.reduce((s, f) => s + (modalDettaglio[f.key] || 0), 0) / FASI.length)}%` }} />
+                  </div>
+                </div>
+              </div>
+
+              {/* KPI finanziari (visibili solo se titolare) */}
+              <div className="card">
+                <h3 className="font-medium text-sm mb-3">💰 Situazione finanziaria</h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-green-50 rounded-lg p-3">
+                    <p className="text-xs text-gray-500">Ricavi fatturati</p>
+                    <p className="font-semibold text-green-700">{euro(modalDettaglio.ricavi)}</p>
+                  </div>
+                  <div className="bg-red-50 rounded-lg p-3">
+                    <p className="text-xs text-gray-500">Costi sostenuti</p>
+                    <p className="font-semibold text-red-700">{euro(modalDettaglio.costi)}</p>
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-500">Utilizzo budget ({modalDettaglio.budget_perc}%)</span>
+                    <span className={modalDettaglio.budget_perc >= 100 ? 'text-red-600 font-medium' : 'text-gray-500'}>
+                      {euro(modalDettaglio.costi)} / {euro(modalDettaglio.budget_costi)}
+                    </span>
+                  </div>
+                  <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${modalDettaglio.budget_perc >= 100 ? 'bg-red-500' : modalDettaglio.budget_perc >= 80 ? 'bg-amber-500' : 'bg-blue-600'}`}
+                      style={{ width: `${Math.min(modalDettaglio.budget_perc, 100)}%` }} />
+                  </div>
+                  {modalDettaglio.budget_perc >= 80 && (
+                    <p className={`text-xs mt-1 font-medium ${modalDettaglio.budget_perc >= 100 ? 'text-red-600' : 'text-amber-600'}`}>
+                      {modalDettaglio.budget_perc >= 100 ? '🔴 Budget superato!' : '🟡 Attenzione: budget quasi esaurito'}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Diario di cantiere */}
+              <div className="card">
+                <h3 className="font-medium text-sm mb-3">📝 Diario di cantiere</h3>
+                <div className="flex gap-2 mb-4">
+                  <textarea
+                    className="input flex-1 resize-none h-16 text-sm"
+                    placeholder="Inserisci una nota di cantiere... (es. completata la posa fondazioni lato nord)"
+                    value={nuovaNota}
+                    onChange={e => setNuovaNota(e.target.value)}
+                  />
+                  <button className="btn btn-primary self-end" onClick={salvaNota}>Aggiungi</button>
+                </div>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {note.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-4">Nessuna nota ancora. Aggiungi la prima nota di cantiere.</p>
+                  ) : note.map(n => (
+                    <div key={n.id} className="bg-gray-50 rounded-lg p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-sm text-gray-700 flex-1">{n.testo}</p>
+                        <button onClick={() => eliminaNota(n.id)}
+                          className="text-gray-300 hover:text-red-500 text-sm flex-shrink-0">✕</button>
+                      </div>
+                      <div className="flex gap-2 mt-1">
+                        <span className="text-xs text-gray-400">{new Date(n.data).toLocaleDateString('it-IT')}</span>
+                        <span className="text-xs text-blue-600">· {n.autore_nome}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Note generali progetto */}
+              {modalDettaglio.note && (
+                <div className="card bg-amber-50 border-amber-200">
+                  <h3 className="font-medium text-sm mb-2">📌 Note progetto</h3>
+                  <p className="text-sm text-gray-700">{modalDettaglio.note}</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
