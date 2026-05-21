@@ -66,7 +66,19 @@ export default function Dipendenti() {
   async function load() {
     const { data: dip } = await supabase.from('dipendenti').select('*')
       .order('cognome').order('nome')
-    setDipendenti(dip || [])
+    // Ordina: BC sempre prima, poi alfabetico per azienda, poi cognome/nome
+    const dipOrdinati = (dip || []).sort((a: any, b: any) => {
+      const aBC = a.azienda.toUpperCase().startsWith('BC')
+      const bBC = b.azienda.toUpperCase().startsWith('BC')
+      if (aBC && !bBC) return -1
+      if (!aBC && bBC) return 1
+      const cmpAz = a.azienda.localeCompare(b.azienda)
+      if (cmpAz !== 0) return cmpAz
+      const cmpCog = a.cognome.localeCompare(b.cognome)
+      if (cmpCog !== 0) return cmpCog
+      return a.nome.localeCompare(b.nome)
+    })
+    setDipendenti(dipOrdinati)
     const az = Array.from(new Set((dip || []).map((d: any) => d.azienda)))
       .sort((a: any, b: any) => {
         if (a.toUpperCase().startsWith('BC')) return -1
