@@ -57,7 +57,7 @@ export default function Dipendenti() {
     const { data } = await supabase.from('dipendenti').select('*')
       .order('azienda').order('cognome').order('nome')
     setDipendenti(data || [])
-const az = Array.from(new Set((data || []).map((d: any) => d.azienda))).sort()
+    const az = Array.from(new Set((data || []).map((d: any) => d.azienda))).sort()
     setAziende(az)
   }
 
