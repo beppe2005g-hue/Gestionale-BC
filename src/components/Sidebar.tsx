@@ -6,48 +6,48 @@ import { supabase } from '@/lib/supabase'
 
 const ADMIN_EMAIL = 'bonarrigogiuseppe05@gmail.com'
 
-// Mappa href → chiave permesso
+// Mappa href → colonna perm_* nella tabella utenti
 const PERM_KEY: Record<string, string> = {
-  '/dashboard':          'dashboard',
-  '/progetti':           'progetti',
-  '/costi-cantiere':     'costi_cantiere',
-  '/ddt':                'ddt',
-  '/da-ricevere':        'da_ricevere',
-  '/fatture-fornitori':  'fatture_fornitori',
-  '/fatture-clienti':    'fatture_clienti',
-  '/import-sdi':         'import_sdi',
-  '/scadenzario':        'scadenzario',
-  '/cashflow':           'cashflow',
-  '/budget':             'budget',
-  '/anagrafiche':        'anagrafiche',
-  '/dipendenti':         'dipendenti',
-  '/utenti':             'utenti',
+  '/dashboard':          'perm_dashboard',
+  '/progetti':           'perm_progetti',
+  '/costi-cantiere':     'perm_costi_cantiere',
+  '/ddt':                'perm_ddt',
+  '/da-ricevere':        'perm_da_ricevere',
+  '/fatture-fornitori':  'perm_fatture_fornitori',
+  '/fatture-clienti':    'perm_fatture_clienti',
+  '/import-sdi':         'perm_import_sdi',
+  '/scadenzario':        'perm_scadenzario',
+  '/cashflow':           'perm_cashflow',
+  '/budget':             'perm_budget',
+  '/anagrafiche':        'perm_anagrafiche',
+  '/dipendenti':         'perm_dipendenti',
+  '/utenti':             'perm_utenti',
 }
 
 const nav = [
   { section: 'Principale', items: [
-    { href: '/dashboard',      label: 'Dashboard',      icon: '▦' },
-    { href: '/progetti',       label: 'Progetti',       icon: '🏗' },
-    { href: '/costi-cantiere', label: 'Costi cantiere', icon: '💰' },
+    { href: '/dashboard',      label: 'Dashboard',        icon: '▦' },
+    { href: '/progetti',       label: 'Progetti',         icon: '🏗' },
+    { href: '/costi-cantiere', label: 'Costi cantiere',   icon: '💰' },
   ]},
   { section: 'Ciclo Passivo', items: [
-    { href: '/ddt',               label: 'DDT / Bolle',    icon: '📋' },
-    { href: '/da-ricevere',       label: 'Da ricevere',    icon: '⏳' },
+    { href: '/ddt',               label: 'DDT / Bolle',     icon: '📋' },
+    { href: '/da-ricevere',       label: 'Da ricevere',     icon: '⏳' },
     { href: '/fatture-fornitori', label: 'Fatt. fornitori', icon: '📄' },
-    { href: '/import-sdi',        label: 'Import SDI',     icon: '📥' },
+    { href: '/import-sdi',        label: 'Import SDI',      icon: '📥' },
   ]},
   { section: 'Ciclo Attivo', items: [
     { href: '/fatture-clienti', label: 'Fatt. clienti', icon: '🧾' },
   ]},
   { section: 'Controllo', items: [
-    { href: '/scadenzario', label: 'Scadenzario',       icon: '📅' },
-    { href: '/cashflow',    label: 'Cash flow',          icon: '📈' },
+    { href: '/scadenzario', label: 'Scadenzario',          icon: '📅' },
+    { href: '/cashflow',    label: 'Cash flow',            icon: '📈' },
     { href: '/budget',      label: 'Budget vs Consuntivo', icon: '⚖' },
   ]},
   { section: 'Impostazioni', items: [
-    { href: '/anagrafiche', label: 'Anagrafiche',       icon: '👥' },
-    { href: '/dipendenti',  label: 'Dipendenti',         icon: '👷' },
-    { href: '/utenti',      label: 'Utenti e permessi', icon: '🔒' },
+    { href: '/anagrafiche', label: 'Anagrafiche',          icon: '👥' },
+    { href: '/dipendenti',  label: 'Dipendenti',           icon: '👷' },
+    { href: '/utenti',      label: 'Utenti e permessi',    icon: '🔒' },
   ]},
 ]
 
@@ -64,24 +64,21 @@ export default function Sidebar() {
 
       if (user.email === ADMIN_EMAIL) {
         setIsAdmin(true)
-        setPermessi(null) // null = tutto visibile
+        setPermessi(null)
         setLoading(false)
         return
       }
 
-      // Legge i permessi dalla tabella
       const { data } = await supabase
-        .from('permessi_utenti')
-        .select('*')
-        .eq('utente_id', user.id)
+        .from('utenti')
+        .select('perm_dashboard, perm_progetti, perm_costi_cantiere, perm_ddt, perm_da_ricevere, perm_fatture_fornitori, perm_fatture_clienti, perm_import_sdi, perm_scadenzario, perm_cashflow, perm_budget, perm_anagrafiche, perm_dipendenti, perm_utenti')
+        .eq('id', user.id)
         .single()
 
       if (data) {
-        const { utente_id, ...rest } = data
-        setPermessi(rest)
+        setPermessi(data)
       } else {
-        // Nessun record → nessun accesso
-        setPermessi({})
+        setPermessi({}) // nessun record = nessun accesso
       }
       setLoading(false)
     }
@@ -91,7 +88,7 @@ export default function Sidebar() {
   function canSee(href: string): boolean {
     if (isAdmin || permessi === null) return true
     const key = PERM_KEY[href]
-    if (!key) return true // pagine senza restrizione
+    if (!key) return true
     return !!permessi[key]
   }
 
@@ -119,10 +116,8 @@ export default function Sidebar() {
           <div className="px-4 py-6 text-xs text-gray-400 animate-pulse">Caricamento...</div>
         ) : (
           nav.map(group => {
-            // Filtra le voci visibili per questo utente
             const visibleItems = group.items.filter(item => canSee(item.href))
             if (visibleItems.length === 0) return null
-
             return (
               <div key={group.section} className="mb-1">
                 <p className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wide">
