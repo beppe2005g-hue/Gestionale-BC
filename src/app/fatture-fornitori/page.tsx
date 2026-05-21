@@ -23,9 +23,16 @@ export default function FattureFornitori() {
   const [modal, setModal] = useState(false)
   const [modalModifica, setModalModifica] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+
+  // Filtri
   const [ricerca, setRicerca] = useState('')
   const [filtroStato, setFiltroStato] = useState('tutti')
   const [ordinamento, setOrdinamento] = useState('data_desc')
+  const [dataDA, setDataDA] = useState('')
+  const [dataA, setDataA] = useState('')
+  const [importoDA, setImportoDA] = useState('')
+  const [importoA, setImportoA] = useState('')
+
   const [form, setForm] = useState({
     data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '',
     imponibile: '', iva_percentuale: '22',
@@ -46,6 +53,14 @@ export default function FattureFornitori() {
     setProgetti(p || [])
   }
 
+  const haFiltri = ricerca || filtroStato !== 'tutti' || dataDA || dataA || importoDA || importoA
+
+  function resetFiltri() {
+    setRicerca(''); setFiltroStato('tutti')
+    setDataDA(''); setDataA('')
+    setImportoDA(''); setImportoA('')
+  }
+
   const fattureFiltrate = useMemo(() => {
     let result = [...fatture]
     if (ricerca.trim()) {
@@ -59,6 +74,11 @@ export default function FattureFornitori() {
     if (filtroStato !== 'tutti') {
       result = result.filter(f => statoFattura(f) === filtroStato)
     }
+    if (dataDA) result = result.filter(f => f.data >= dataDA)
+    if (dataA) result = result.filter(f => f.data <= dataA)
+    if (importoDA) result = result.filter(f => (f.imponibile || 0) >= parseFloat(importoDA))
+    if (importoA) result = result.filter(f => (f.imponibile || 0) <= parseFloat(importoA))
+
     result.sort((a, b) => {
       if (ordinamento === 'data_desc') return new Date(b.data).getTime() - new Date(a.data).getTime()
       if (ordinamento === 'data_asc') return new Date(a.data).getTime() - new Date(b.data).getTime()
@@ -67,7 +87,9 @@ export default function FattureFornitori() {
       return 0
     })
     return result
-  }, [fatture, ricerca, filtroStato, ordinamento])
+  }, [fatture, ricerca, filtroStato, ordinamento, dataDA, dataA, importoDA, importoA])
+
+  const totaleFiltratoImponibile = fattureFiltrate.reduce((s, f) => s + (f.imponibile || 0), 0)
 
   async function pagaRata(id: string, rata: number) {
     const { data: fatt } = await supabase.from('fatture_fornitori').select('*').eq('id', id).single()
@@ -170,17 +192,17 @@ export default function FattureFornitori() {
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuova fattura</button>
         </div>
 
-        {/* Barra ricerca e filtri */}
+        {/* Filtri */}
         <div className="card mb-4">
-          <div className="flex gap-3 flex-wrap items-end">
-            <div className="flex-1 min-w-52">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+            <div className="md:col-span-2">
               <label className="label">🔍 Cerca</label>
               <input className="input" placeholder="N° fattura, fornitore, cantiere..."
                 value={ricerca} onChange={e => setRicerca(e.target.value)} />
             </div>
             <div>
               <label className="label">Stato pagamento</label>
-              <select className="input w-auto" value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
+              <select className="input" value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
                 <option value="tutti">Tutti ({fatture.length})</option>
                 <option value="da_pagare">Da pagare ({fatture.filter(f => statoFattura(f) === 'da_pagare').length})</option>
                 <option value="parziale">Parziale ({fatture.filter(f => statoFattura(f) === 'parziale').length})</option>
@@ -189,21 +211,37 @@ export default function FattureFornitori() {
             </div>
             <div>
               <label className="label">Ordina per</label>
-              <select className="input w-auto" value={ordinamento} onChange={e => setOrdinamento(e.target.value)}>
+              <select className="input" value={ordinamento} onChange={e => setOrdinamento(e.target.value)}>
                 <option value="data_desc">Data ↓ più recenti</option>
                 <option value="data_asc">Data ↑ più vecchie</option>
                 <option value="fornitore">Fornitore A→Z</option>
                 <option value="importo">Importo ↓</option>
               </select>
             </div>
-            {(ricerca || filtroStato !== 'tutti') && (
-              <button className="btn btn-sm" onClick={() => { setRicerca(''); setFiltroStato('tutti') }}>
-                ✕ Reset
-              </button>
-            )}
+            <div>
+              <label className="label">Data dal</label>
+              <input className="input" type="date" value={dataDA} onChange={e => setDataDA(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Data al</label>
+              <input className="input" type="date" value={dataA} onChange={e => setDataA(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Imponibile da (€)</label>
+              <input className="input" type="number" placeholder="0" value={importoDA} onChange={e => setImportoDA(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Imponibile a (€)</label>
+              <input className="input" type="number" placeholder="∞" value={importoA} onChange={e => setImportoA(e.target.value)} />
+            </div>
           </div>
-          {(ricerca || filtroStato !== 'tutti') && (
-            <p className="text-xs text-gray-500 mt-2">{fattureFiltrate.length} fatture trovate</p>
+          {haFiltri && (
+            <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+              <span className="text-xs text-gray-500">
+                {fattureFiltrate.length} fatture — Totale imponibile: <strong>{euro(totaleFiltratoImponibile)}</strong>
+              </span>
+              <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">× Azzera filtri</button>
+            </div>
           )}
         </div>
 
@@ -216,7 +254,7 @@ export default function FattureFornitori() {
             <tbody>
               {fattureFiltrate.length === 0 ? (
                 <tr><td colSpan={10} className="text-center text-gray-400 py-8">
-                  {ricerca || filtroStato !== 'tutti' ? 'Nessuna fattura con questi filtri.' : 'Nessuna fattura.'}
+                  {haFiltri ? 'Nessuna fattura con questi filtri.' : 'Nessuna fattura.'}
                 </td></tr>
               ) : fattureFiltrate.map(f => {
                 const stato = statoFattura(f)
