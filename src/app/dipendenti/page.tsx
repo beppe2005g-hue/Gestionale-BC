@@ -65,7 +65,7 @@ export default function Dipendenti() {
 
   async function load() {
     const { data: dip } = await supabase.from('dipendenti').select('*')
-      .order('azienda').order('cognome').order('nome')
+      .order('cognome').order('nome')
     setDipendenti(dip || [])
     const az = Array.from(new Set((dip || []).map((d: any) => d.azienda)))
       .sort((a: any, b: any) => {
@@ -387,20 +387,28 @@ export default function Dipendenti() {
         {/* TAB MATRICE CORSI */}
         {tab === 'matrice' && (
           <div className="overflow-x-auto">
-            <div className="mb-3 flex gap-4 text-xs">
-              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 border border-green-300 inline-block"></span> OK</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block"></span> Scade quest'anno</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-yellow-50 border border-yellow-300 inline-block"></span> Scade il prossimo anno</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-100 border border-red-300 inline-block"></span> Scaduto</span>
-              <span className="flex items-center gap-1"><span className="text-gray-300">—</span> Non ha il corso</span>
+            <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+              <div className="flex gap-4 text-xs">
+                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 border border-green-300 inline-block"></span> OK</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block"></span> Scade quest'anno</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-yellow-50 border border-yellow-300 inline-block"></span> Scade il prossimo anno</span>
+                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-100 border border-red-300 inline-block"></span> Scaduto</span>
+                <span className="flex items-center gap-1"><span className="text-gray-300">—</span> Non ha il corso</span>
+              </div>
+              <button className="btn btn-sm btn-primary" onClick={() => {
+                const nome = prompt('Nome del nuovo tipo di corso:')
+                if (nome && nome.trim()) {
+                  setTuttiCorsi(prev => [...prev, nome.trim()].sort())
+                }
+              }}>+ Nuovo tipo corso</button>
             </div>
             <table className="text-xs border-collapse" style={{minWidth: '900px'}}>
               <thead>
                 <tr>
                   <th className="text-left px-3 py-2 bg-gray-900 text-white sticky left-0 z-10 min-w-40">Dipendente</th>
                   {tuttiCorsi.map(corso => (
-                    <th key={corso} className="px-2 py-2 bg-gray-900 text-white text-center font-medium" style={{maxWidth: 90, minWidth: 80}}>
-                      <div className="text-xs leading-tight" style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 100, display: 'flex', alignItems: 'center'}}>
+                    <th key={corso} className="px-2 py-2 bg-gray-900 text-white text-center font-medium" style={{minWidth: 120}}>
+                      <div className="text-xs leading-tight" style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 130, display: 'flex', alignItems: 'center'}}>
                         {corso}
                       </div>
                     </th>
