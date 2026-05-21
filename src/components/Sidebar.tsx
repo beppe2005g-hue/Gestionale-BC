@@ -7,6 +7,7 @@ const nav = [
   { section: 'Principale', items: [
     { href: '/dashboard', label: 'Dashboard', icon: '▦' },
     { href: '/progetti', label: 'Progetti', icon: '🏗' },
+    { href: '/costi-cantiere', label: 'Costi cantiere', icon: '💰' },
   ]},
   { section: 'Ciclo Passivo', items: [
     { href: '/ddt', label: 'DDT / Bolle', icon: '📋' },
