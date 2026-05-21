@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 
@@ -13,53 +13,41 @@ const FASI = [
   { key: 'avanzamento_impianti', label: 'Impianti' },
 ]
 
-function BarraAvanzamento({ valore, label }: { valore: number, label: string }) {
-  const colore = valore >= 90 ? '#3B6D11' : valore >= 50 ? '#185FA5' : valore >= 80 ? '#854F0B' : '#185FA5'
-  return (
-    <div className="mb-2">
-      <div className="flex justify-between text-xs mb-1">
-        <span className="text-gray-600">{label}</span>
-        <span className="font-medium">{valore}%</span>
-      </div>
-      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div className="h-full rounded-full transition-all" style={{ width: `${valore}%`, background: colore }} />
-      </div>
-    </div>
-  )
-}
-
 export default function Progetti() {
   const [progetti, setProgetti] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
   const [utenti, setUtenti] = useState<any[]>([])
   const [modal, setModal] = useState(false)
   const [modalDettaglio, setModalDettaglio] = useState<any>(null)
+  const [modalModifica, setModalModifica] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [note, setNote] = useState<any[]>([])
   const [nuovaNota, setNuovaNota] = useState('')
-  const [utenteCorrente, setUtenteCorrente] = useState<any>(null)
+
+  // Filtri
+  const [cercaNome, setCercaNome] = useState('')
+  const [cercaCliente, setCercaCliente] = useState('')
+  const [cercaLocalita, setCercaLocalita] = useState('')
+  const [filtroStato, setFiltroStato] = useState('attivi')
+  const [importoDA, setImportoDA] = useState('')
+  const [importoA, setImportoA] = useState('')
+  const [raggruppaPer, setRaggruppaPer] = useState<'committente' | 'nessuno'>('nessuno')
+
   const [form, setForm] = useState({
     codice: '', nome: '', cliente_id: '', tipo: 'Privato', responsabile: '',
     valore_contratto: '', budget_costi: '', data_inizio: '', data_fine: '',
-    stato: 'In Corso', note: '', geometra_id: '', geometra_nome: ''
+    stato: 'In Corso', note: '', geometra_id: '', localita: ''
   })
 
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-      const { data: profilo } = await supabase.from('utenti').select('*').eq('id', user.id).single()
-      setUtenteCorrente({ ...user, profilo })
-    }
-
     const [{ data: p }, { data: c }, { data: u }] = await Promise.all([
-      supabase.from('progetti').select('*').order('codice'),
+      supabase.from('progetti').select('*').order('updated_at', { ascending: false }).order('codice'),
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true),
       supabase.from('utenti').select('id,nome,ruolo,capo_geometra'),
     ])
 
-    // Arricchisci con ricavi e costi
     const [{ data: fc }, { data: ff }, { data: ddt }] = await Promise.all([
       supabase.from('fatture_clienti').select('progetto_id,imponibile'),
       supabase.from('fatture_fornitori').select('progetto_id,imponibile'),
@@ -73,9 +61,7 @@ export default function Progetti() {
       const cos = cosFF + cosDDT
       const margPerc = ric > 0 ? Math.round((ric - cos) / ric * 100) : 0
       const budgetPerc = proj.budget_costi > 0 ? Math.round(cos / proj.budget_costi * 100) : 0
-      const avanzamentoMedio = Math.round(
-        (FASI.reduce((s, f) => s + (proj[f.key] || 0), 0)) / FASI.length
-      )
+      const avanzamentoMedio = Math.round(FASI.reduce((s, f) => s + (proj[f.key] || 0), 0) / FASI.length)
       return { ...proj, ricavi: ric, costi: cos, marg_perc: margPerc, budget_perc: budgetPerc, avanzamento_medio: avanzamentoMedio }
     })
     setProgetti(enhanced)
@@ -92,8 +78,7 @@ export default function Progetti() {
 
   async function salvaAvanzamento(projId: string, campo: string, valore: number) {
     await supabase.from('progetti').update({ [campo]: valore }).eq('id', projId)
-    const updated = progetti.map(p => p.id === projId ? { ...p, [campo]: valore } : p)
-    setProgetti(updated)
+    setProgetti(prev => prev.map(p => p.id === projId ? { ...p, [campo]: valore } : p))
     if (modalDettaglio?.id === projId) setModalDettaglio((prev: any) => ({ ...prev, [campo]: valore }))
   }
 
@@ -129,7 +114,7 @@ export default function Progetti() {
 
   async function apriModal() {
     const codice = await generaCodice()
-    setForm({ ...form, codice })
+    setForm({ codice, nome: '', cliente_id: '', tipo: 'Privato', responsabile: '', valore_contratto: '', budget_costi: '', data_inizio: '', data_fine: '', stato: 'In Corso', note: '', geometra_id: '', localita: '' })
     setModal(true)
   }
 
@@ -147,124 +132,278 @@ export default function Progetti() {
       data_inizio: form.data_inizio || null, data_fine: form.data_fine || null,
       stato: form.stato, note: form.note,
       geometra_id: form.geometra_id || null,
-      geometra_nome: geo?.nome || ''
+      geometra_nome: geo?.nome || '',
+      localita: form.localita || ''
     })
     setModal(false); setLoading(false)
-    setForm({ codice: '', nome: '', cliente_id: '', tipo: 'Privato', responsabile: '', valore_contratto: '', budget_costi: '', data_inizio: '', data_fine: '', stato: 'In Corso', note: '', geometra_id: '', geometra_nome: '' })
     loadAll()
   }
 
-  async function elimina(id: string) {
-    if (!confirm('Eliminare questo progetto? Verranno eliminate anche le note associate.')) return
-    await supabase.from('progetti').delete().eq('id', id)
+  function apriModifica(p: any, e: React.MouseEvent) {
+    e.stopPropagation()
+    setModalModifica({ ...p })
+  }
+
+  async function salvaModifica() {
+    if (!modalModifica) return
+    setLoading(true)
+    const cli = clienti.find(c => c.id === modalModifica.cliente_id)
+    const geo = utenti.find(u => u.id === modalModifica.geometra_id)
+    await supabase.from('progetti').update({
+      nome: modalModifica.nome,
+      cliente_id: modalModifica.cliente_id || null,
+      cliente_nome: cli?.ragione_sociale || modalModifica.cliente_nome,
+      tipo: modalModifica.tipo,
+      responsabile: modalModifica.responsabile,
+      valore_contratto: parseFloat(modalModifica.valore_contratto) || 0,
+      budget_costi: parseFloat(modalModifica.budget_costi) || 0,
+      data_inizio: modalModifica.data_inizio || null,
+      data_fine: modalModifica.data_fine || null,
+      stato: modalModifica.stato,
+      note: modalModifica.note,
+      geometra_id: modalModifica.geometra_id || null,
+      geometra_nome: geo?.nome || modalModifica.geometra_nome,
+      localita: modalModifica.localita || ''
+    }).eq('id', modalModifica.id)
+    setModalModifica(null)
+    setLoading(false)
     loadAll()
+  }
+
+  // Filtri applicati
+  const progettiFiltered = useMemo(() => {
+    return progetti.filter(p => {
+      if (filtroStato === 'attivi' && !['In Corso', 'Offerta'].includes(p.stato)) return false
+      if (filtroStato === 'inattivi' && ['In Corso', 'Offerta'].includes(p.stato)) return false
+      if (filtroStato !== 'attivi' && filtroStato !== 'inattivi' && filtroStato !== 'tutti' && p.stato !== filtroStato) return false
+      if (cercaNome && !p.nome?.toLowerCase().includes(cercaNome.toLowerCase()) && !p.codice?.toLowerCase().includes(cercaNome.toLowerCase())) return false
+      if (cercaCliente && !p.cliente_nome?.toLowerCase().includes(cercaCliente.toLowerCase())) return false
+      if (cercaLocalita && !p.localita?.toLowerCase().includes(cercaLocalita.toLowerCase())) return false
+      if (importoDA && (p.valore_contratto || 0) < parseFloat(importoDA)) return false
+      if (importoA && (p.valore_contratto || 0) > parseFloat(importoA)) return false
+      return true
+    })
+  }, [progetti, filtroStato, cercaNome, cercaCliente, cercaLocalita, importoDA, importoA])
+
+  // Raggruppamento per committente
+  const progettiGruppi = useMemo(() => {
+    if (raggruppaPer === 'nessuno') return { '': progettiFiltered }
+    const gruppi: Record<string, any[]> = {}
+    progettiFiltered.forEach(p => {
+      const key = p.cliente_nome || 'Senza committente'
+      if (!gruppi[key]) gruppi[key] = []
+      gruppi[key].push(p)
+    })
+    return gruppi
+  }, [progettiFiltered, raggruppaPer])
+
+  const haFiltri = cercaNome || cercaCliente || cercaLocalita || importoDA || importoA || filtroStato !== 'attivi'
+
+  function resetFiltri() {
+    setCercaNome(''); setCercaCliente(''); setCercaLocalita('')
+    setImportoDA(''); setImportoA(''); setFiltroStato('attivi')
   }
 
   const statoBadge = (s: string) => {
     if (s === 'Completato') return <span className="badge badge-green">Completato</span>
     if (s === 'Sospeso') return <span className="badge badge-red">Sospeso</span>
     if (s === 'Offerta') return <span className="badge badge-gray">Offerta</span>
+    if (s === 'Annullato') return <span className="badge badge-red">Annullato</span>
     return <span className="badge badge-blue">In Corso</span>
   }
 
-  const budgetColore = (perc: number) => {
-    if (perc >= 100) return 'bg-red-500'
-    if (perc >= 80) return 'bg-amber-500'
-    return 'bg-blue-600'
-  }
+  const budgetColore = (perc: number) => perc >= 100 ? 'bg-red-500' : perc >= 80 ? 'bg-amber-500' : 'bg-blue-600'
+
+  const FormProgetto = ({ data, setData }: { data: any, setData: any }) => (
+    <div className="grid grid-cols-2 gap-3">
+      <div><label className="label">Codice</label><input className="input bg-gray-50" value={data.codice} readOnly /></div>
+      <div><label className="label">Nome cantiere *</label><input className="input" value={data.nome} onChange={e => setData({...data, nome: e.target.value})} /></div>
+      <div><label className="label">Cliente / Committente</label>
+        <select className="input" value={data.cliente_id} onChange={e => setData({...data, cliente_id: e.target.value})}>
+          <option value="">-- seleziona --</option>
+          {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
+        </select>
+      </div>
+      <div><label className="label">Località cantiere</label><input className="input" placeholder="es. Via Roma 10, Bologna" value={data.localita || ''} onChange={e => setData({...data, localita: e.target.value})} /></div>
+      <div><label className="label">Tipo</label>
+        <select className="input" value={data.tipo} onChange={e => setData({...data, tipo: e.target.value})}>
+          <option>Privato</option><option>Corporate</option><option>Pubblica</option><option>Movimenti Terra</option><option>Gestione Completa</option>
+        </select>
+      </div>
+      <div><label className="label">Stato</label>
+        <select className="input" value={data.stato} onChange={e => setData({...data, stato: e.target.value})}>
+          <option>Offerta</option><option>In Corso</option><option>Completato</option><option>Sospeso</option><option>Annullato</option>
+        </select>
+      </div>
+      <div><label className="label">Geometra assegnato</label>
+        <select className="input" value={data.geometra_id || ''} onChange={e => setData({...data, geometra_id: e.target.value})}>
+          <option value="">-- nessuno --</option>
+          {utenti.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}
+        </select>
+      </div>
+      <div><label className="label">Responsabile cantiere</label><input className="input" value={data.responsabile || ''} onChange={e => setData({...data, responsabile: e.target.value})} /></div>
+      <div><label className="label">Valore contratto (€)</label><input className="input" type="number" step="0.01" value={data.valore_contratto || ''} onChange={e => setData({...data, valore_contratto: e.target.value})} /></div>
+      <div><label className="label">Budget costi (€)</label><input className="input" type="number" step="0.01" value={data.budget_costi || ''} onChange={e => setData({...data, budget_costi: e.target.value})} /></div>
+      <div><label className="label">Data inizio</label><input className="input" type="date" value={data.data_inizio || ''} onChange={e => setData({...data, data_inizio: e.target.value})} /></div>
+      <div><label className="label">Data fine prevista</label><input className="input" type="date" value={data.data_fine || ''} onChange={e => setData({...data, data_fine: e.target.value})} /></div>
+      <div className="col-span-2"><label className="label">Note</label><textarea className="input h-20 resize-none" value={data.note || ''} onChange={e => setData({...data, note: e.target.value})} /></div>
+    </div>
+  )
 
   return (
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 p-6 overflow-auto">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold">Progetti / Cantieri</h1>
           <button className="btn btn-primary text-sm" onClick={apriModal}>+ Nuovo progetto</button>
         </div>
 
-        {/* Cards cantieri */}
-        <div className="grid grid-cols-1 gap-4">
-          {progetti.length === 0 ? (
-            <div className="card text-center py-12 text-gray-400">Nessun progetto. Crea il primo cantiere.</div>
-          ) : progetti.map(p => (
-            <div key={p.id} className="card hover:shadow-md transition-shadow cursor-pointer"
-              onClick={() => apriDettaglio(p)}>
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded">{p.codice}</span>
-                    {statoBadge(p.stato)}
-                    <span className="badge badge-gray">{p.tipo}</span>
+        {/* Filtri */}
+        <div className="card mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+            <div>
+              <label className="label">Cerca cantiere</label>
+              <input className="input" placeholder="Nome o codice..." value={cercaNome} onChange={e => setCercaNome(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Committente</label>
+              <input className="input" placeholder="Nome cliente..." value={cercaCliente} onChange={e => setCercaCliente(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Località</label>
+              <input className="input" placeholder="Città o indirizzo..." value={cercaLocalita} onChange={e => setCercaLocalita(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Stato</label>
+              <select className="input" value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
+                <option value="attivi">Attivi (In Corso + Offerta)</option>
+                <option value="inattivi">Inattivi (Completati + Sospesi)</option>
+                <option value="tutti">Tutti</option>
+                <option value="In Corso">In Corso</option>
+                <option value="Offerta">Offerta</option>
+                <option value="Completato">Completati</option>
+                <option value="Sospeso">Sospesi</option>
+                <option value="Annullato">Annullati</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Importo da (€)</label>
+              <input className="input" type="number" placeholder="0" value={importoDA} onChange={e => setImportoDA(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Importo a (€)</label>
+              <input className="input" type="number" placeholder="∞" value={importoA} onChange={e => setImportoA(e.target.value)} />
+            </div>
+          </div>
+          <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-gray-500">{progettiFiltered.length} cantieri</span>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={raggruppaPer === 'committente'}
+                  onChange={e => setRaggruppaPer(e.target.checked ? 'committente' : 'nessuno')}
+                  className="rounded" />
+                Raggruppa per committente
+              </label>
+            </div>
+            {haFiltri && (
+              <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">× Azzera filtri</button>
+            )}
+          </div>
+        </div>
+
+        {/* Lista cantieri */}
+        {progettiFiltered.length === 0 ? (
+          <div className="card text-center py-12 text-gray-400">
+            {haFiltri ? 'Nessun cantiere corrisponde ai filtri.' : 'Nessun progetto. Crea il primo cantiere.'}
+          </div>
+        ) : (
+          Object.entries(progettiGruppi).map(([gruppo, items]) => (
+            <div key={gruppo}>
+              {raggruppaPer === 'committente' && (
+                <div className="flex items-center gap-3 mb-3 mt-4 first:mt-0">
+                  <h2 className="text-sm font-semibold text-gray-700">👤 {gruppo}</h2>
+                  <div className="flex-1 h-px bg-gray-200" />
+                  <span className="text-xs text-gray-400">{items.length} cantieri</span>
+                </div>
+              )}
+              <div className="grid grid-cols-1 gap-4 mb-2">
+                {items.map(p => (
+                  <div key={p.id} className="card hover:shadow-md transition-shadow cursor-pointer"
+                    onClick={() => apriDettaglio(p)}>
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className="text-xs font-mono text-blue-700 bg-blue-50 px-2 py-0.5 rounded">{p.codice}</span>
+                          {statoBadge(p.stato)}
+                          <span className="badge badge-gray">{p.tipo}</span>
+                          {p.localita && <span className="text-xs text-gray-400">📍 {p.localita}</span>}
+                        </div>
+                        <h3 className="font-semibold text-base">{p.nome}</h3>
+                        <p className="text-sm text-gray-500">{p.cliente_nome || '—'}</p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-xs text-gray-400">Contratto</p>
+                        <p className="font-semibold text-sm">{euro(p.valore_contratto)}</p>
+                        {p.geometra_nome && <p className="text-xs text-gray-400 mt-1">👷 {p.geometra_nome}</p>}
+                      </div>
+                    </div>
+
+                    {/* Avanzamento */}
+                    <div className="mb-3">
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-gray-500">Avanzamento lavori</span>
+                        <span className="font-medium">{p.avanzamento_medio}%</span>
+                      </div>
+                      <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${p.avanzamento_medio}%` }} />
+                      </div>
+                    </div>
+
+                    {/* KPI */}
+                    <div className="grid grid-cols-4 gap-3 mb-3">
+                      <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-400">Ricavi</p>
+                        <p className="text-sm font-medium text-green-700">{euro(p.ricavi)}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-400">Costi</p>
+                        <p className="text-sm font-medium text-red-700">{euro(p.costi)}</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-400">Margine</p>
+                        <p className={`text-sm font-medium ${p.marg_perc >= 15 ? 'text-green-700' : p.marg_perc >= 8 ? 'text-amber-700' : 'text-red-700'}`}>{p.marg_perc}%</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-400">Budget usato</p>
+                        <p className={`text-sm font-medium ${p.budget_perc >= 100 ? 'text-red-700' : p.budget_perc >= 80 ? 'text-amber-700' : 'text-gray-700'}`}>{p.budget_perc}%</p>
+                      </div>
+                    </div>
+
+                    {/* Barra budget */}
+                    <div className="mb-3">
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-gray-400">Utilizzo budget</span>
+                        <span className={p.budget_perc >= 100 ? 'text-red-600 font-medium' : 'text-gray-500'}>
+                          {euro(p.costi)} / {euro(p.budget_costi)}
+                        </span>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full transition-all ${budgetColore(p.budget_perc)}`}
+                          style={{ width: `${Math.min(p.budget_perc, 100)}%` }} />
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                      <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50"
+                        onClick={e => apriModifica(p, e)}>✏️ Modifica</button>
+                    </div>
                   </div>
-                  <h3 className="font-semibold text-base">{p.nome}</h3>
-                  <p className="text-sm text-gray-500">{p.cliente_nome || '—'}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs text-gray-400">Contratto</p>
-                  <p className="font-semibold text-sm">{euro(p.valore_contratto)}</p>
-                  {p.geometra_nome && (
-                    <p className="text-xs text-gray-400 mt-1">👷 {p.geometra_nome}</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Avanzamento medio */}
-              <div className="mb-3">
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-gray-500">Avanzamento lavori</span>
-                  <span className="font-medium">{p.avanzamento_medio}%</span>
-                </div>
-                <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full bg-blue-600 transition-all"
-                    style={{ width: `${p.avanzamento_medio}%` }} />
-                </div>
-              </div>
-
-              {/* KPI finanziari */}
-              <div className="grid grid-cols-4 gap-3 mb-3">
-                <div className="bg-gray-50 rounded-lg p-2 text-center">
-                  <p className="text-xs text-gray-400">Ricavi</p>
-                  <p className="text-sm font-medium text-green-700">{euro(p.ricavi)}</p>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-2 text-center">
-                  <p className="text-xs text-gray-400">Costi</p>
-                  <p className="text-sm font-medium text-red-700">{euro(p.costi)}</p>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-2 text-center">
-                  <p className="text-xs text-gray-400">Margine</p>
-                  <p className={`text-sm font-medium ${p.marg_perc >= 15 ? 'text-green-700' : p.marg_perc >= 8 ? 'text-amber-700' : 'text-red-700'}`}>
-                    {p.marg_perc}%
-                  </p>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-2 text-center">
-                  <p className="text-xs text-gray-400">Budget usato</p>
-                  <p className={`text-sm font-medium ${p.budget_perc >= 100 ? 'text-red-700' : p.budget_perc >= 80 ? 'text-amber-700' : 'text-gray-700'}`}>
-                    {p.budget_perc}%
-                  </p>
-                </div>
-              </div>
-
-              {/* Barra budget */}
-              <div>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-gray-400">Utilizzo budget</span>
-                  <span className={p.budget_perc >= 100 ? 'text-red-600 font-medium' : 'text-gray-500'}>
-                    {euro(p.costi)} / {euro(p.budget_costi)}
-                  </span>
-                </div>
-                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full transition-all ${budgetColore(p.budget_perc)}`}
-                    style={{ width: `${Math.min(p.budget_perc, 100)}%` }} />
-                </div>
-              </div>
-
-              <div className="flex justify-end mt-3">
-                <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
-                  onClick={e => { e.stopPropagation(); elimina(p.id) }}>Elimina</button>
+                ))}
               </div>
             </div>
-          ))}
-        </div>
+          ))
+        )}
       </main>
 
       {/* Modal nuovo progetto */}
@@ -275,35 +414,7 @@ export default function Progetti() {
               <h2 className="text-base font-semibold">Nuovo progetto</h2>
               <button onClick={() => setModal(false)} className="text-gray-400 text-xl">×</button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="label">Codice (auto)</label><input className="input bg-gray-50" value={form.codice} readOnly /></div>
-              <div><label className="label">Nome cantiere *</label><input className="input" value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} /></div>
-              <div><label className="label">Cliente</label>
-                <select className="input" value={form.cliente_id} onChange={e => setForm({...form, cliente_id: e.target.value})}>
-                  <option value="">-- seleziona --</option>
-                  {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
-                </select></div>
-              <div><label className="label">Tipo</label>
-                <select className="input" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value})}>
-                  <option>Privato</option><option>Corporate</option><option>Pubblica</option><option>Movimenti Terra</option><option>Gestione Completa</option>
-                </select></div>
-              <div><label className="label">Geometra assegnato</label>
-                <select className="input" value={form.geometra_id} onChange={e => setForm({...form, geometra_id: e.target.value})}>
-                  <option value="">-- nessuno --</option>
-                  {utenti.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}
-                </select></div>
-              <div><label className="label">Responsabile cantiere</label><input className="input" value={form.responsabile} onChange={e => setForm({...form, responsabile: e.target.value})} /></div>
-              <div><label className="label">Stato</label>
-                <select className="input" value={form.stato} onChange={e => setForm({...form, stato: e.target.value})}>
-                  <option>Offerta</option><option>In Corso</option><option>Completato</option><option>Sospeso</option><option>Annullato</option>
-                </select></div>
-              <div></div>
-              <div><label className="label">Valore contratto (€)</label><input className="input" type="number" step="0.01" value={form.valore_contratto} onChange={e => setForm({...form, valore_contratto: e.target.value})} /></div>
-              <div><label className="label">Budget costi (€)</label><input className="input" type="number" step="0.01" value={form.budget_costi} onChange={e => setForm({...form, budget_costi: e.target.value})} /></div>
-              <div><label className="label">Data inizio</label><input className="input" type="date" value={form.data_inizio} onChange={e => setForm({...form, data_inizio: e.target.value})} /></div>
-              <div><label className="label">Data fine prevista</label><input className="input" type="date" value={form.data_fine} onChange={e => setForm({...form, data_fine: e.target.value})} /></div>
-              <div className="col-span-2"><label className="label">Note</label><textarea className="input h-20 resize-none" value={form.note} onChange={e => setForm({...form, note: e.target.value})} /></div>
-            </div>
+            <FormProgetto data={form} setData={setForm} />
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModal(false)}>Annulla</button>
               <button className="btn btn-primary" onClick={salva} disabled={loading}>{loading ? 'Salvataggio...' : 'Crea progetto'}</button>
@@ -312,17 +423,37 @@ export default function Progetti() {
         </div>
       )}
 
-      {/* Modal dettaglio cantiere - vista geometra */}
+      {/* Modal modifica progetto */}
+      {modalModifica && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-base font-semibold">Modifica progetto</h2>
+                <p className="text-xs text-gray-500 mt-0.5">{modalModifica.codice} — {modalModifica.nome}</p>
+              </div>
+              <button onClick={() => setModalModifica(null)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <FormProgetto data={modalModifica} setData={setModalModifica} />
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalModifica(null)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva modifiche'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal dettaglio cantiere */}
       {modalDettaglio && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-            {/* Header */}
             <div className="bg-gray-900 rounded-t-xl p-5 text-white">
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <span className="text-xs font-mono bg-white/20 px-2 py-0.5 rounded">{modalDettaglio.codice}</span>
                     <span className="text-xs text-gray-300">{modalDettaglio.tipo}</span>
+                    {modalDettaglio.localita && <span className="text-xs text-gray-300">📍 {modalDettaglio.localita}</span>}
                   </div>
                   <h2 className="text-xl font-semibold">{modalDettaglio.nome}</h2>
                   <p className="text-gray-300 text-sm mt-0.5">{modalDettaglio.cliente_nome || '—'}</p>
@@ -348,7 +479,7 @@ export default function Progetti() {
             <div className="p-5 space-y-5">
               {/* Avanzamento fasi */}
               <div className="card">
-                <h3 className="font-medium text-sm mb-4">📊 Avanzamento per fase — aggiorna i valori</h3>
+                <h3 className="font-medium text-sm mb-4">📊 Avanzamento per fase</h3>
                 <div className="space-y-4">
                   {FASI.map(f => (
                     <div key={f.key}>
@@ -356,10 +487,7 @@ export default function Progetti() {
                         <span className="text-sm text-gray-600 w-24 flex-shrink-0">{f.label}</span>
                         <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
                           <div className="h-full rounded-full transition-all"
-                            style={{
-                              width: `${modalDettaglio[f.key] || 0}%`,
-                              background: (modalDettaglio[f.key] || 0) >= 80 ? '#3B6D11' : '#185FA5'
-                            }} />
+                            style={{ width: `${modalDettaglio[f.key] || 0}%`, background: (modalDettaglio[f.key] || 0) >= 80 ? '#3B6D11' : '#185FA5' }} />
                         </div>
                         <span className="text-sm font-medium w-10 text-right">{modalDettaglio[f.key] || 0}%</span>
                         <input type="range" min="0" max="100" step="5"
@@ -384,7 +512,7 @@ export default function Progetti() {
                 </div>
               </div>
 
-              {/* KPI finanziari (visibili solo se titolare) */}
+              {/* KPI finanziari */}
               <div className="card">
                 <h3 className="font-medium text-sm mb-3">💰 Situazione finanziaria</h3>
                 <div className="grid grid-cols-2 gap-3">
@@ -416,27 +544,23 @@ export default function Progetti() {
                 </div>
               </div>
 
-              {/* Diario di cantiere */}
+              {/* Diario */}
               <div className="card">
                 <h3 className="font-medium text-sm mb-3">📝 Diario di cantiere</h3>
                 <div className="flex gap-2 mb-4">
-                  <textarea
-                    className="input flex-1 resize-none h-16 text-sm"
-                    placeholder="Inserisci una nota di cantiere... (es. completata la posa fondazioni lato nord)"
-                    value={nuovaNota}
-                    onChange={e => setNuovaNota(e.target.value)}
-                  />
+                  <textarea className="input flex-1 resize-none h-16 text-sm"
+                    placeholder="Inserisci una nota di cantiere..."
+                    value={nuovaNota} onChange={e => setNuovaNota(e.target.value)} />
                   <button className="btn btn-primary self-end" onClick={salvaNota}>Aggiungi</button>
                 </div>
                 <div className="space-y-2 max-h-64 overflow-y-auto">
                   {note.length === 0 ? (
-                    <p className="text-sm text-gray-400 text-center py-4">Nessuna nota ancora. Aggiungi la prima nota di cantiere.</p>
+                    <p className="text-sm text-gray-400 text-center py-4">Nessuna nota ancora.</p>
                   ) : note.map(n => (
                     <div key={n.id} className="bg-gray-50 rounded-lg p-3">
                       <div className="flex items-start justify-between gap-2">
                         <p className="text-sm text-gray-700 flex-1">{n.testo}</p>
-                        <button onClick={() => eliminaNota(n.id)}
-                          className="text-gray-300 hover:text-red-500 text-sm flex-shrink-0">✕</button>
+                        <button onClick={() => eliminaNota(n.id)} className="text-gray-300 hover:text-red-500 text-sm flex-shrink-0">✕</button>
                       </div>
                       <div className="flex gap-2 mt-1">
                         <span className="text-xs text-gray-400">{new Date(n.data).toLocaleDateString('it-IT')}</span>
@@ -447,7 +571,6 @@ export default function Progetti() {
                 </div>
               </div>
 
-              {/* Note generali progetto */}
               {modalDettaglio.note && (
                 <div className="card bg-amber-50 border-amber-200">
                   <h3 className="font-medium text-sm mb-2">📌 Note progetto</h3>
