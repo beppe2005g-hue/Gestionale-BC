@@ -24,6 +24,7 @@ const nav = [
   ]},
   { section: 'Impostazioni', items: [
     { href: '/anagrafiche', label: 'Anagrafiche', icon: '👥' },
+    { href: '/dipendenti', label: 'Dipendenti', icon: '👷' },
     { href: '/utenti', label: 'Utenti e permessi', icon: '🔒' },
   ]},
 ]
