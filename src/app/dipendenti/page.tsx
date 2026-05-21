@@ -202,6 +202,12 @@ export default function Dipendenti() {
     if (!perAziendaMatrice[d.azienda]) perAziendaMatrice[d.azienda] = []
     perAziendaMatrice[d.azienda].push(d)
   })
+  // BC sempre prima
+  const aziendeMatriceOrdinate = Object.keys(perAziendaMatrice).sort((a, b) => {
+    if (a.toUpperCase().startsWith('BC')) return -1
+    if (b.toUpperCase().startsWith('BC')) return 1
+    return a.localeCompare(b)
+  })
 
   return (
     <div className="flex min-h-screen">
@@ -387,13 +393,13 @@ export default function Dipendenti() {
         {/* TAB MATRICE CORSI */}
         {tab === 'matrice' && (
           <div className="overflow-x-auto">
-            <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
-              <div className="flex gap-4 text-xs">
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-green-100 border border-green-300 inline-block"></span> OK</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-amber-100 border border-amber-300 inline-block"></span> Scade quest'anno</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-yellow-50 border border-yellow-300 inline-block"></span> Scade il prossimo anno</span>
-                <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-100 border border-red-300 inline-block"></span> Scaduto</span>
-                <span className="flex items-center gap-1"><span className="text-gray-300">—</span> Non ha il corso</span>
+            <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
+              <div className="flex gap-3 flex-wrap">
+                <span className="flex items-center gap-1.5 text-xs text-gray-600"><span className="w-3 h-3 rounded-sm bg-green-100 border border-green-400 inline-block"></span> OK</span>
+                <span className="flex items-center gap-1.5 text-xs text-gray-600"><span className="w-3 h-3 rounded-sm bg-amber-100 border border-amber-400 inline-block"></span> Scade quest'anno</span>
+                <span className="flex items-center gap-1.5 text-xs text-gray-600"><span className="w-3 h-3 rounded-sm bg-orange-100 border border-orange-400 inline-block"></span> Scade l'anno prossimo</span>
+                <span className="flex items-center gap-1.5 text-xs text-gray-600"><span className="w-3 h-3 rounded-sm bg-red-100 border border-red-400 inline-block"></span> Scaduto</span>
+                <span className="flex items-center gap-1.5 text-xs text-gray-400">— Non ha il corso</span>
               </div>
               <button className="btn btn-sm btn-primary" onClick={() => {
                 const nome = prompt('Nome del nuovo tipo di corso:')
@@ -402,13 +408,34 @@ export default function Dipendenti() {
                 }
               }}>+ Nuovo tipo corso</button>
             </div>
-            <table className="text-xs border-collapse" style={{minWidth: '900px'}}>
+            <div style={{borderRadius: 12, overflow: 'hidden', border: '1px solid #dbeafe'}}>
+            <table className="border-collapse w-full" style={{fontSize: 12}}>
               <thead>
                 <tr>
-                  <th className="text-left px-3 py-2 bg-gray-900 text-white sticky left-0 z-10 min-w-40">Dipendente</th>
-                  {tuttiCorsi.map(corso => (
-                    <th key={corso} className="px-2 py-2 bg-gray-900 text-white text-center font-medium" style={{minWidth: 120}}>
-                      <div className="text-xs leading-tight" style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: 130, display: 'flex', alignItems: 'center'}}>
+                  <th style={{
+                    background: 'linear-gradient(135deg, #1e40af, #1d4ed8)',
+                    color: 'white', textAlign: 'left', padding: '12px 14px',
+                    position: 'sticky', left: 0, zIndex: 10, minWidth: 160,
+                    fontWeight: 600, fontSize: 13, letterSpacing: '0.02em'
+                  }}>Dipendente</th>
+                  {tuttiCorsi.map((corso, idx) => (
+                    <th key={corso} style={{
+                      background: idx % 2 === 0 ? 'linear-gradient(180deg, #1e40af, #1d4ed8)' : 'linear-gradient(180deg, #1e3a8a, #1e40af)',
+                      color: 'white', padding: '8px 6px', minWidth: 110, maxWidth: 130,
+                      verticalAlign: 'bottom'
+                    }}>
+                      <div style={{
+                        writingMode: 'vertical-rl',
+                        transform: 'rotate(180deg)',
+                        height: 140,
+                        display: 'flex',
+                        alignItems: 'center',
+                        fontSize: 11,
+                        fontWeight: 500,
+                        letterSpacing: '0.01em',
+                        lineHeight: 1.3,
+                        padding: '4px 0'
+                      }}>
                         {corso}
                       </div>
                     </th>
@@ -416,39 +443,84 @@ export default function Dipendenti() {
                 </tr>
               </thead>
               <tbody>
-                {Object.entries(perAziendaMatrice).map(([azienda, dipList]) => (
-                  <>
-                    <tr key={azienda}>
-                      <td colSpan={tuttiCorsi.length + 1} className="px-3 py-1.5 bg-gray-800 text-white text-xs font-medium sticky left-0">
-                        {azienda} — {dipList.length} dipendenti
-                      </td>
-                    </tr>
-                    {dipList.map(d => {
-                      const corsiDipendente = corsiMatrice[d.id] || []
-                      return (
-                        <tr key={d.id} className="hover:bg-blue-50">
-                          <td className="px-3 py-1.5 font-medium border-b border-gray-100 sticky left-0 bg-white cursor-pointer hover:text-blue-700"
-                            onClick={() => { apriDipendente(d); setTab('lista') }}>
-                            {d.cognome} {d.nome}
-                            <span className="text-gray-400 text-xs ml-1">→</span>
-                          </td>
-                          {tuttiCorsi.map(corso => {
-                            const corsoTrovato = corsiDipendente.find((c: any) => c.nome_corso === corso)
-                            return (
-                              <CellaCorso
-                                key={corso}
-                                data={corsoTrovato?.scadenza || null}
-                                onClick={() => { apriDipendente(d); setTab('lista') }}
-                              />
-                            )
-                          })}
-                        </tr>
-                      )
-                    })}
-                  </>
-                ))}
+                {aziendeMatriceOrdinate.map((azienda) => {
+                  const dipList = perAziendaMatrice[azienda]
+                  return (
+                    <>
+                      <tr key={azienda}>
+                        <td colSpan={tuttiCorsi.length + 1} style={{
+                          background: 'linear-gradient(90deg, #1e3a8a, #1e40af)',
+                          color: 'white', padding: '8px 14px',
+                          fontSize: 12, fontWeight: 600,
+                          letterSpacing: '0.03em', position: 'sticky', left: 0
+                        }}>
+                          ▸ {azienda} — {dipList.length} dipendenti
+                        </td>
+                      </tr>
+                      {dipList.map((d, rowIdx) => {
+                        const corsiDipendente = corsiMatrice[d.id] || []
+                        const rowBg = rowIdx % 2 === 0 ? '#ffffff' : '#f0f7ff'
+                        return (
+                          <tr key={d.id} style={{background: rowBg}}
+                            onMouseEnter={e => (e.currentTarget.style.background = '#dbeafe')}
+                            onMouseLeave={e => (e.currentTarget.style.background = rowBg)}>
+                            <td style={{
+                              padding: '8px 14px', fontWeight: 500,
+                              borderBottom: '1px solid #e0effe',
+                              position: 'sticky', left: 0, background: 'inherit',
+                              cursor: 'pointer', color: '#1e40af',
+                              fontSize: 12
+                            }} onClick={() => { apriDipendente(d); setTab('lista') }}>
+                              {d.cognome} {d.nome}
+                              <span style={{color: '#93c5fd', marginLeft: 4, fontSize: 10}}>→</span>
+                            </td>
+                            {tuttiCorsi.map((corso, colIdx) => {
+                              const corsoTrovato = corsiDipendente.find((c: any) => c.nome_corso === corso)
+                              const scad = corsoTrovato?.scadenza || null
+                              const stato = statoScadenza(scad)
+                              const colBg = colIdx % 2 === 0 ? 'rgba(219,234,254,0.2)' : 'transparent'
+                              return (
+                                <td key={corso} style={{
+                                  padding: '6px 4px', textAlign: 'center',
+                                  borderBottom: '1px solid #e0effe',
+                                  borderLeft: `1px solid ${colIdx % 2 === 0 ? '#dbeafe' : '#e0effe'}`,
+                                  background: colBg,
+                                  cursor: 'pointer'
+                                }} onClick={() => { apriDipendente(d); setTab('lista') }}>
+                                  {!scad ? (
+                                    <span style={{color: '#cbd5e1', fontSize: 11}}>—</span>
+                                  ) : (
+                                    <span style={{
+                                      display: 'inline-block',
+                                      padding: '2px 5px',
+                                      borderRadius: 6,
+                                      fontSize: 10,
+                                      fontWeight: 600,
+                                      background: stato === 'scaduta' ? '#fee2e2' :
+                                                  stato === 'anno_corrente' ? '#fef3c7' :
+                                                  stato === 'prossimo_anno' ? '#ffedd5' : '#dcfce7',
+                                      color: stato === 'scaduta' ? '#b91c1c' :
+                                             stato === 'anno_corrente' ? '#92400e' :
+                                             stato === 'prossimo_anno' ? '#9a3412' : '#166534',
+                                      border: `1px solid ${stato === 'scaduta' ? '#fca5a5' :
+                                              stato === 'anno_corrente' ? '#fde68a' :
+                                              stato === 'prossimo_anno' ? '#fdba74' : '#86efac'}`
+                                    }}>
+                                      {new Date(scad).toLocaleDateString('it-IT', { month: '2-digit', year: '2-digit' })}
+                                    </span>
+                                  )}
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        )
+                      })}
+                    </>
+                  )
+                })}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </main>
