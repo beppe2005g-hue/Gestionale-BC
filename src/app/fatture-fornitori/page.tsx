@@ -1,9 +1,20 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+function statoFattura(f: any): 'pagata' | 'parziale' | 'da_pagare' {
+  const rate = [
+    f.rata1_stato,
+    f.rata2_importo > 0 ? f.rata2_stato : null,
+    f.rata3_importo > 0 ? f.rata3_stato : null,
+  ].filter(Boolean)
+  if (rate.every(r => r === 'Pagata')) return 'pagata'
+  if (rate.some(r => r === 'Pagata')) return 'parziale'
+  return 'da_pagare'
+}
 
 export default function FattureFornitori() {
   const [fatture, setFatture] = useState<any[]>([])
@@ -12,6 +23,9 @@ export default function FattureFornitori() {
   const [modal, setModal] = useState(false)
   const [modalModifica, setModalModifica] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  const [ricerca, setRicerca] = useState('')
+  const [filtroStato, setFiltroStato] = useState('tutti')
+  const [ordinamento, setOrdinamento] = useState('data_desc')
   const [form, setForm] = useState({
     data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '',
     imponibile: '', iva_percentuale: '22',
@@ -31,6 +45,29 @@ export default function FattureFornitori() {
     setFornitori(fo || [])
     setProgetti(p || [])
   }
+
+  const fattureFiltrate = useMemo(() => {
+    let result = [...fatture]
+    if (ricerca.trim()) {
+      const q = ricerca.toLowerCase()
+      result = result.filter(f =>
+        f.numero?.toLowerCase().includes(q) ||
+        f.fornitore_nome?.toLowerCase().includes(q) ||
+        f.progetto_nome?.toLowerCase().includes(q)
+      )
+    }
+    if (filtroStato !== 'tutti') {
+      result = result.filter(f => statoFattura(f) === filtroStato)
+    }
+    result.sort((a, b) => {
+      if (ordinamento === 'data_desc') return new Date(b.data).getTime() - new Date(a.data).getTime()
+      if (ordinamento === 'data_asc') return new Date(a.data).getTime() - new Date(b.data).getTime()
+      if (ordinamento === 'fornitore') return (a.fornitore_nome || '').localeCompare(b.fornitore_nome || '')
+      if (ordinamento === 'importo') return (b.imponibile || 0) - (a.imponibile || 0)
+      return 0
+    })
+    return result
+  }, [fatture, ricerca, filtroStato, ordinamento])
 
   async function pagaRata(id: string, rata: number) {
     const { data: fatt } = await supabase.from('fatture_fornitori').select('*').eq('id', id).single()
@@ -64,9 +101,7 @@ export default function FattureFornitori() {
 
   async function elimina(id: string, numero: string) {
     if (!confirm(`Eliminare la fattura ${numero}?\nAttenzione: i DDT abbinati torneranno a "Da Fatturare".`)) return
-    // Riporta i DDT abbinati a Da Fatturare
-    await supabase.from('ddt').update({ stato: 'Da Fatturare', fattura_abbinata: null })
-      .eq('fattura_abbinata', numero)
+    await supabase.from('ddt').update({ stato: 'Da Fatturare', fattura_abbinata: null }).eq('fattura_abbinata', numero)
     await supabase.from('fatture_fornitori').delete().eq('id', id)
     load()
   }
@@ -89,20 +124,17 @@ export default function FattureFornitori() {
       modalita_pagamento: modalModifica.modalita_pagamento,
       note: modalModifica.note
     }).eq('id', modalModifica.id)
-    setModalModifica(null)
-    setLoading(false)
-    load()
+    setModalModifica(null); setLoading(false); load()
   }
 
   async function salva() {
     if (!form.numero || !form.imponibile || !form.fornitore_id) {
       alert('Compilare N° fattura, fornitore e imponibile'); return
     }
-    // Controlla duplicati
     const { data: dup } = await supabase.from('fatture_fornitori')
       .select('id').eq('numero', form.numero).eq('fornitore_id', form.fornitore_id)
     if (dup && dup.length > 0) {
-      alert(`⚠️ Fattura ${form.numero} di questo fornitore già presente nel sistema. Non inserita.`); return
+      alert(`⚠️ Fattura ${form.numero} di questo fornitore già presente. Non inserita.`); return
     }
     setLoading(true)
     const for_ = fornitori.find(f => f.id === form.fornitore_id)
@@ -133,10 +165,48 @@ export default function FattureFornitori() {
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 p-6 overflow-auto">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold">Fatture fornitori</h1>
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuova fattura</button>
         </div>
+
+        {/* Barra ricerca e filtri */}
+        <div className="card mb-4">
+          <div className="flex gap-3 flex-wrap items-end">
+            <div className="flex-1 min-w-52">
+              <label className="label">🔍 Cerca</label>
+              <input className="input" placeholder="N° fattura, fornitore, cantiere..."
+                value={ricerca} onChange={e => setRicerca(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Stato pagamento</label>
+              <select className="input w-auto" value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
+                <option value="tutti">Tutti ({fatture.length})</option>
+                <option value="da_pagare">Da pagare ({fatture.filter(f => statoFattura(f) === 'da_pagare').length})</option>
+                <option value="parziale">Parziale ({fatture.filter(f => statoFattura(f) === 'parziale').length})</option>
+                <option value="pagata">Pagate ({fatture.filter(f => statoFattura(f) === 'pagata').length})</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Ordina per</label>
+              <select className="input w-auto" value={ordinamento} onChange={e => setOrdinamento(e.target.value)}>
+                <option value="data_desc">Data ↓ più recenti</option>
+                <option value="data_asc">Data ↑ più vecchie</option>
+                <option value="fornitore">Fornitore A→Z</option>
+                <option value="importo">Importo ↓</option>
+              </select>
+            </div>
+            {(ricerca || filtroStato !== 'tutti') && (
+              <button className="btn btn-sm" onClick={() => { setRicerca(''); setFiltroStato('tutti') }}>
+                ✕ Reset
+              </button>
+            )}
+          </div>
+          {(ricerca || filtroStato !== 'tutti') && (
+            <p className="text-xs text-gray-500 mt-2">{fattureFiltrate.length} fatture trovate</p>
+          )}
+        </div>
+
         <div className="card overflow-x-auto">
           <table className="table-base">
             <thead><tr>
@@ -144,45 +214,54 @@ export default function FattureFornitori() {
               <th>Imponibile</th><th>Totale</th><th>Rata 1</th><th>Rata 2</th><th>Rata 3</th><th></th>
             </tr></thead>
             <tbody>
-              {fatture.length === 0 ? (
-                <tr><td colSpan={10} className="text-center text-gray-400 py-8">Nessuna fattura.</td></tr>
-              ) : fatture.map(f => (
-                <tr key={f.id}>
-                  <td className="text-xs">{new Date(f.data).toLocaleDateString('it-IT')}</td>
-                  <td className="font-medium text-sm">{f.numero}</td>
-                  <td className="text-sm">{f.fornitore_nome}</td>
-                  <td className="text-xs text-gray-500">{f.progetto_nome || '—'}</td>
-                  <td className="text-sm">{euro(f.imponibile)}</td>
-                  <td className="font-medium text-sm">{euro(f.totale)}</td>
-                  {[1,2,3].map(n => (
-                    <td key={n}>
-                      {f[`rata${n}_importo`] > 0 ? (
-                        <div className="text-xs">
-                          <div className="font-medium">{euro(f[`rata${n}_importo`])}</div>
-                          <div className="text-gray-400">{f[`rata${n}_scadenza`] ? new Date(f[`rata${n}_scadenza`]).toLocaleDateString('it-IT') : ''}</div>
-                          {f[`rata${n}_stato`] === 'Pagata' ? (
-                            <div className="flex gap-1 mt-1 items-center">
-                              <span className="badge badge-green">Pagata</span>
-                              <button className="text-amber-600 hover:text-amber-800 text-sm font-bold px-1"
-                                onClick={() => annullaRata(f.id, n)} title="Annulla pagamento">↩</button>
-                            </div>
-                          ) : (
-                            <button className="btn btn-sm btn-success mt-1" onClick={() => pagaRata(f.id, n)}>Paga</button>
-                          )}
-                        </div>
-                      ) : <span className="text-gray-300">—</span>}
+              {fattureFiltrate.length === 0 ? (
+                <tr><td colSpan={10} className="text-center text-gray-400 py-8">
+                  {ricerca || filtroStato !== 'tutti' ? 'Nessuna fattura con questi filtri.' : 'Nessuna fattura.'}
+                </td></tr>
+              ) : fattureFiltrate.map(f => {
+                const stato = statoFattura(f)
+                return (
+                  <tr key={f.id} className={stato === 'pagata' ? 'opacity-60' : ''}>
+                    <td className="text-xs">{new Date(f.data).toLocaleDateString('it-IT')}</td>
+                    <td className="font-medium text-sm">{f.numero}</td>
+                    <td className="text-sm">{f.fornitore_nome}</td>
+                    <td className="text-xs text-gray-500">{f.progetto_nome || '—'}</td>
+                    <td className="text-sm">{euro(f.imponibile)}</td>
+                    <td className="font-medium text-sm">
+                      {euro(f.totale)}
+                      {stato === 'pagata' && <span className="ml-1 text-xs text-green-600">✓</span>}
+                      {stato === 'parziale' && <span className="ml-1 text-xs text-amber-600">½</span>}
                     </td>
-                  ))}
-                  <td>
-                    <div className="flex gap-1">
-                      <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50"
-                        onClick={() => setModalModifica({...f})}>✏️</button>
-                      <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
-                        onClick={() => elimina(f.id, f.numero)}>✕</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    {[1,2,3].map(n => (
+                      <td key={n}>
+                        {f[`rata${n}_importo`] > 0 ? (
+                          <div className="text-xs">
+                            <div className="font-medium">{euro(f[`rata${n}_importo`])}</div>
+                            <div className="text-gray-400">{f[`rata${n}_scadenza`] ? new Date(f[`rata${n}_scadenza`]).toLocaleDateString('it-IT') : ''}</div>
+                            {f[`rata${n}_stato`] === 'Pagata' ? (
+                              <div className="flex gap-1 mt-1 items-center">
+                                <span className="badge badge-green">Pagata</span>
+                                <button className="text-amber-600 hover:text-amber-800 text-sm font-bold px-1"
+                                  onClick={() => annullaRata(f.id, n)} title="Annulla">↩</button>
+                              </div>
+                            ) : (
+                              <button className="btn btn-sm btn-success mt-1" onClick={() => pagaRata(f.id, n)}>Paga</button>
+                            )}
+                          </div>
+                        ) : <span className="text-gray-300">—</span>}
+                      </td>
+                    ))}
+                    <td>
+                      <div className="flex gap-1">
+                        <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50"
+                          onClick={() => setModalModifica({...f})}>✏️</button>
+                        <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
+                          onClick={() => elimina(f.id, f.numero)}>✕</button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -231,23 +310,23 @@ export default function FattureFornitori() {
         </div>
       )}
 
-      {/* Modal modifica fattura */}
+      {/* Modal modifica */}
       {modalModifica && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold">Modifica fattura — {modalModifica.numero}</h2>
+              <h2 className="text-base font-semibold">Modifica — {modalModifica.numero}</h2>
               <button onClick={() => setModalModifica(null)} className="text-gray-400 text-xl">×</button>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="label">Data fattura</label><input className="input" type="date" value={modalModifica.data} onChange={e => setModalModifica({...modalModifica, data: e.target.value})} /></div>
+              <div><label className="label">Data</label><input className="input" type="date" value={modalModifica.data} onChange={e => setModalModifica({...modalModifica, data: e.target.value})} /></div>
               <div><label className="label">N° Fattura</label><input className="input" value={modalModifica.numero} onChange={e => setModalModifica({...modalModifica, numero: e.target.value})} /></div>
               <div><label className="label">Imponibile (€)</label><input className="input" type="number" step="0.01" value={modalModifica.imponibile} onChange={e => setModalModifica({...modalModifica, imponibile: e.target.value})} /></div>
               <div><label className="label">IVA %</label>
                 <select className="input" value={modalModifica.iva_percentuale} onChange={e => setModalModifica({...modalModifica, iva_percentuale: e.target.value})}>
                   <option value="22">22%</option><option value="10">10%</option><option value="0">0% (RC)</option>
                 </select></div>
-              <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate di pagamento</div>
+              <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate</div>
               <div><label className="label">Rata 1 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata1_importo || ''} onChange={e => setModalModifica({...modalModifica, rata1_importo: e.target.value})} /></div>
               <div><label className="label">Rata 1 — Scadenza</label><input className="input" type="date" value={modalModifica.rata1_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata1_scadenza: e.target.value})} /></div>
               <div><label className="label">Rata 2 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata2_importo || ''} onChange={e => setModalModifica({...modalModifica, rata2_importo: e.target.value})} /></div>
@@ -258,7 +337,7 @@ export default function FattureFornitori() {
             </div>
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalModifica(null)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva modifiche'}</button>
+              <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva'}</button>
             </div>
           </div>
         </div>
