@@ -67,7 +67,12 @@ export default function Dipendenti() {
     const { data: dip } = await supabase.from('dipendenti').select('*')
       .order('azienda').order('cognome').order('nome')
     setDipendenti(dip || [])
-    const az = Array.from(new Set((dip || []).map((d: any) => d.azienda))).sort() as string[]
+    const az = Array.from(new Set((dip || []).map((d: any) => d.azienda)))
+      .sort((a: any, b: any) => {
+        if (a.toUpperCase().startsWith('BC')) return -1
+        if (b.toUpperCase().startsWith('BC')) return 1
+        return a.localeCompare(b)
+      }) as string[]
     setAziende(az)
 
     // Carica tutti i corsi distinti
