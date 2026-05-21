@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 
@@ -9,9 +9,16 @@ export default function DDTPage() {
   const [ddts, setDdts] = useState<any[]>([])
   const [fornitori, setFornitori] = useState<any[]>([])
   const [progetti, setProgetti] = useState<any[]>([])
-  const [filtro, setFiltro] = useState('tutti')
   const [modal, setModal] = useState(false)
   const [loading, setLoading] = useState(false)
+
+  // Filtri
+  const [cercaNumero, setCercaNumero] = useState('')
+  const [cercaFornitore, setCercaFornitore] = useState('')
+  const [filtroStato, setFiltroStato] = useState('tutti')
+  const [dataDA, setDataDA] = useState('')
+  const [dataA, setDataA] = useState('')
+
   const [form, setForm] = useState({
     data: '', numero: '', fornitore_id: '', progetto_id: '',
     descrizione: '', importo: '', mese_fattura_previsto: '', note: ''
@@ -22,7 +29,7 @@ export default function DDTPage() {
   async function load() {
     const [{ data: d }, { data: f }, { data: p }] = await Promise.all([
       supabase.from('ddt').select('*').order('data', { ascending: false }),
-      supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true),
+      supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale'),
       supabase.from('progetti').select('id,codice,nome').eq('stato', 'In Corso'),
     ])
     setDdts(d || [])
@@ -66,7 +73,28 @@ export default function DDTPage() {
     load()
   }
 
-  const filtered = filtro === 'tutti' ? ddts : ddts.filter(d => d.stato === filtro)
+  function resetFiltri() {
+    setCercaNumero('')
+    setCercaFornitore('')
+    setFiltroStato('tutti')
+    setDataDA('')
+    setDataA('')
+  }
+
+  const filtered = useMemo(() => {
+    return ddts.filter(d => {
+      if (cercaNumero && !d.numero?.toLowerCase().includes(cercaNumero.toLowerCase())) return false
+      if (cercaFornitore && !d.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase())) return false
+      if (filtroStato !== 'tutti' && d.stato !== filtroStato) return false
+      if (dataDA && d.data < dataDA) return false
+      if (dataA && d.data > dataA) return false
+      return true
+    })
+  }, [ddts, cercaNumero, cercaFornitore, filtroStato, dataDA, dataA])
+
+  const hasFiltriAttivi = cercaNumero || cercaFornitore || filtroStato !== 'tutti' || dataDA || dataA
+
+  const totaleFiltered = filtered.reduce((s, d) => s + (d.importo || 0), 0)
 
   const statoBadge = (s: string) => {
     if (s === 'Fatturato') return <span className="badge badge-green">Fatturato</span>
@@ -83,43 +111,90 @@ export default function DDTPage() {
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuovo DDT</button>
         </div>
 
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <span className="text-sm text-gray-500">{filtered.length} DDT</span>
-            <select className="input w-auto text-sm" value={filtro} onChange={e => setFiltro(e.target.value)}>
-              <option value="tutti">Tutti gli stati</option>
-              <option value="Da Fatturare">Da fatturare</option>
-              <option value="Fatturato">Fatturati</option>
-              <option value="Parziale">Parziali</option>
-            </select>
+        {/* Barra filtri */}
+        <div className="card mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+            <div>
+              <label className="label">N° DDT</label>
+              <input className="input" placeholder="Cerca numero..." value={cercaNumero}
+                onChange={e => setCercaNumero(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Fornitore</label>
+              <input className="input" placeholder="Cerca fornitore..." value={cercaFornitore}
+                onChange={e => setCercaFornitore(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Stato</label>
+              <select className="input" value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
+                <option value="tutti">Tutti gli stati</option>
+                <option value="Da Fatturare">Da fatturare</option>
+                <option value="Fatturato">Fatturati</option>
+                <option value="Parziale">Parziali</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Data dal</label>
+              <input className="input" type="date" value={dataDA}
+                onChange={e => setDataDA(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Data al</label>
+              <input className="input" type="date" value={dataA}
+                onChange={e => setDataA(e.target.value)} />
+            </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="table-base">
-              <thead><tr>
+          {hasFiltriAttivi && (
+            <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+              <span className="text-xs text-gray-500">
+                {filtered.length} risultati su {ddts.length} DDT — Totale: <strong>{euro(totaleFiltered)}</strong>
+              </span>
+              <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">
+                × Azzera filtri
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Tabella */}
+        <div className="card overflow-x-auto">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-sm text-gray-500">
+              {filtered.length} DDT
+              {!hasFiltriAttivi && <span className="ml-2 text-gray-400">— Totale: {euro(ddts.reduce((s, d) => s + (d.importo || 0), 0))}</span>}
+            </span>
+          </div>
+          <table className="table-base">
+            <thead>
+              <tr>
                 <th>Data</th><th>N° DDT</th><th>Fornitore</th><th>Cantiere</th>
                 <th>Importo</th><th>Stato</th><th>Fattura abbinata</th><th></th>
-              </tr></thead>
-              <tbody>
-                {filtered.length === 0 ? (
-                  <tr><td colSpan={8} className="text-center text-gray-400 py-8">Nessun DDT. Inserisci il primo.</td></tr>
-                ) : filtered.map(d => (
-                  <tr key={d.id}>
-                    <td className="text-xs">{d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—'}</td>
-                    <td className="font-medium text-sm">{d.numero}</td>
-                    <td className="text-sm">{d.fornitore_nome}</td>
-                    <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
-                    <td className="font-medium text-sm">{euro(d.importo)}</td>
-                    <td>{statoBadge(d.stato)}</td>
-                    <td className="text-xs text-gray-500">{d.fattura_abbinata || '—'}</td>
-                    <td>
-                      <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
-                        onClick={() => elimina(d.id)}>✕</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="text-center text-gray-400 py-8">
+                    {hasFiltriAttivi ? 'Nessun DDT corrisponde ai filtri impostati.' : 'Nessun DDT. Inserisci il primo.'}
+                  </td>
+                </tr>
+              ) : filtered.map(d => (
+                <tr key={d.id}>
+                  <td className="text-xs">{d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—'}</td>
+                  <td className="font-medium text-sm">{d.numero}</td>
+                  <td className="text-sm">{d.fornitore_nome}</td>
+                  <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
+                  <td className="font-medium text-sm">{euro(d.importo)}</td>
+                  <td>{statoBadge(d.stato)}</td>
+                  <td className="text-xs text-gray-500">{d.fattura_abbinata || '—'}</td>
+                  <td>
+                    <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
+                      onClick={() => elimina(d.id)}>✕</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </main>
 
