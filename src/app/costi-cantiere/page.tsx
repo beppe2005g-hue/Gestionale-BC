@@ -4,18 +4,14 @@ import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const euroShort = (n: number) => (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
 const CATEGORIE = ['Materiali', 'Noli mezzi', 'Manodopera esterna', 'Subappalto', 'Trasporti', 'Attrezzatura', 'Smaltimento', 'Altro']
 
 const CAT_COLORS: Record<string, string> = {
-  'Materiali': '#1d4ed8',
-  'Noli mezzi': '#7c3aed',
-  'Manodopera esterna': '#0891b2',
-  'Subappalto': '#b45309',
-  'Trasporti': '#059669',
-  'Attrezzatura': '#dc2626',
-  'Smaltimento': '#9333ea',
-  'Altro': '#6b7280',
+  'Materiali': '#1d4ed8', 'Noli mezzi': '#7c3aed', 'Manodopera esterna': '#0891b2',
+  'Subappalto': '#b45309', 'Trasporti': '#059669', 'Attrezzatura': '#dc2626',
+  'Smaltimento': '#9333ea', 'Altro': '#6b7280',
 }
 
 const statoBadge = (s: string) => {
@@ -26,34 +22,25 @@ const statoBadge = (s: string) => {
 
 export default function CostiCantiere() {
   const [tab, setTab] = useState<'costi' | 'ddt'>('costi')
-
-  // Dati comuni
   const [progetti, setProgetti] = useState<any[]>([])
   const [progettoSel, setProgettoSel] = useState('')
   const [utente, setUtente] = useState<any>(null)
-
-  // Costi
   const [costi, setCosti] = useState<any[]>([])
   const [filtroMese, setFiltroMese] = useState('')
   const [modalCosto, setModalCosto] = useState(false)
   const [loadingCosto, setLoadingCosto] = useState(false)
   const [formCosto, setFormCosto] = useState({
-    data: new Date().toISOString().split('T')[0],
-    categoria: 'Materiali',
-    descrizione: '',
-    importo: '',
-    note: ''
+    data: new Date().toISOString().split('T')[0], categoria: 'Materiali', descrizione: '', importo: '', note: ''
   })
-
-  // DDT
   const [ddts, setDdts] = useState<any[]>([])
   const [fornitori, setFornitori] = useState<any[]>([])
   const [modalDdt, setModalDdt] = useState(false)
   const [loadingDdt, setLoadingDdt] = useState(false)
   const [formDdt, setFormDdt] = useState({
-    data: '', numero: '', fornitore_id: '',
-    descrizione: '', importo: '', mese_fattura_previsto: '', note: ''
+    data: '', numero: '', fornitore_id: '', descrizione: '', importo: '', mese_fattura_previsto: '', note: ''
   })
+  const [modalContabilita, setModalContabilita] = useState(false)
+  const [meseContabilita, setMeseContabilita] = useState('')
 
   useEffect(() => { loadAll() }, [])
   useEffect(() => { if (progettoSel) { loadCosti(); loadDdt() } }, [progettoSel])
@@ -77,7 +64,7 @@ export default function CostiCantiere() {
   async function loadCosti() {
     if (!progettoSel) return
     const { data } = await supabase.from('costi_cantiere').select('*')
-      .eq('progetto_id', progettoSel).order('data', { ascending: false })
+      .eq('progetto_id', progettoSel).order('data', { ascending: true })
     setCosti(data || [])
   }
 
@@ -88,7 +75,6 @@ export default function CostiCantiere() {
     setDdts(data || [])
   }
 
-  // ── SALVA COSTO ──
   async function salvaCosto() {
     if (!formCosto.importo || !progettoSel) { alert('Inserisci importo e seleziona un cantiere'); return }
     setLoadingCosto(true)
@@ -96,43 +82,27 @@ export default function CostiCantiere() {
     const { data: { user } } = await supabase.auth.getUser()
     const { data: profilo } = await supabase.from('utenti').select('nome').eq('id', user?.id).single()
     await supabase.from('costi_cantiere').insert({
-      progetto_id: progettoSel,
-      progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
-      data: formCosto.data,
-      categoria: formCosto.categoria,
-      descrizione: formCosto.descrizione,
+      progetto_id: progettoSel, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
+      data: formCosto.data, categoria: formCosto.categoria, descrizione: formCosto.descrizione,
       importo: parseFloat(formCosto.importo) || 0,
-      inserito_da: user?.id,
-      inserito_da_nome: profilo?.nome || user?.email,
-      note: formCosto.note
+      inserito_da: user?.id, inserito_da_nome: profilo?.nome || user?.email, note: formCosto.note
     })
     setModalCosto(false)
     setFormCosto({ data: new Date().toISOString().split('T')[0], categoria: 'Materiali', descrizione: '', importo: '', note: '' })
-    setLoadingCosto(false)
-    loadCosti()
+    setLoadingCosto(false); loadCosti()
   }
 
-  // ── SALVA DDT ──
   async function salvaDdt() {
-    if (!formDdt.numero || !formDdt.importo || !formDdt.fornitore_id) {
-      alert('Compilare N° DDT, fornitore e importo')
-      return
-    }
+    if (!formDdt.numero || !formDdt.importo || !formDdt.fornitore_id) { alert('Compilare N° DDT, fornitore e importo'); return }
     setLoadingDdt(true)
     const for_ = fornitori.find(f => f.id === formDdt.fornitore_id)
     const prj = progetti.find(p => p.id === progettoSel)
     const { error } = await supabase.from('ddt').insert({
-      data: formDdt.data || new Date().toISOString().split('T')[0],
-      numero: formDdt.numero,
-      fornitore_id: formDdt.fornitore_id,
-      fornitore_nome: for_?.ragione_sociale || '',
-      progetto_id: progettoSel,
-      progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
-      descrizione: formDdt.descrizione,
-      importo: parseFloat(formDdt.importo) || 0,
-      mese_fattura_previsto: formDdt.mese_fattura_previsto,
-      stato: 'Da Fatturare',
-      note: formDdt.note,
+      data: formDdt.data || new Date().toISOString().split('T')[0], numero: formDdt.numero,
+      fornitore_id: formDdt.fornitore_id, fornitore_nome: for_?.ragione_sociale || '',
+      progetto_id: progettoSel, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
+      descrizione: formDdt.descrizione, importo: parseFloat(formDdt.importo) || 0,
+      mese_fattura_previsto: formDdt.mese_fattura_previsto, stato: 'Da Fatturare', note: formDdt.note,
     })
     if (error) alert('Errore: ' + error.message)
     else {
@@ -145,14 +115,12 @@ export default function CostiCantiere() {
 
   async function eliminaCosto(id: string) {
     if (!confirm('Eliminare questo costo?')) return
-    await supabase.from('costi_cantiere').delete().eq('id', id)
-    loadCosti()
+    await supabase.from('costi_cantiere').delete().eq('id', id); loadCosti()
   }
 
   async function eliminaDdt(id: string) {
     if (!confirm('Eliminare questo DDT?')) return
-    await supabase.from('ddt').delete().eq('id', id)
-    loadDdt()
+    await supabase.from('ddt').delete().eq('id', id); loadDdt()
   }
 
   const progetto = progetti.find(p => p.id === progettoSel)
@@ -175,8 +143,54 @@ export default function CostiCantiere() {
     const mesi = new Set(costi.map(c => c.data?.substring(0, 7)).filter(Boolean))
     return Array.from(mesi).sort().reverse()
   }, [costi])
-
   const totaleDdt = ddts.reduce((s, d) => s + (d.importo || 0), 0)
+
+  // ── DATI CONTABILITÀ ──
+  const datiContabilita = useMemo(() => {
+    const costiPerReport = meseContabilita
+      ? costi.filter(c => c.data?.startsWith(meseContabilita))
+      : costi
+
+    // Giorni distinti ordinati
+    const giorniSet = new Set(costiPerReport.map(c => c.data).filter(Boolean))
+    const giorni = Array.from(giorniSet).sort()
+
+    // Categorie presenti
+    const catPresenti = CATEGORIE.filter(cat => costiPerReport.some(c => c.categoria === cat))
+
+    // Matrice: cat → giorno → importo
+    const matrice: Record<string, Record<string, number>> = {}
+    catPresenti.forEach(cat => { matrice[cat] = {} })
+    costiPerReport.forEach(c => {
+      if (!matrice[c.categoria]) matrice[c.categoria] = {}
+      matrice[c.categoria][c.data] = (matrice[c.categoria][c.data] || 0) + (c.importo || 0)
+    })
+
+    // Totali per colonna (giorno)
+    const totaliGiorno: Record<string, number> = {}
+    giorni.forEach(g => {
+      totaliGiorno[g] = catPresenti.reduce((s, cat) => s + (matrice[cat][g] || 0), 0)
+    })
+
+    // Totali per riga (categoria)
+    const totaliCategoria: Record<string, number> = {}
+    catPresenti.forEach(cat => {
+      totaliCategoria[cat] = giorni.reduce((s, g) => s + (matrice[cat][g] || 0), 0)
+    })
+
+    const totaleGenerale = catPresenti.reduce((s, cat) => s + totaliCategoria[cat], 0)
+
+    return { giorni, catPresenti, matrice, totaliGiorno, totaliCategoria, totaleGenerale, costiPerReport }
+  }, [costi, meseContabilita])
+
+  function apriContabilita() {
+    setMeseContabilita(filtroMese || mesiDisponibili[0] || '')
+    setModalContabilita(true)
+  }
+
+  function stampaContabilita() {
+    window.print()
+  }
 
   return (
     <div className="flex min-h-screen">
@@ -187,6 +201,9 @@ export default function CostiCantiere() {
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold">Costi cantiere giornalieri</h1>
           <div className="flex gap-2">
+            {tab === 'costi' && costi.length > 0 && (
+              <button className="btn" onClick={apriContabilita}>📊 Crea Contabilità</button>
+            )}
             {tab === 'costi'
               ? <button className="btn btn-primary" onClick={() => setModalCosto(true)}>+ Inserisci costo</button>
               : <button className="btn btn-primary" onClick={() => setModalDdt(true)}>+ Inserisci DDT</button>
@@ -249,19 +266,17 @@ export default function CostiCantiere() {
 
             {/* Tab switch */}
             <div className="flex gap-1 mb-4 border-b border-gray-200">
-              <button
-                onClick={() => setTab('costi')}
+              <button onClick={() => setTab('costi')}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'costi' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                 💰 Costi giornalieri ({costi.length})
               </button>
-              <button
-                onClick={() => setTab('ddt')}
+              <button onClick={() => setTab('ddt')}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'ddt' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                 📋 DDT / Bolle ({ddts.length})
               </button>
             </div>
 
-            {/* ── TAB COSTI ── */}
+            {/* TAB COSTI */}
             {tab === 'costi' && (
               <>
                 {Object.keys(totalePerCategoria).length > 0 && (
@@ -290,11 +305,8 @@ export default function CostiCantiere() {
                     </div>
                   </div>
                 )}
-
                 <div className="card overflow-x-auto">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-medium text-gray-600">Registro costi ({costiFiltrati.length})</h3>
-                  </div>
+                  <h3 className="text-sm font-medium text-gray-600 mb-3">Registro costi ({costiFiltrati.length})</h3>
                   <table className="table-base">
                     <thead>
                       <tr><th>Data</th><th>Categoria</th><th>Descrizione</th><th>Importo</th><th>Inserito da</th><th>Note</th><th></th></tr>
@@ -305,20 +317,12 @@ export default function CostiCantiere() {
                       ) : costiFiltrati.map(c => (
                         <tr key={c.id}>
                           <td className="text-xs">{new Date(c.data).toLocaleDateString('it-IT')}</td>
-                          <td>
-                            <span className="text-xs font-medium px-2 py-0.5 rounded-full text-white"
-                              style={{ background: CAT_COLORS[c.categoria] || '#6b7280' }}>
-                              {c.categoria}
-                            </span>
-                          </td>
+                          <td><span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ background: CAT_COLORS[c.categoria] || '#6b7280' }}>{c.categoria}</span></td>
                           <td className="text-sm">{c.descrizione || '—'}</td>
                           <td className="font-semibold text-sm text-blue-800">{euro(c.importo)}</td>
                           <td className="text-xs text-gray-500">{c.inserito_da_nome || '—'}</td>
                           <td className="text-xs text-gray-400">{c.note || '—'}</td>
-                          <td>
-                            <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
-                              onClick={() => eliminaCosto(c.id)}>✕</button>
-                          </td>
+                          <td><button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaCosto(c.id)}>✕</button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -327,12 +331,10 @@ export default function CostiCantiere() {
               </>
             )}
 
-            {/* ── TAB DDT ── */}
+            {/* TAB DDT */}
             {tab === 'ddt' && (
               <div className="card overflow-x-auto">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-medium text-gray-600">DDT inseriti per questo cantiere ({ddts.length})</h3>
-                </div>
+                <h3 className="text-sm font-medium text-gray-600 mb-3">DDT inseriti per questo cantiere ({ddts.length})</h3>
                 <table className="table-base">
                   <thead>
                     <tr><th>Data</th><th>N° DDT</th><th>Fornitore</th><th>Descrizione</th><th>Importo</th><th>Stato</th><th>Mese prev.</th><th></th></tr>
@@ -349,12 +351,7 @@ export default function CostiCantiere() {
                         <td className="font-semibold text-sm text-purple-800">{euro(d.importo)}</td>
                         <td>{statoBadge(d.stato)}</td>
                         <td className="text-xs text-gray-500">{d.mese_fattura_previsto || '—'}</td>
-                        <td>
-                          {d.stato === 'Da Fatturare' && (
-                            <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
-                              onClick={() => eliminaDdt(d.id)}>✕</button>
-                          )}
-                        </td>
+                        <td>{d.stato === 'Da Fatturare' && <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaDdt(d.id)}>✕</button>}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -378,23 +375,14 @@ export default function CostiCantiere() {
             </div>
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="label">Data *</label>
-                  <input className="input" type="date" value={formCosto.data}
-                    onChange={e => setFormCosto({...formCosto, data: e.target.value})} />
-                </div>
-                <div>
-                  <label className="label">Importo (€) *</label>
-                  <input className="input" type="number" step="0.01" placeholder="0.00"
-                    value={formCosto.importo} onChange={e => setFormCosto({...formCosto, importo: e.target.value})} />
-                </div>
+                <div><label className="label">Data *</label><input className="input" type="date" value={formCosto.data} onChange={e => setFormCosto({...formCosto, data: e.target.value})} /></div>
+                <div><label className="label">Importo (€) *</label><input className="input" type="number" step="0.01" placeholder="0.00" value={formCosto.importo} onChange={e => setFormCosto({...formCosto, importo: e.target.value})} /></div>
               </div>
               <div>
                 <label className="label">Categoria *</label>
                 <div className="grid grid-cols-2 gap-2">
                   {CATEGORIE.map(cat => (
-                    <button key={cat} type="button"
-                      onClick={() => setFormCosto({...formCosto, categoria: cat})}
+                    <button key={cat} type="button" onClick={() => setFormCosto({...formCosto, categoria: cat})}
                       className={`text-xs px-3 py-2 rounded-lg border text-left transition-all ${formCosto.categoria === cat ? 'text-white border-transparent' : 'border-gray-200 text-gray-600 hover:border-blue-300'}`}
                       style={formCosto.categoria === cat ? { background: CAT_COLORS[cat] } : {}}>
                       {cat}
@@ -402,22 +390,12 @@ export default function CostiCantiere() {
                   ))}
                 </div>
               </div>
-              <div>
-                <label className="label">Descrizione</label>
-                <input className="input" placeholder="es. Calcestruzzo C25/30 - 30mc"
-                  value={formCosto.descrizione} onChange={e => setFormCosto({...formCosto, descrizione: e.target.value})} />
-              </div>
-              <div>
-                <label className="label">Note aggiuntive</label>
-                <input className="input" placeholder="es. Fornitore, bolla n°..."
-                  value={formCosto.note} onChange={e => setFormCosto({...formCosto, note: e.target.value})} />
-              </div>
+              <div><label className="label">Descrizione</label><input className="input" placeholder="es. Calcestruzzo C25/30 - 30mc" value={formCosto.descrizione} onChange={e => setFormCosto({...formCosto, descrizione: e.target.value})} /></div>
+              <div><label className="label">Note aggiuntive</label><input className="input" placeholder="es. Fornitore, bolla n°..." value={formCosto.note} onChange={e => setFormCosto({...formCosto, note: e.target.value})} /></div>
             </div>
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalCosto(false)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salvaCosto} disabled={loadingCosto}>
-                {loadingCosto ? 'Salvataggio...' : 'Salva costo'}
-              </button>
+              <button className="btn btn-primary" onClick={salvaCosto} disabled={loadingCosto}>{loadingCosto ? 'Salvataggio...' : 'Salva costo'}</button>
             </div>
           </div>
         </div>
@@ -435,58 +413,220 @@ export default function CostiCantiere() {
               <button onClick={() => setModalDdt(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label">Data</label>
-                <input className="input" type="date" value={formDdt.data}
-                  onChange={e => setFormDdt({...formDdt, data: e.target.value})} />
-              </div>
-              <div>
-                <label className="label">N° DDT *</label>
-                <input className="input" placeholder="es. DDT/2026/001" value={formDdt.numero}
-                  onChange={e => setFormDdt({...formDdt, numero: e.target.value})} />
-              </div>
-              <div className="col-span-2">
-                <label className="label">Fornitore *</label>
-                <select className="input" value={formDdt.fornitore_id}
-                  onChange={e => setFormDdt({...formDdt, fornitore_id: e.target.value})}>
+              <div><label className="label">Data</label><input className="input" type="date" value={formDdt.data} onChange={e => setFormDdt({...formDdt, data: e.target.value})} /></div>
+              <div><label className="label">N° DDT *</label><input className="input" placeholder="es. DDT/2026/001" value={formDdt.numero} onChange={e => setFormDdt({...formDdt, numero: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Fornitore *</label>
+                <select className="input" value={formDdt.fornitore_id} onChange={e => setFormDdt({...formDdt, fornitore_id: e.target.value})}>
                   <option value="">-- seleziona --</option>
                   {fornitori.map(f => <option key={f.id} value={f.id}>{f.ragione_sociale}</option>)}
                 </select>
               </div>
-              <div className="col-span-2">
-                <label className="label">Descrizione materiale/servizio</label>
-                <input className="input" placeholder="es. Calcestruzzo C25/30 - 50mc" value={formDdt.descrizione}
-                  onChange={e => setFormDdt({...formDdt, descrizione: e.target.value})} />
-              </div>
-              <div>
-                <label className="label">Importo (€) *</label>
-                <input className="input" type="number" step="0.01" placeholder="0.00" value={formDdt.importo}
-                  onChange={e => setFormDdt({...formDdt, importo: e.target.value})} />
-              </div>
-              <div>
-                <label className="label">Mese fattura previsto</label>
-                <input className="input" type="month" value={formDdt.mese_fattura_previsto}
-                  onChange={e => setFormDdt({...formDdt, mese_fattura_previsto: e.target.value})} />
-              </div>
-              <div className="col-span-2">
-                <label className="label">Note</label>
-                <input className="input" value={formDdt.note}
-                  onChange={e => setFormDdt({...formDdt, note: e.target.value})} />
-              </div>
+              <div className="col-span-2"><label className="label">Descrizione materiale/servizio</label><input className="input" placeholder="es. Calcestruzzo C25/30 - 50mc" value={formDdt.descrizione} onChange={e => setFormDdt({...formDdt, descrizione: e.target.value})} /></div>
+              <div><label className="label">Importo (€) *</label><input className="input" type="number" step="0.01" placeholder="0.00" value={formDdt.importo} onChange={e => setFormDdt({...formDdt, importo: e.target.value})} /></div>
+              <div><label className="label">Mese fattura previsto</label><input className="input" type="month" value={formDdt.mese_fattura_previsto} onChange={e => setFormDdt({...formDdt, mese_fattura_previsto: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Note</label><input className="input" value={formDdt.note} onChange={e => setFormDdt({...formDdt, note: e.target.value})} /></div>
             </div>
-            {/* Cantiere bloccato — già preselezionato */}
             <div className="mt-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
               📌 Cantiere preselezionato: <strong>{progetto?.codice} — {progetto?.nome}</strong>
             </div>
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalDdt(false)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salvaDdt} disabled={loadingDdt}>
-                {loadingDdt ? 'Salvataggio...' : 'Salva DDT'}
-              </button>
+              <button className="btn btn-primary" onClick={salvaDdt} disabled={loadingDdt}>{loadingDdt ? 'Salvataggio...' : 'Salva DDT'}</button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ── MODAL CONTABILITÀ ── */}
+      {modalContabilita && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2">
+          <div className="bg-white rounded-xl w-full max-w-7xl max-h-[95vh] flex flex-col">
+
+            {/* Header modal */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 print:hidden">
+              <div>
+                <h2 className="text-base font-semibold">📊 Contabilità cantiere</h2>
+                <p className="text-xs text-gray-500 mt-0.5">{progetto?.codice} — {progetto?.nome}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div>
+                  <label className="label">Periodo</label>
+                  <select className="input w-auto text-sm" value={meseContabilita} onChange={e => setMeseContabilita(e.target.value)}>
+                    <option value="">Tutti i mesi</option>
+                    {mesiDisponibili.map(m => (
+                      <option key={m} value={m}>
+                        {new Date(m + '-01').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button className="btn btn-primary" onClick={stampaContabilita}>🖨️ Stampa / PDF</button>
+                <button onClick={() => setModalContabilita(false)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+              </div>
+            </div>
+
+            {/* Contenuto stampabile */}
+            <div className="flex-1 overflow-auto p-6" id="report-contabilita">
+
+              {/* Intestazione stampa */}
+              <div className="mb-6">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h1 className="text-xl font-bold text-gray-900">BC General Service</h1>
+                    <h2 className="text-lg font-semibold text-gray-700 mt-1">Contabilità cantiere</h2>
+                    <p className="text-sm text-gray-600 mt-1">{progetto?.codice} — {progetto?.nome}</p>
+                    {progetto?.localita && <p className="text-sm text-gray-500">📍 {progetto.localita}</p>}
+                  </div>
+                  <div className="text-right text-sm text-gray-500">
+                    <p>Geometra: <strong>{progetto?.geometra_nome || '—'}</strong></p>
+                    <p>Periodo: <strong>
+                      {meseContabilita
+                        ? new Date(meseContabilita + '-01').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })
+                        : 'Tutti i mesi'}
+                    </strong></p>
+                    <p>Stampato il: <strong>{new Date().toLocaleDateString('it-IT')}</strong></p>
+                  </div>
+                </div>
+              </div>
+
+              {datiContabilita.giorni.length === 0 ? (
+                <p className="text-gray-400 text-center py-12">Nessun costo nel periodo selezionato.</p>
+              ) : (
+                <>
+                  {/* Tabella principale categorie × giorni */}
+                  <div className="overflow-x-auto mb-6">
+                    <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ background: '#1e3a8a', color: 'white', padding: '8px 12px', textAlign: 'left', minWidth: 140, position: 'sticky', left: 0, zIndex: 2, fontWeight: 600 }}>
+                            Categoria
+                          </th>
+                          {datiContabilita.giorni.map(g => (
+                            <th key={g} style={{ background: '#1e40af', color: 'white', padding: '6px 8px', textAlign: 'center', minWidth: 80, fontWeight: 500 }}>
+                              {new Date(g).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' })}
+                            </th>
+                          ))}
+                          <th style={{ background: '#1e3a8a', color: 'white', padding: '8px 12px', textAlign: 'right', minWidth: 100, fontWeight: 700 }}>
+                            TOTALE
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {datiContabilita.catPresenti.map((cat, idx) => (
+                          <tr key={cat} style={{ background: idx % 2 === 0 ? '#f8faff' : '#ffffff' }}>
+                            <td style={{ padding: '8px 12px', fontWeight: 600, borderBottom: '1px solid #e2e8f0', position: 'sticky', left: 0, background: 'inherit', color: CAT_COLORS[cat] || '#374151' }}>
+                              {cat}
+                            </td>
+                            {datiContabilita.giorni.map(g => (
+                              <td key={g} style={{ padding: '6px 8px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', borderLeft: '1px solid #f1f5f9' }}>
+                                {datiContabilita.matrice[cat][g]
+                                  ? <span style={{ fontWeight: 500, color: '#1e40af' }}>{euroShort(datiContabilita.matrice[cat][g])}</span>
+                                  : <span style={{ color: '#cbd5e1' }}>—</span>
+                                }
+                              </td>
+                            ))}
+                            <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, borderBottom: '1px solid #e2e8f0', background: '#eff6ff', color: '#1e3a8a' }}>
+                              {euroShort(datiContabilita.totaliCategoria[cat])}
+                            </td>
+                          </tr>
+                        ))}
+                        {/* Riga totali giornalieri */}
+                        <tr style={{ background: '#1e3a8a' }}>
+                          <td style={{ padding: '10px 12px', fontWeight: 700, color: 'white', position: 'sticky', left: 0, background: '#1e3a8a' }}>
+                            TOTALE GIORNALIERO
+                          </td>
+                          {datiContabilita.giorni.map(g => (
+                            <td key={g} style={{ padding: '8px 8px', textAlign: 'right', fontWeight: 700, color: 'white', borderLeft: '1px solid #2d4fa0' }}>
+                              {datiContabilita.totaliGiorno[g] > 0 ? euroShort(datiContabilita.totaliGiorno[g]) : '—'}
+                            </td>
+                          ))}
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 800, color: '#fbbf24', fontSize: 13 }}>
+                            {euroShort(datiContabilita.totaleGenerale)}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Riepilogo finale */}
+                  <div className="grid grid-cols-3 gap-4 mb-6">
+                    <div style={{ border: '2px solid #1e40af', borderRadius: 8, padding: 16 }}>
+                      <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Totale costi periodo</p>
+                      <p style={{ fontSize: 20, fontWeight: 800, color: '#1e3a8a' }}>€ {euroShort(datiContabilita.totaleGenerale)}</p>
+                    </div>
+                    <div style={{ border: '2px solid #059669', borderRadius: 8, padding: 16 }}>
+                      <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Giorni lavorati</p>
+                      <p style={{ fontSize: 20, fontWeight: 800, color: '#065f46' }}>{datiContabilita.giorni.length}</p>
+                    </div>
+                    <div style={{ border: '2px solid #7c3aed', borderRadius: 8, padding: 16 }}>
+                      <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>Costo medio giornaliero</p>
+                      <p style={{ fontSize: 20, fontWeight: 800, color: '#5b21b6' }}>
+                        € {euroShort(datiContabilita.giorni.length > 0 ? datiContabilita.totaleGenerale / datiContabilita.giorni.length : 0)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Tabella riepilogo per categoria */}
+                  <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
+                    <div style={{ background: '#1e3a8a', color: 'white', padding: '8px 16px', fontWeight: 600, fontSize: 12 }}>
+                      Riepilogo per categoria — Costo di vendita
+                    </div>
+                    <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ background: '#f8faff' }}>
+                          <th style={{ padding: '8px 16px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#374151' }}>Categoria</th>
+                          <th style={{ padding: '8px 16px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', color: '#374151' }}>Importo (€)</th>
+                          <th style={{ padding: '8px 16px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', color: '#374151' }}>% sul totale</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {datiContabilita.catPresenti.map((cat, idx) => (
+                          <tr key={cat} style={{ background: idx % 2 === 0 ? 'white' : '#f8faff' }}>
+                            <td style={{ padding: '8px 16px', fontWeight: 500, borderBottom: '1px solid #f1f5f9', color: CAT_COLORS[cat] || '#374151' }}>{cat}</td>
+                            <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9' }}>{euroShort(datiContabilita.totaliCategoria[cat])}</td>
+                            <td style={{ padding: '8px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: '#6b7280' }}>
+                              {datiContabilita.totaleGenerale > 0 ? Math.round(datiContabilita.totaliCategoria[cat] / datiContabilita.totaleGenerale * 100) : 0}%
+                            </td>
+                          </tr>
+                        ))}
+                        <tr style={{ background: '#1e3a8a' }}>
+                          <td style={{ padding: '10px 16px', fontWeight: 700, color: 'white' }}>TOTALE</td>
+                          <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 800, color: '#fbbf24', fontSize: 14 }}>{euroShort(datiContabilita.totaleGenerale)}</td>
+                          <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, color: 'white' }}>100%</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Firma */}
+                  <div className="grid grid-cols-2 gap-8 mt-8 pt-4 border-t border-gray-200">
+                    <div>
+                      <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 32 }}>Firma geometra</p>
+                      <div style={{ borderBottom: '1px solid #374151', width: 200 }}></div>
+                      <p style={{ fontSize: 11, color: '#374151', marginTop: 4 }}>{progetto?.geometra_nome || '_______________'}</p>
+                    </div>
+                    <div>
+                      <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 32 }}>Firma responsabile</p>
+                      <div style={{ borderBottom: '1px solid #374151', width: 200 }}></div>
+                      <p style={{ fontSize: 11, color: '#374151', marginTop: 4 }}>BC General Service</p>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stili stampa */}
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #report-contabilita, #report-contabilita * { visibility: visible; }
+          #report-contabilita { position: fixed; top: 0; left: 0; width: 100%; padding: 20px; }
+          .print\\:hidden { display: none !important; }
+        }
+      `}</style>
     </div>
   )
 }
