@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import { logActivity } from '@/lib/logActivity'
@@ -21,6 +21,15 @@ export default function DaRiceverePage() {
   const [selezionati, setSelezionati] = useState<Set<string>>(new Set())
   const [filtroCantiere, setFiltroCantiere] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // Filtri tab aperte
+  const [cercaFornitoreAperte, setCercaFornitoreAperte] = useState('')
+
+  // Filtri tab storico
+  const [cercaFornitoreStorico, setCercaFornitoreStorico] = useState('')
+  const [filtroStatoStorico, setFiltroStatoStorico] = useState('tutti')
+  const [dataDAStorico, setDataDAStorico] = useState('')
+  const [dataAStorico, setDataAStorico] = useState('')
 
   useEffect(() => { load() }, [])
 
@@ -67,15 +76,8 @@ export default function DaRiceverePage() {
     })
   }
 
-  // Cantieri distinti per questo fornitore
   const cantieriFornitore = [...new Set(ddtFornitore.map(d => d.progetto_nome || '—'))].sort()
-
-  // DDT filtrati per cantiere
-  const ddtFiltrati = filtroCantiere
-    ? ddtFornitore.filter(d => (d.progetto_nome || '—') === filtroCantiere)
-    : ddtFornitore
-
-  // Raggruppa DDT filtrati per cantiere
+  const ddtFiltrati = filtroCantiere ? ddtFornitore.filter(d => (d.progetto_nome || '—') === filtroCantiere) : ddtFornitore
   const ddtPerCantiere: Record<string, any[]> = {}
   ddtFiltrati.forEach(d => {
     const key = d.progetto_nome || '— Senza cantiere'
@@ -86,6 +88,32 @@ export default function DaRiceverePage() {
   const totSel = ddtFornitore.filter(d => selezionati.has(d.id)).reduce((s, d) => s + d.importo, 0)
   const scostamento = parseFloat(impFattura || '0') - totSel
   const scostOk = Math.abs(scostamento) < 0.02 && selezionati.size > 0
+
+  // Gruppi filtrati (tab aperte)
+  const gruppiFiltrati = useMemo(() => {
+    if (!cercaFornitoreAperte) return gruppi
+    return gruppi.filter(g => g.fornitore.toLowerCase().includes(cercaFornitoreAperte.toLowerCase()))
+  }, [gruppi, cercaFornitoreAperte])
+
+  const totaleAperte = gruppiFiltrati.reduce((s, g) => s + g.totale, 0)
+
+  // Fatture storico filtrate
+  const fattureStoricFiltrate = useMemo(() => {
+    return fattureChiuse.filter(f => {
+      if (cercaFornitoreStorico && !f.fornitore_nome?.toLowerCase().includes(cercaFornitoreStorico.toLowerCase())) return false
+      if (dataDAStorico && f.data < dataDAStorico) return false
+      if (dataAStorico && f.data > dataAStorico) return false
+      if (filtroStatoStorico !== 'tutti') {
+        const r1 = f.rata1_stato; const r2 = f.rata2_stato; const r3 = f.rata3_stato
+        const pagata = r1 === 'Pagata' && (!r2 || r2 === 'Pagata') && (!r3 || r3 === 'Pagata')
+        if (filtroStatoStorico === 'pagata' && !pagata) return false
+        if (filtroStatoStorico === 'da_pagare' && pagata) return false
+      }
+      return true
+    })
+  }, [fattureChiuse, cercaFornitoreStorico, dataDAStorico, dataAStorico, filtroStatoStorico])
+
+  const haFiltriStorico = cercaFornitoreStorico || filtroStatoStorico !== 'tutti' || dataDAStorico || dataAStorico
 
   async function eseguiAbbinamento() {
     if (!nFattura || !impFattura) { alert('Inserisci N° fattura e importo'); return }
@@ -104,8 +132,7 @@ export default function DaRiceverePage() {
       rata1_stato: 'Da Pagare',
     }).select('id').single()
     await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `Abbinamento ${selezionati.size} DDT → Fattura ${nFattura} · ${fornSel} · € ${impFattura}`)
-    setModal(false)
-    load()
+    setModal(false); load()
     alert(`✅ ${selezionati.size} DDT abbinati a ${nFattura}.`)
     setLoading(false)
   }
@@ -125,9 +152,6 @@ export default function DaRiceverePage() {
       <main className="flex-1 p-6 overflow-auto">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-semibold">Fatture da ricevere</h1>
-          {tab === 'aperte' && (
-            <span className="text-xs text-gray-500">DDT aperti raggruppati per fornitore</span>
-          )}
         </div>
 
         <div className="flex gap-2 mb-4">
@@ -139,113 +163,173 @@ export default function DaRiceverePage() {
           </button>
         </div>
 
-        {/* TAB APERTE */}
+        {/* ── TAB APERTE ── */}
         {tab === 'aperte' && (
-          gruppi.length === 0 ? (
-            <div className="card text-center py-12 text-gray-400">Tutti i DDT sono stati fatturati.</div>
-          ) : (
-            <div className="space-y-2">
-              {gruppi.map(g => (
-                <div key={g.fornitore} className="card p-0 overflow-hidden">
-                  <div className="flex items-center gap-4 px-4 py-3 bg-gray-900 cursor-pointer"
-                    onClick={() => setEspanso(espanso === g.fornitore ? null : g.fornitore)}>
-                    <span className="text-white font-medium text-sm flex-1">{g.fornitore}</span>
-                    <span className="text-gray-300 text-xs">{g.n} DDT aperti</span>
-                    <span className="text-white font-semibold text-sm">{euro(g.totale)}</span>
-                    <span className="text-gray-400 text-xs">(+IVA: {euro(g.totale * 1.22)})</span>
-                    <button className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded-lg ml-2"
-                      onClick={e => { e.stopPropagation(); apriAbbinamento(g.fornitore) }}>
-                      Abbina fattura
-                    </button>
-                    <span className="text-gray-400 text-sm">{espanso === g.fornitore ? '▲' : '▼'}</span>
-                  </div>
-                  {espanso === g.fornitore && (
-                    <div className="border-t border-gray-100">
-                      <table className="table-base">
-                        <thead><tr><th>Data</th><th>N° DDT</th><th>Cantiere</th><th>Descrizione</th><th>Importo</th></tr></thead>
-                        <tbody>
-                          {g.ddt.map((d: any) => (
-                            <tr key={d.id}>
-                              <td className="text-xs">{new Date(d.data).toLocaleDateString('it-IT')}</td>
-                              <td className="font-medium text-xs">{d.numero}</td>
-                              <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
-                              <td className="text-xs text-gray-500">{d.descrizione || '—'}</td>
-                              <td className="font-medium text-sm">{euro(d.importo)}</td>
-                            </tr>
-                          ))}
-                          <tr className="bg-gray-50">
-                            <td colSpan={4} className="text-xs font-medium text-right text-gray-600">Totale</td>
-                            <td className="font-bold text-sm">{euro(g.totale)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+          <>
+            {/* Filtro fornitore */}
+            <div className="card mb-4">
+              <div className="flex gap-3 items-end">
+                <div className="flex-1">
+                  <label className="label">🔍 Cerca fornitore</label>
+                  <input className="input" placeholder="Nome fornitore..." value={cercaFornitoreAperte}
+                    onChange={e => setCercaFornitoreAperte(e.target.value)} />
                 </div>
-              ))}
+                {cercaFornitoreAperte && (
+                  <button className="btn btn-sm" onClick={() => setCercaFornitoreAperte('')}>× Reset</button>
+                )}
+              </div>
+              {cercaFornitoreAperte && (
+                <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+                  <span className="text-xs text-gray-500">{gruppiFiltrati.length} fornitori — Totale DDT aperti: <strong>{euro(totaleAperte)}</strong></span>
+                </div>
+              )}
             </div>
-          )
+
+            {gruppiFiltrati.length === 0 ? (
+              <div className="card text-center py-12 text-gray-400">
+                {cercaFornitoreAperte ? 'Nessun fornitore trovato.' : 'Tutti i DDT sono stati fatturati.'}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {gruppiFiltrati.map(g => (
+                  <div key={g.fornitore} className="card p-0 overflow-hidden">
+                    <div className="flex items-center gap-4 px-4 py-3 bg-gray-900 cursor-pointer"
+                      onClick={() => setEspanso(espanso === g.fornitore ? null : g.fornitore)}>
+                      <span className="text-white font-medium text-sm flex-1">{g.fornitore}</span>
+                      <span className="text-gray-300 text-xs">{g.n} DDT aperti</span>
+                      <span className="text-white font-semibold text-sm">{euro(g.totale)}</span>
+                      <span className="text-gray-400 text-xs">(+IVA: {euro(g.totale * 1.22)})</span>
+                      <button className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-3 py-1.5 rounded-lg ml-2"
+                        onClick={e => { e.stopPropagation(); apriAbbinamento(g.fornitore) }}>
+                        Abbina fattura
+                      </button>
+                      <span className="text-gray-400 text-sm">{espanso === g.fornitore ? '▲' : '▼'}</span>
+                    </div>
+                    {espanso === g.fornitore && (
+                      <div className="border-t border-gray-100">
+                        <table className="table-base">
+                          <thead><tr><th>Data</th><th>N° DDT</th><th>Cantiere</th><th>Descrizione</th><th>Importo</th></tr></thead>
+                          <tbody>
+                            {g.ddt.map((d: any) => (
+                              <tr key={d.id}>
+                                <td className="text-xs">{new Date(d.data).toLocaleDateString('it-IT')}</td>
+                                <td className="font-medium text-xs">{d.numero}</td>
+                                <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
+                                <td className="text-xs text-gray-500">{d.descrizione || '—'}</td>
+                                <td className="font-medium text-sm">{euro(d.importo)}</td>
+                              </tr>
+                            ))}
+                            <tr className="bg-gray-50">
+                              <td colSpan={4} className="text-xs font-medium text-right text-gray-600">Totale</td>
+                              <td className="font-bold text-sm">{euro(g.totale)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
 
-        {/* TAB STORICO */}
+        {/* ── TAB STORICO ── */}
         {tab === 'fatturate' && (
-          fattureChiuse.length === 0 ? (
-            <div className="card text-center py-12 text-gray-400">Nessuna fattura ancora registrata.</div>
-          ) : (
-            <div className="space-y-2">
-              {fattureChiuse.map(f => (
-                <div key={f.id} className="card p-0 overflow-hidden">
-                  <div className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-gray-50"
-                    onClick={() => setEspansoFatt(espansoFatt === f.id ? null : f.id)}>
-                    <div className="flex-1">
-                      <span className="font-medium text-sm">{f.fornitore_nome}</span>
-                      <span className="text-gray-400 text-xs ml-2">{f.numero}</span>
-                    </div>
-                    <span className="text-xs text-gray-500">{f.data ? new Date(f.data).toLocaleDateString('it-IT') : '—'}</span>
-                    <span className="font-semibold text-sm">{euro(f.imponibile)}</span>
-                    <span className="text-xs text-gray-400">(+IVA: {euro(f.totale)})</span>
-                    {statoRataBadge(f)}
-                    <span className="text-gray-400 text-sm ml-2">{espansoFatt === f.id ? '▲' : '▼'}</span>
-                  </div>
-                  {espansoFatt === f.id && (
-                    <div className="border-t border-gray-100 bg-blue-50">
-                      <div className="px-4 py-2 text-xs font-medium text-blue-700">
-                        DDT abbinati ({f.ddt_abbinati.length})
-                      </div>
-                      <table className="table-base">
-                        <thead><tr><th>Data</th><th>N° DDT</th><th>Cantiere</th><th>Descrizione</th><th>Importo</th></tr></thead>
-                        <tbody>
-                          {f.ddt_abbinati.map((d: any) => (
-                            <tr key={d.id}>
-                              <td className="text-xs">{new Date(d.data).toLocaleDateString('it-IT')}</td>
-                              <td className="font-medium text-xs">{d.numero}</td>
-                              <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
-                              <td className="text-xs text-gray-500">{d.descrizione || '—'}</td>
-                              <td className="font-medium text-sm">{euro(d.importo)}</td>
-                            </tr>
-                          ))}
-                          <tr className="bg-blue-100">
-                            <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Totale DDT</td>
-                            <td className="font-bold text-sm text-blue-700">{euro(f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0))}</td>
-                          </tr>
-                          <tr className="bg-blue-100">
-                            <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Imponibile fattura</td>
-                            <td className="font-bold text-sm text-blue-700">{euro(f.imponibile)}</td>
-                          </tr>
-                          <tr className={Math.abs(f.imponibile - f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0)) < 0.02 ? 'bg-green-50' : 'bg-red-50'}>
-                            <td colSpan={4} className="text-xs font-medium text-right">Scostamento</td>
-                            <td className={`font-bold text-sm ${Math.abs(f.imponibile - f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0)) < 0.02 ? 'text-green-700' : 'text-red-700'}`}>
-                              {euro(f.imponibile - f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0))}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+          <>
+            {/* Filtri storico */}
+            <div className="card mb-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+                <div className="md:col-span-2">
+                  <label className="label">🔍 Cerca fornitore</label>
+                  <input className="input" placeholder="Nome fornitore..." value={cercaFornitoreStorico}
+                    onChange={e => setCercaFornitoreStorico(e.target.value)} />
                 </div>
-              ))}
+                <div>
+                  <label className="label">Stato pagamento</label>
+                  <select className="input" value={filtroStatoStorico} onChange={e => setFiltroStatoStorico(e.target.value)}>
+                    <option value="tutti">Tutti</option>
+                    <option value="da_pagare">Da pagare</option>
+                    <option value="pagata">Pagate</option>
+                  </select>
+                </div>
+                <div></div>
+                <div>
+                  <label className="label">Data dal</label>
+                  <input className="input" type="date" value={dataDAStorico} onChange={e => setDataDAStorico(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Data al</label>
+                  <input className="input" type="date" value={dataAStorico} onChange={e => setDataAStorico(e.target.value)} />
+                </div>
+              </div>
+              {haFiltriStorico && (
+                <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+                  <span className="text-xs text-gray-500">{fattureStoricFiltrate.length} fatture su {fattureChiuse.length}</span>
+                  <button onClick={() => { setCercaFornitoreStorico(''); setFiltroStatoStorico('tutti'); setDataDAStorico(''); setDataAStorico('') }}
+                    className="text-xs text-blue-600 hover:underline">× Azzera filtri</button>
+                </div>
+              )}
             </div>
-          )
+
+            {fattureStoricFiltrate.length === 0 ? (
+              <div className="card text-center py-12 text-gray-400">
+                {haFiltriStorico ? 'Nessuna fattura con questi filtri.' : 'Nessuna fattura ancora registrata.'}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {fattureStoricFiltrate.map(f => (
+                  <div key={f.id} className="card p-0 overflow-hidden">
+                    <div className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-gray-50"
+                      onClick={() => setEspansoFatt(espansoFatt === f.id ? null : f.id)}>
+                      <div className="flex-1">
+                        <span className="font-medium text-sm">{f.fornitore_nome}</span>
+                        <span className="text-gray-400 text-xs ml-2">{f.numero}</span>
+                      </div>
+                      <span className="text-xs text-gray-500">{f.data ? new Date(f.data).toLocaleDateString('it-IT') : '—'}</span>
+                      <span className="font-semibold text-sm">{euro(f.imponibile)}</span>
+                      <span className="text-xs text-gray-400">(+IVA: {euro(f.totale)})</span>
+                      {statoRataBadge(f)}
+                      <span className="text-gray-400 text-sm ml-2">{espansoFatt === f.id ? '▲' : '▼'}</span>
+                    </div>
+                    {espansoFatt === f.id && (
+                      <div className="border-t border-gray-100 bg-blue-50">
+                        <div className="px-4 py-2 text-xs font-medium text-blue-700">DDT abbinati ({f.ddt_abbinati.length})</div>
+                        <table className="table-base">
+                          <thead><tr><th>Data</th><th>N° DDT</th><th>Cantiere</th><th>Descrizione</th><th>Importo</th></tr></thead>
+                          <tbody>
+                            {f.ddt_abbinati.map((d: any) => (
+                              <tr key={d.id}>
+                                <td className="text-xs">{new Date(d.data).toLocaleDateString('it-IT')}</td>
+                                <td className="font-medium text-xs">{d.numero}</td>
+                                <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
+                                <td className="text-xs text-gray-500">{d.descrizione || '—'}</td>
+                                <td className="font-medium text-sm">{euro(d.importo)}</td>
+                              </tr>
+                            ))}
+                            <tr className="bg-blue-100">
+                              <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Totale DDT</td>
+                              <td className="font-bold text-sm text-blue-700">{euro(f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0))}</td>
+                            </tr>
+                            <tr className="bg-blue-100">
+                              <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Imponibile fattura</td>
+                              <td className="font-bold text-sm text-blue-700">{euro(f.imponibile)}</td>
+                            </tr>
+                            <tr className={Math.abs(f.imponibile - f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0)) < 0.02 ? 'bg-green-50' : 'bg-red-50'}>
+                              <td colSpan={4} className="text-xs font-medium text-right">Scostamento</td>
+                              <td className={`font-bold text-sm ${Math.abs(f.imponibile - f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0)) < 0.02 ? 'text-green-700' : 'text-red-700'}`}>
+                                {euro(f.imponibile - f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0))}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </main>
 
@@ -260,7 +344,6 @@ export default function DaRiceverePage() {
               </div>
               <button onClick={() => setModal(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
             </div>
-
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div><label className="label">N° Fattura ricevuta *</label>
                 <input className="input" placeholder="es. FF/2026/018" value={nFattura} onChange={e => setNFattura(e.target.value)} /></div>
@@ -280,8 +363,6 @@ export default function DaRiceverePage() {
                 </div>
               )}
             </div>
-
-            {/* DDT raggruppati per cantiere */}
             <div className="mb-4 space-y-3">
               <p className="text-xs font-medium text-gray-600">Spunta i DDT coperti da questa fattura:</p>
               {Object.entries(ddtPerCantiere).map(([cantiere, ddt]) => (
@@ -306,13 +387,10 @@ export default function DaRiceverePage() {
                     </div>
                   </div>
                   <table className="table-base">
-                    <thead>
-                      <tr><th style={{width:36}}></th><th>Data</th><th>N° DDT</th><th>Descrizione</th><th>Importo</th></tr>
-                    </thead>
+                    <thead><tr><th style={{width:36}}></th><th>Data</th><th>N° DDT</th><th>Descrizione</th><th>Importo</th></tr></thead>
                     <tbody>
                       {ddt.map((d: any) => (
-                        <tr key={d.id} className={`cursor-pointer ${selezionati.has(d.id) ? 'bg-green-50' : ''}`}
-                          onClick={() => toggleSel(d.id)}>
+                        <tr key={d.id} className={`cursor-pointer ${selezionati.has(d.id) ? 'bg-green-50' : ''}`} onClick={() => toggleSel(d.id)}>
                           <td><input type="checkbox" checked={selezionati.has(d.id)} onChange={() => toggleSel(d.id)} className="rounded" /></td>
                           <td className="text-xs">{new Date(d.data).toLocaleDateString('it-IT')}</td>
                           <td className="font-medium text-xs">{d.numero}</td>
@@ -325,8 +403,6 @@ export default function DaRiceverePage() {
                 </div>
               ))}
             </div>
-
-            {/* Riepilogo scostamento */}
             <div className={`rounded-lg p-3 mb-4 text-sm font-medium ${
               selezionati.size === 0 ? 'bg-gray-50 text-gray-500' :
               scostOk ? 'bg-green-50 text-green-800 border border-green-200' :
@@ -339,7 +415,6 @@ export default function DaRiceverePage() {
                scostamento > 0 ? `🔴 Fattura supera DDT di ${euro(scostamento)}` :
                `🟡 Fattura inferiore ai DDT di ${euro(Math.abs(scostamento))}`}
             </div>
-
             <div className="flex gap-2 justify-between items-center">
               <p className="text-xs text-gray-400">{selezionati.size} DDT selezionati · Totale: {euro(totSel)}</p>
               <div className="flex gap-2">
