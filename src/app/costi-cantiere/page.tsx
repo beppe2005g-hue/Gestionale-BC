@@ -48,13 +48,25 @@ export default function CostiCantiere() {
 
   async function loadAll() {
     const { data: { user } } = await supabase.auth.getUser()
+    let profilo: any = null
     if (user) {
-      const { data: profilo } = await supabase.from('utenti').select('*').eq('id', user.id).single()
-      setUtente({ ...user, profilo })
+      const { data: p } = await supabase.from('utenti').select('*').eq('id', user.id).single()
+      profilo = p
+      setUtente({ ...user, profilo: p })
     }
+
+    // Se geometra con solo cantieri assegnati → filtra per geometra_id
+    const soloAssegnati = profilo?.perm_solo_cantieri_assegnati === true
+    let queryProgetti = supabase.from('progetti')
+      .select('id,codice,nome,geometra_id,geometra_nome,budget_costi,valore_contratto')
+      .eq('stato', 'In Corso')
+      .order('codice')
+    if (soloAssegnati && user) {
+      queryProgetti = queryProgetti.eq('geometra_id', user.id)
+    }
+
     const [{ data: p }, { data: f }] = await Promise.all([
-      supabase.from('progetti').select('id,codice,nome,geometra_id,geometra_nome,budget_costi,valore_contratto')
-        .eq('stato', 'In Corso').order('codice'),
+      queryProgetti,
       supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale'),
     ])
     setProgetti(p || [])
