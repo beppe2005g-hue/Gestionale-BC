@@ -2,6 +2,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
+import { logActivity } from '@/lib/logActivity'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -24,7 +25,6 @@ export default function FattureFornitori() {
   const [modalModifica, setModalModifica] = useState<any>(null)
   const [loading, setLoading] = useState(false)
 
-  // Filtri
   const [ricerca, setRicerca] = useState('')
   const [filtroStato, setFiltroStato] = useState('tutti')
   const [ordinamento, setOrdinamento] = useState('data_desc')
@@ -71,14 +71,11 @@ export default function FattureFornitori() {
         f.progetto_nome?.toLowerCase().includes(q)
       )
     }
-    if (filtroStato !== 'tutti') {
-      result = result.filter(f => statoFattura(f) === filtroStato)
-    }
+    if (filtroStato !== 'tutti') result = result.filter(f => statoFattura(f) === filtroStato)
     if (dataDA) result = result.filter(f => f.data >= dataDA)
     if (dataA) result = result.filter(f => f.data <= dataA)
     if (importoDA) result = result.filter(f => (f.imponibile || 0) >= parseFloat(importoDA))
     if (importoA) result = result.filter(f => (f.imponibile || 0) <= parseFloat(importoA))
-
     result.sort((a, b) => {
       if (ordinamento === 'data_desc') return new Date(b.data).getTime() - new Date(a.data).getTime()
       if (ordinamento === 'data_asc') return new Date(a.data).getTime() - new Date(b.data).getTime()
@@ -109,22 +106,27 @@ export default function FattureFornitori() {
       progetto_id: (fatt as any).progetto_id || null,
       riferimento_fattura: fatt.numero
     })
+    await logActivity('modifica', 'fatture_fornitori', id, `Pagamento rata ${rata} — ${fatt.numero} · ${fatt.fornitore_nome} · € ${imp}`)
     load()
   }
 
   async function annullaRata(id: string, rata: number) {
     if (!confirm(`Annullare il pagamento della rata ${rata}?\nNota: il movimento in cash flow NON viene rimosso automaticamente.`)) return
+    const fatt = fatture.find(f => f.id === id)
     await supabase.from('fatture_fornitori').update({
       [`rata${rata}_stato`]: 'Da Pagare',
       [`rata${rata}_data_pagamento`]: null
     }).eq('id', id)
+    await logActivity('modifica', 'fatture_fornitori', id, `Annullato pagamento rata ${rata} — ${fatt?.numero} · ${fatt?.fornitore_nome}`)
     load()
   }
 
   async function elimina(id: string, numero: string) {
     if (!confirm(`Eliminare la fattura ${numero}?\nAttenzione: i DDT abbinati torneranno a "Da Fatturare".`)) return
+    const fatt = fatture.find(f => f.id === id)
     await supabase.from('ddt').update({ stato: 'Da Fatturare', fattura_abbinata: null }).eq('fattura_abbinata', numero)
     await supabase.from('fatture_fornitori').delete().eq('id', id)
+    await logActivity('eliminazione', 'fatture_fornitori', id, `Fattura ${numero} — ${fatt?.fornitore_nome} · € ${fatt?.imponibile}`)
     load()
   }
 
@@ -146,6 +148,7 @@ export default function FattureFornitori() {
       modalita_pagamento: modalModifica.modalita_pagamento,
       note: modalModifica.note
     }).eq('id', modalModifica.id)
+    await logActivity('modifica', 'fatture_fornitori', modalModifica.id, `Fattura ${modalModifica.numero} — ${modalModifica.fornitore_nome} · € ${modalModifica.imponibile}`)
     setModalModifica(null); setLoading(false); load()
   }
 
@@ -162,7 +165,7 @@ export default function FattureFornitori() {
     const for_ = fornitori.find(f => f.id === form.fornitore_id)
     const prj = progetti.find(p => p.id === form.progetto_id)
     const imp = parseFloat(form.imponibile) || 0
-    await supabase.from('fatture_fornitori').insert({
+    const { data: inserted } = await supabase.from('fatture_fornitori').insert({
       data: form.data || new Date().toISOString().split('T')[0],
       numero: form.numero,
       fornitore_id: form.fornitore_id,
@@ -179,7 +182,8 @@ export default function FattureFornitori() {
       rata3_importo: parseFloat(form.r3i) || 0,
       rata3_scadenza: form.r3s || null, rata3_stato: form.r3i ? 'Da Pagare' : null,
       modalita_pagamento: form.modalita_pagamento, note: form.note
-    })
+    }).select('id').single()
+    await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `Fattura ${form.numero} — ${for_?.ragione_sociale} · € ${imp}`)
     setModal(false); setLoading(false); load()
   }
 
@@ -188,11 +192,10 @@ export default function FattureFornitori() {
       <Sidebar />
       <main className="flex-1 p-6 overflow-auto">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-xl font-semibold">Fatture fornitori</h1>
+          <h1 className="text-xl font-semibold">Fatture ricevute</h1>
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuova fattura</button>
         </div>
 
-        {/* Filtri */}
         <div className="card mb-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
             <div className="md:col-span-2">
@@ -218,28 +221,14 @@ export default function FattureFornitori() {
                 <option value="importo">Importo ↓</option>
               </select>
             </div>
-            <div>
-              <label className="label">Data dal</label>
-              <input className="input" type="date" value={dataDA} onChange={e => setDataDA(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Data al</label>
-              <input className="input" type="date" value={dataA} onChange={e => setDataA(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Imponibile da (€)</label>
-              <input className="input" type="number" placeholder="0" value={importoDA} onChange={e => setImportoDA(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Imponibile a (€)</label>
-              <input className="input" type="number" placeholder="∞" value={importoA} onChange={e => setImportoA(e.target.value)} />
-            </div>
+            <div><label className="label">Data dal</label><input className="input" type="date" value={dataDA} onChange={e => setDataDA(e.target.value)} /></div>
+            <div><label className="label">Data al</label><input className="input" type="date" value={dataA} onChange={e => setDataA(e.target.value)} /></div>
+            <div><label className="label">Imponibile da (€)</label><input className="input" type="number" placeholder="0" value={importoDA} onChange={e => setImportoDA(e.target.value)} /></div>
+            <div><label className="label">Imponibile a (€)</label><input className="input" type="number" placeholder="∞" value={importoA} onChange={e => setImportoA(e.target.value)} /></div>
           </div>
           {haFiltri && (
             <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
-              <span className="text-xs text-gray-500">
-                {fattureFiltrate.length} fatture — Totale imponibile: <strong>{euro(totaleFiltratoImponibile)}</strong>
-              </span>
+              <span className="text-xs text-gray-500">{fattureFiltrate.length} fatture — Totale imponibile: <strong>{euro(totaleFiltratoImponibile)}</strong></span>
               <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">× Azzera filtri</button>
             </div>
           )}
@@ -291,10 +280,8 @@ export default function FattureFornitori() {
                     ))}
                     <td>
                       <div className="flex gap-1">
-                        <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50"
-                          onClick={() => setModalModifica({...f})}>✏️</button>
-                        <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
-                          onClick={() => elimina(f.id, f.numero)}>✕</button>
+                        <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => setModalModifica({...f})}>✏️</button>
+                        <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(f.id, f.numero)}>✕</button>
                       </div>
                     </td>
                   </tr>
@@ -305,7 +292,6 @@ export default function FattureFornitori() {
         </div>
       </main>
 
-      {/* Modal nuova fattura */}
       {modal && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -348,7 +334,6 @@ export default function FattureFornitori() {
         </div>
       )}
 
-      {/* Modal modifica */}
       {modalModifica && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
