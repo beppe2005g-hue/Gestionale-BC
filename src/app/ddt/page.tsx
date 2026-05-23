@@ -2,6 +2,7 @@
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
+import { logActivity } from '@/lib/logActivity'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -12,7 +13,6 @@ export default function DDTPage() {
   const [modal, setModal] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  // Filtri
   const [cercaNumero, setCercaNumero] = useState('')
   const [cercaFornitore, setCercaFornitore] = useState('')
   const [filtroStato, setFiltroStato] = useState('tutti')
@@ -45,7 +45,7 @@ export default function DDTPage() {
     setLoading(true)
     const for_ = fornitori.find(f => f.id === form.fornitore_id)
     const prj = progetti.find(p => p.id === form.progetto_id)
-    const { error } = await supabase.from('ddt').insert({
+    const { data: inserted, error } = await supabase.from('ddt').insert({
       data: form.data || new Date().toISOString().split('T')[0],
       numero: form.numero,
       fornitore_id: form.fornitore_id,
@@ -57,9 +57,10 @@ export default function DDTPage() {
       mese_fattura_previsto: form.mese_fattura_previsto,
       stato: 'Da Fatturare',
       note: form.note,
-    })
+    }).select('id').single()
     if (error) alert('Errore: ' + error.message)
     else {
+      await logActivity('inserimento', 'ddt', inserted?.id || '', `DDT ${form.numero} — ${for_?.ragione_sociale} · ${prj ? prj.codice + ' ' + prj.nome : 'nessun cantiere'} · € ${form.importo}`)
       setModal(false)
       setForm({ data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '', importo: '', mese_fattura_previsto: '', note: '' })
       load()
@@ -69,16 +70,15 @@ export default function DDTPage() {
 
   async function elimina(id: string) {
     if (!confirm('Eliminare questo DDT?')) return
+    const ddt = ddts.find(d => d.id === id)
     await supabase.from('ddt').delete().eq('id', id)
+    await logActivity('eliminazione', 'ddt', id, `DDT ${ddt?.numero} — ${ddt?.fornitore_nome} · ${ddt?.progetto_nome || 'nessun cantiere'} · € ${ddt?.importo}`)
     load()
   }
 
   function resetFiltri() {
-    setCercaNumero('')
-    setCercaFornitore('')
-    setFiltroStato('tutti')
-    setDataDA('')
-    setDataA('')
+    setCercaNumero(''); setCercaFornitore('')
+    setFiltroStato('tutti'); setDataDA(''); setDataA('')
   }
 
   const filtered = useMemo(() => {
@@ -93,7 +93,6 @@ export default function DDTPage() {
   }, [ddts, cercaNumero, cercaFornitore, filtroStato, dataDA, dataA])
 
   const hasFiltriAttivi = cercaNumero || cercaFornitore || filtroStato !== 'tutti' || dataDA || dataA
-
   const totaleFiltered = filtered.reduce((s, d) => s + (d.importo || 0), 0)
 
   const statoBadge = (s: string) => {
@@ -111,18 +110,15 @@ export default function DDTPage() {
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuovo DDT</button>
         </div>
 
-        {/* Barra filtri */}
         <div className="card mb-4">
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
             <div>
               <label className="label">N° DDT</label>
-              <input className="input" placeholder="Cerca numero..." value={cercaNumero}
-                onChange={e => setCercaNumero(e.target.value)} />
+              <input className="input" placeholder="Cerca numero..." value={cercaNumero} onChange={e => setCercaNumero(e.target.value)} />
             </div>
             <div>
               <label className="label">Fornitore</label>
-              <input className="input" placeholder="Cerca fornitore..." value={cercaFornitore}
-                onChange={e => setCercaFornitore(e.target.value)} />
+              <input className="input" placeholder="Cerca fornitore..." value={cercaFornitore} onChange={e => setCercaFornitore(e.target.value)} />
             </div>
             <div>
               <label className="label">Stato</label>
@@ -135,13 +131,11 @@ export default function DDTPage() {
             </div>
             <div>
               <label className="label">Data dal</label>
-              <input className="input" type="date" value={dataDA}
-                onChange={e => setDataDA(e.target.value)} />
+              <input className="input" type="date" value={dataDA} onChange={e => setDataDA(e.target.value)} />
             </div>
             <div>
               <label className="label">Data al</label>
-              <input className="input" type="date" value={dataA}
-                onChange={e => setDataA(e.target.value)} />
+              <input className="input" type="date" value={dataA} onChange={e => setDataA(e.target.value)} />
             </div>
           </div>
           {hasFiltriAttivi && (
@@ -149,14 +143,11 @@ export default function DDTPage() {
               <span className="text-xs text-gray-500">
                 {filtered.length} risultati su {ddts.length} DDT — Totale: <strong>{euro(totaleFiltered)}</strong>
               </span>
-              <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">
-                × Azzera filtri
-              </button>
+              <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">× Azzera filtri</button>
             </div>
           )}
         </div>
 
-        {/* Tabella */}
         <div className="card overflow-x-auto">
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm text-gray-500">
@@ -173,11 +164,9 @@ export default function DDTPage() {
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="text-center text-gray-400 py-8">
-                    {hasFiltriAttivi ? 'Nessun DDT corrisponde ai filtri impostati.' : 'Nessun DDT. Inserisci il primo.'}
-                  </td>
-                </tr>
+                <tr><td colSpan={8} className="text-center text-gray-400 py-8">
+                  {hasFiltriAttivi ? 'Nessun DDT corrisponde ai filtri impostati.' : 'Nessun DDT. Inserisci il primo.'}
+                </td></tr>
               ) : filtered.map(d => (
                 <tr key={d.id}>
                   <td className="text-xs">{d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—'}</td>
@@ -188,8 +177,7 @@ export default function DDTPage() {
                   <td>{statoBadge(d.stato)}</td>
                   <td className="text-xs text-gray-500">{d.fattura_abbinata || '—'}</td>
                   <td>
-                    <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
-                      onClick={() => elimina(d.id)}>✕</button>
+                    <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(d.id)}>✕</button>
                   </td>
                 </tr>
               ))}
