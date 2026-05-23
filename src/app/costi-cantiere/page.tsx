@@ -104,6 +104,8 @@ export default function CostiCantiere() {
       progetto_id: progettoSel, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
       data: formCosto.data, categoria: formCosto.categoria, descrizione: formCosto.descrizione,
       importo: parseFloat(formCosto.importo) || 0,
+      quantita: formCosto.quantita ? parseFloat(formCosto.quantita) : null,
+      prezzo_unitario: formCosto.prezzo_unitario ? parseFloat(formCosto.prezzo_unitario) : null,
       inserito_da: user?.id, inserito_da_nome: profilo?.nome || user?.email, note: formCosto.note
     }).select('id').single()
     await logActivity('inserimento', 'costi_cantiere', inserted?.id || '', `${formCosto.categoria} — ${prj?.codice} ${prj?.nome} · € ${formCosto.importo}${formCosto.descrizione ? ' · ' + formCosto.descrizione : ''}`)
@@ -301,15 +303,17 @@ export default function CostiCantiere() {
                 <div className="card overflow-x-auto">
                   <h3 className="text-sm font-medium text-gray-600 mb-3">Registro costi ({costiFiltrati.length})</h3>
                   <table className="table-base">
-                    <thead><tr><th>Data</th><th>Categoria</th><th>Descrizione</th><th>Importo</th><th>Inserito da</th><th>Note</th><th></th></tr></thead>
+                    <thead><tr><th>Data</th><th>Categoria</th><th>Descrizione</th><th>Qtà</th><th>Pr. Unit.</th><th>Importo</th><th>Inserito da</th><th>Note</th><th></th></tr></thead>
                     <tbody>
                       {costiFiltrati.length === 0 ? (
-                        <tr><td colSpan={7} className="text-center text-gray-400 py-8">Nessun costo registrato per questo cantiere.</td></tr>
+                        <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessun costo registrato per questo cantiere.</td></tr>
                       ) : costiFiltrati.map(c => (
                         <tr key={c.id}>
                           <td className="text-xs">{new Date(c.data).toLocaleDateString('it-IT')}</td>
                           <td><span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ background: CAT_COLORS[c.categoria] || '#6b7280' }}>{c.categoria}</span></td>
                           <td className="text-sm">{c.descrizione || '—'}</td>
+                          <td className="text-xs text-gray-500">{c.quantita != null ? c.quantita : '—'}</td>
+                          <td className="text-xs text-gray-500">{c.prezzo_unitario != null ? euro(c.prezzo_unitario) : '—'}</td>
                           <td className="font-semibold text-sm text-blue-800">{euro(c.importo)}</td>
                           <td className="text-xs text-gray-500">{c.inserito_da_nome || '—'}</td>
                           <td className="text-xs text-gray-400">{c.note || '—'}</td>
