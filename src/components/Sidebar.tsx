@@ -6,7 +6,6 @@ import { supabase } from '@/lib/supabase'
 
 const ADMIN_EMAIL = 'bonarrigogiuseppe05@gmail.com'
 
-// Mappa href → colonna perm_* nella tabella utenti
 const PERM_KEY: Record<string, string> = {
   '/dashboard':          'perm_dashboard',
   '/progetti':           'perm_progetti',
@@ -15,6 +14,7 @@ const PERM_KEY: Record<string, string> = {
   '/da-ricevere':        'perm_da_ricevere',
   '/fatture-fornitori':  'perm_fatture_fornitori',
   '/fatture-clienti':    'perm_fatture_clienti',
+  '/scaduto-clienti':    'perm_fatture_clienti',
   '/import-sdi':         'perm_import_sdi',
   '/scadenzario':        'perm_scadenzario',
   '/cashflow':           'perm_cashflow',
@@ -33,11 +33,12 @@ const nav = [
   { section: 'Ciclo Passivo', items: [
     { href: '/ddt',               label: 'DDT / Bolle',     icon: '📋' },
     { href: '/da-ricevere',       label: 'Da ricevere',     icon: '⏳' },
-    { href: '/fatture-fornitori', label: 'Fatt. fornitori', icon: '📄' },
+    { href: '/fatture-fornitori', label: 'Fatt. ricevute',  icon: '📄' },
     { href: '/import-sdi',        label: 'Import SDI',      icon: '📥' },
   ]},
   { section: 'Ciclo Attivo', items: [
-    { href: '/fatture-clienti', label: 'Fatt. clienti', icon: '🧾' },
+    { href: '/fatture-clienti',  label: 'Fatt. emesse',    icon: '🧾' },
+    { href: '/scaduto-clienti',  label: 'Scaduto clienti', icon: '📊' },
   ]},
   { section: 'Controllo', items: [
     { href: '/scadenzario', label: 'Scadenzario',          icon: '📅' },
@@ -61,25 +62,15 @@ export default function Sidebar() {
     async function loadPermessi() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoading(false); return }
-
       if (user.email === ADMIN_EMAIL) {
-        setIsAdmin(true)
-        setPermessi(null)
-        setLoading(false)
-        return
+        setIsAdmin(true); setPermessi(null); setLoading(false); return
       }
-
       const { data } = await supabase
         .from('utenti')
-        .select('perm_dashboard, perm_progetti, perm_costi_cantiere, perm_ddt, perm_da_ricevere, perm_fatture_fornitori, perm_fatture_clienti, perm_import_sdi, perm_scadenzario, perm_cashflow, perm_budget, perm_anagrafiche, perm_dipendenti, perm_utenti')
+        .select('perm_dashboard,perm_progetti,perm_costi_cantiere,perm_ddt,perm_da_ricevere,perm_fatture_fornitori,perm_fatture_clienti,perm_import_sdi,perm_scadenzario,perm_cashflow,perm_budget,perm_anagrafiche,perm_dipendenti,perm_utenti')
         .eq('id', user.id)
         .single()
-
-      if (data) {
-        setPermessi(data)
-      } else {
-        setPermessi({}) // nessun record = nessun accesso
-      }
+      setPermessi(data || {})
       setLoading(false)
     }
     loadPermessi()
