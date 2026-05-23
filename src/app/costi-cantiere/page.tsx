@@ -7,12 +7,18 @@ import { logActivity } from '@/lib/logActivity'
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const euroShort = (n: number) => (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-const CATEGORIE = ['Materiali', 'Noli mezzi', 'Manodopera esterna', 'Subappalto', 'Trasporti', 'Attrezzatura', 'Smaltimento', 'Altro']
+const CATEGORIE = ['Ore Operai', 'Materiali', 'Noli mezzi', 'Manodopera esterna', 'Subappalto', 'Trasporti', 'Attrezzatura', 'Smaltimento', 'Altro']
 
 const CAT_COLORS: Record<string, string> = {
-  'Materiali': '#1d4ed8', 'Noli mezzi': '#7c3aed', 'Manodopera esterna': '#0891b2',
-  'Subappalto': '#b45309', 'Trasporti': '#059669', 'Attrezzatura': '#dc2626',
-  'Smaltimento': '#9333ea', 'Altro': '#6b7280',
+  'Ore Operai':        '#0f766e',
+  'Materiali':         '#1d4ed8',
+  'Noli mezzi':        '#7c3aed',
+  'Manodopera esterna':'#0891b2',
+  'Subappalto':        '#b45309',
+  'Trasporti':         '#059669',
+  'Attrezzatura':      '#dc2626',
+  'Smaltimento':       '#9333ea',
+  'Altro':             '#6b7280',
 }
 
 const statoBadge = (s: string) => {
@@ -31,7 +37,7 @@ export default function CostiCantiere() {
   const [modalCosto, setModalCosto] = useState(false)
   const [loadingCosto, setLoadingCosto] = useState(false)
   const [formCosto, setFormCosto] = useState({
-    data: new Date().toISOString().split('T')[0], categoria: 'Materiali', descrizione: '', importo: '', note: ''
+    data: new Date().toISOString().split('T')[0], categoria: 'Ore Operai', descrizione: '', importo: '', quantita: '', prezzo_unitario: '', note: ''
   })
   const [ddts, setDdts] = useState<any[]>([])
   const [fornitori, setFornitori] = useState<any[]>([])
@@ -102,7 +108,7 @@ export default function CostiCantiere() {
     }).select('id').single()
     await logActivity('inserimento', 'costi_cantiere', inserted?.id || '', `${formCosto.categoria} — ${prj?.codice} ${prj?.nome} · € ${formCosto.importo}${formCosto.descrizione ? ' · ' + formCosto.descrizione : ''}`)
     setModalCosto(false)
-    setFormCosto({ data: new Date().toISOString().split('T')[0], categoria: 'Materiali', descrizione: '', importo: '', note: '' })
+    setFormCosto({ data: new Date().toISOString().split('T')[0], categoria: 'Ore Operai', descrizione: '', importo: '', quantita: '', prezzo_unitario: '', note: '' })
     setLoadingCosto(false); loadCosti()
   }
 
@@ -358,7 +364,7 @@ export default function CostiCantiere() {
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="label">Data *</label><input className="input" type="date" value={formCosto.data} onChange={e => setFormCosto({...formCosto, data: e.target.value})} /></div>
-                <div><label className="label">Importo (€) *</label><input className="input" type="number" step="0.01" placeholder="0.00" value={formCosto.importo} onChange={e => setFormCosto({...formCosto, importo: e.target.value})} /></div>
+                <div></div>
               </div>
               <div>
                 <label className="label">Categoria *</label>
@@ -372,7 +378,39 @@ export default function CostiCantiere() {
                   ))}
                 </div>
               </div>
-              <div><label className="label">Descrizione</label><input className="input" placeholder="es. Calcestruzzo C25/30 - 30mc" value={formCosto.descrizione} onChange={e => setFormCosto({...formCosto, descrizione: e.target.value})} /></div>
+              <div><label className="label">Descrizione</label><input className="input" placeholder="es. Calcestruzzo C25/30, Operaio Mario Rossi..." value={formCosto.descrizione} onChange={e => setFormCosto({...formCosto, descrizione: e.target.value})} /></div>
+              {/* Calcolatore quantità × prezzo */}
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                <p className="text-xs font-medium text-gray-600 mb-2">🧮 Calcolatore (opzionale)</p>
+                <div className="grid grid-cols-3 gap-2 items-end">
+                  <div>
+                    <label className="label">Quantità</label>
+                    <input className="input" type="number" step="0.01" placeholder="es. 8" value={formCosto.quantita}
+                      onChange={e => {
+                        const q = e.target.value
+                        const p = formCosto.prezzo_unitario
+                        const tot = q && p ? (parseFloat(q) * parseFloat(p)).toFixed(2) : formCosto.importo
+                        setFormCosto({...formCosto, quantita: q, importo: tot})
+                      }} />
+                  </div>
+                  <div>
+                    <label className="label">Prezzo unitario (€)</label>
+                    <input className="input" type="number" step="0.01" placeholder="es. 25.00" value={formCosto.prezzo_unitario}
+                      onChange={e => {
+                        const p = e.target.value
+                        const q = formCosto.quantita
+                        const tot = q && p ? (parseFloat(q) * parseFloat(p)).toFixed(2) : formCosto.importo
+                        setFormCosto({...formCosto, prezzo_unitario: p, importo: tot})
+                      }} />
+                  </div>
+                  <div>
+                    <label className="label">= Totale (€) *</label>
+                    <input className="input font-semibold text-blue-800" type="number" step="0.01" placeholder="0.00" value={formCosto.importo}
+                      onChange={e => setFormCosto({...formCosto, importo: e.target.value, quantita: '', prezzo_unitario: ''})} />
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Puoi inserire direttamente il totale oppure usare il calcolatore</p>
+              </div>
               <div><label className="label">Note aggiuntive</label><input className="input" placeholder="es. Fornitore, bolla n°..." value={formCosto.note} onChange={e => setFormCosto({...formCosto, note: e.target.value})} /></div>
             </div>
             <div className="flex gap-2 justify-end mt-4">
@@ -562,7 +600,14 @@ export default function CostiCantiere() {
         @media print {
           body * { visibility: hidden; }
           #report-contabilita, #report-contabilita * { visibility: visible; }
-          #report-contabilita { position: fixed; top: 0; left: 0; width: 100%; padding: 20px; }
+          #report-contabilita {
+            position: fixed; top: 0; left: 0;
+            width: 100%; padding: 16px;
+            font-size: 10px;
+          }
+          #report-contabilita table { page-break-inside: auto; }
+          #report-contabilita tr { page-break-inside: avoid; page-break-after: auto; }
+          #report-contabilita thead { display: table-header-group; }
           .print\\:hidden { display: none !important; }
         }
       `}</style>
