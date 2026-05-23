@@ -27,4 +27,5 @@ export async function logActivity(
   } catch {
     // Il log non blocca mai l'operazione principale
   }
+
 }
