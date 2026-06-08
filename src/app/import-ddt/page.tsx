@@ -67,49 +67,11 @@ export default function ImportDDT() {
         return
       }
 
-      // Chiama Claude API per analizzare il DDT
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      // Chiama la route API Next.js che fa da proxy verso Claude
+      const response = await fetch('/api/analizza-ddt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          messages: [{
-            role: 'user',
-            content: [
-              {
-                type: isPDF ? 'document' : 'image',
-                source: {
-                  type: 'base64',
-                  media_type: file.type,
-                  data: base64
-                }
-              },
-              {
-                type: 'text',
-                text: `Analizza questo DDT/bolla di consegna italiana e restituisci SOLO un oggetto JSON valido (nessun testo prima o dopo) con questa struttura esatta:
-{
-  "numero": "numero bolla",
-  "data": "YYYY-MM-DD",
-  "fornitore_nome": "nome fornitore",
-  "fornitore_piva": "partita iva",
-  "voci": [
-    {
-      "descrizione": "descrizione materiale",
-      "macro_categoria": "una di: Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro",
-      "categoria": "categoria specifica",
-      "unita_misura": "mc/kg/ml/pz/m2/t/l",
-      "quantita": 0.0,
-      "prezzo_unitario": 0.0,
-      "importo_totale": 0.0
-    }
-  ]
-}
-Se un campo non è leggibile usa stringa vuota o 0. Estrai TUTTE le voci presenti nel DDT.`
-              }
-            ]
-          }]
-        })
+        body: JSON.stringify({ base64, mediaType: file.type })
       })
 
       if (!response.ok) {
