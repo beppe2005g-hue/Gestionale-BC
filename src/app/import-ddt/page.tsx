@@ -90,8 +90,11 @@ export default function ImportDDT() {
     setGruppi(prev => prev.filter(g => g.id !== gruppoId))
   }
 
+  const filesRef = useRef<FileDDT[]>([])
+  useEffect(() => { filesRef.current = files }, [files])
+
   async function analizzaFile(fileId: string): Promise<void> {
-    const fileDdt = files.find(f => f.id === fileId)
+    const fileDdt = filesRef.current.find(f => f.id === fileId)
     if (!fileDdt) return
 
     setFiles(prev => prev.map(f => f.id === fileId ? { ...f, stato: 'analisi' } : f))
@@ -173,14 +176,12 @@ export default function ImportDDT() {
     const gruppo = gruppi.find(g => g.id === gruppoId)
     if (!gruppo) return
 
-    // Marca tutti come in analisi
     setFiles(prev => prev.map(f => gruppo.fileIds.includes(f.id) ? { ...f, stato: 'analisi' } : f))
 
     try {
-      // Converti tutti i file del gruppo in base64
       const pagineDati = await Promise.all(
         gruppo.fileIds.map(async (fid) => {
-          const fileDdt = files.find(f => f.id === fid)
+          const fileDdt = filesRef.current.find(f => f.id === fid)
           if (!fileDdt) return null
           const base64 = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader()
@@ -243,25 +244,32 @@ export default function ImportDDT() {
   async function avviaElaborazione() {
     setElaborando(true)
 
+    // Cattura gli ID dei file da elaborare PRIMA del loop
+    // (lo stato React non si aggiorna in tempo reale durante il loop)
+    const idSingoli = files
+      .filter(f => f.stato === 'attesa' && !f.gruppoId)
+      .map(f => f.id)
+
+    const idGruppi = gruppi.map(g => g.id)
+
     // Prima elabora i gruppi
-    for (const gruppo of gruppi) {
-      const fileGruppo = files.filter(f => f.gruppoId === gruppo.id && f.id === gruppo.fileIds[0])
-      if (fileGruppo.length > 0) {
-        await analizzaGruppo(gruppo.id)
-      }
+    for (const gruppoId of idGruppi) {
+      await analizzaGruppo(gruppoId)
     }
 
     // Poi i file singoli in attesa
-    const fileSingoli = files.filter(f => f.stato === 'attesa' && !f.gruppoId)
-    for (const f of fileSingoli) {
-      await analizzaFile(f.id)
+    for (const fileId of idSingoli) {
+      await analizzaFile(fileId)
     }
 
     setElaborando(false)
 
     // Apri il primo file da approvare
-    const primoInApprovazione = files.find(f => f.stato === 'approvazione')
-    if (primoInApprovazione) setFileInApprovazione(primoInApprovazione.id)
+    setFiles(prev => {
+      const primo = prev.find(f => f.stato === 'approvazione')
+      if (primo) setFileInApprovazione(primo.id)
+      return prev
+    })
   }
 
   function aggiornaVoce(fileId: string, idx: number, campo: string, valore: any) {
