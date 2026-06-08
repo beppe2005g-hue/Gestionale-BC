@@ -5,6 +5,17 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const { base64, mediaType } = body
 
+    const isImage = mediaType?.startsWith('image/')
+    const isPDF = mediaType === 'application/pdf'
+
+    if (!isImage && !isPDF) {
+      return NextResponse.json({ error: 'Formato non supportato' }, { status: 400 })
+    }
+
+    const contentBlock = isImage
+      ? { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } }
+      : { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -13,15 +24,12 @@ export async function POST(req: NextRequest) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-6-20251101',
+        model: 'claude-sonnet-4-6',
         max_tokens: 2000,
         messages: [{
           role: 'user',
           content: [
-            {
-              type: mediaType === 'application/pdf' ? 'document' : 'image',
-              source: { type: 'base64', media_type: mediaType, data: base64 }
-            },
+            contentBlock,
             {
               type: 'text',
               text: `Analizza questo DDT/bolla di consegna italiana e restituisci SOLO un oggetto JSON valido (nessun testo prima o dopo) con questa struttura esatta:
@@ -52,12 +60,13 @@ Se un campo non è leggibile usa stringa vuota o 0. Estrai TUTTE le voci present
     if (!response.ok) {
       const err = await response.text()
       console.error('Anthropic error:', response.status, err)
-      return NextResponse.json({ error: `Anthropic ${response.status}: ${err}` }, { status: 500 })
+      return NextResponse.json({ error: `Errore Anthropic ${response.status}: ${err}` }, { status: 500 })
     }
 
     const data = await response.json()
     return NextResponse.json(data)
   } catch (e: any) {
+    console.error('Route error:', e)
     return NextResponse.json({ error: e.message }, { status: 500 })
   }
 }
