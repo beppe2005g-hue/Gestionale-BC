@@ -98,17 +98,42 @@ export default function ImportDDT() {
 
     try {
       // Converti in base64
-      const base64 = await new Promise<string>((resolve, reject) => {
+      const base64Raw = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve((reader.result as string).split(',')[1])
         reader.onerror = reject
         reader.readAsDataURL(fileDdt.file)
       })
 
+      // Comprimi immagine per ridurre costi API
+      let base64 = base64Raw
+      let mediaType = fileDdt.file.type
+
+      if (fileDdt.file.type.startsWith('image/')) {
+        const compressed = await new Promise<string>((resolve) => {
+          const img = new Image()
+          img.onload = () => {
+            const canvas = document.createElement('canvas')
+            const maxSize = 1200
+            let w = img.width, h = img.height
+            if (w > maxSize || h > maxSize) {
+              if (w > h) { h = Math.round(h * maxSize / w); w = maxSize }
+              else { w = Math.round(w * maxSize / h); h = maxSize }
+            }
+            canvas.width = w; canvas.height = h
+            canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
+            resolve(canvas.toDataURL('image/jpeg', 0.75).split(',')[1])
+          }
+          img.src = 'data:' + fileDdt.file.type + ';base64,' + base64Raw
+        })
+        base64 = compressed
+        mediaType = 'image/jpeg'
+      }
+
       const response = await fetch('/api/analizza-ddt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base64, mediaType: fileDdt.file.type })
+        body: JSON.stringify({ base64, mediaType })
       })
 
       if (!response.ok) {
