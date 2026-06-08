@@ -93,26 +93,21 @@ export default function ImportDDT() {
   const filesRef = useRef<FileDDT[]>([])
   useEffect(() => { filesRef.current = files }, [files])
 
-  async function analizzaFile(fileId: string): Promise<void> {
-    const fileDdt = filesRef.current.find(f => f.id === fileId)
-    if (!fileDdt) return
-
+  async function analizzaFile(fileId: string, fileObj: File): Promise<void> {
     setFiles(prev => prev.map(f => f.id === fileId ? { ...f, stato: 'analisi' } : f))
 
     try {
-      // Converti in base64
       const base64Raw = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve((reader.result as string).split(',')[1])
         reader.onerror = reject
-        reader.readAsDataURL(fileDdt.file)
+        reader.readAsDataURL(fileObj)
       })
 
-      // Comprimi immagine per ridurre costi API
       let base64 = base64Raw
-      let mediaType = fileDdt.file.type
+      let mediaType = fileObj.type
 
-      if (fileDdt.file.type.startsWith('image/')) {
+      if (fileObj.type.startsWith('image/')) {
         const compressed = await new Promise<string>((resolve) => {
           const img = new Image()
           img.onload = () => {
@@ -127,7 +122,7 @@ export default function ImportDDT() {
             canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
             resolve(canvas.toDataURL('image/jpeg', 0.75).split(',')[1])
           }
-          img.src = 'data:' + fileDdt.file.type + ';base64,' + base64Raw
+          img.src = 'data:' + fileObj.type + ';base64,' + base64Raw
         })
         base64 = compressed
         mediaType = 'image/jpeg'
@@ -244,11 +239,10 @@ export default function ImportDDT() {
   async function avviaElaborazione() {
     setElaborando(true)
 
-    // Cattura gli ID dei file da elaborare PRIMA del loop
-    // (lo stato React non si aggiorna in tempo reale durante il loop)
-    const idSingoli = files
+    // Cattura i file da elaborare PRIMA del loop con tutti i dati necessari
+    const fileDaElaborare = files
       .filter(f => f.stato === 'attesa' && !f.gruppoId)
-      .map(f => f.id)
+      .map(f => ({ id: f.id, file: f.file }))
 
     const idGruppi = gruppi.map(g => g.id)
 
@@ -257,9 +251,9 @@ export default function ImportDDT() {
       await analizzaGruppo(gruppoId)
     }
 
-    // Poi i file singoli in attesa
-    for (const fileId of idSingoli) {
-      await analizzaFile(fileId)
+    // Poi i file singoli — passa l'oggetto File direttamente
+    for (const { id, file } of fileDaElaborare) {
+      await analizzaFile(id, file)
     }
 
     setElaborando(false)
