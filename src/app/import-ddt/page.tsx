@@ -79,28 +79,12 @@ export default function ImportDDT() {
       }
 
       const data = await response.json()
-      const testo = data.content?.[0]?.text || ''
-
-      // Estrai JSON dalla risposta in modo robusto
-      let parsed
-      try {
-        // Prima prova diretta
-        parsed = JSON.parse(testo)
-      } catch {
-        // Prova a estrarre il JSON con regex
-        const jsonMatch = testo.match(/\{[\s\S]*\}/)
-        if (!jsonMatch) throw new Error('Risposta AI non contiene JSON valido')
-        try {
-          parsed = JSON.parse(jsonMatch[0])
-        } catch {
-          // Prova a pulire il JSON da caratteri problematici
-          const cleaned = jsonMatch[0]
-            .replace(/[\x00-\x1F\x7F]/g, ' ')
-            .replace(/,\s*]/g, ']')
-            .replace(/,\s*}/g, '}')
-          parsed = JSON.parse(cleaned)
-        }
+      
+      if (data.error) {
+        throw new Error(data.error)
       }
+
+      const parsed = data.parsed
 
       setDdt({
         numero: parsed.numero || '',
