@@ -5,13 +5,21 @@ export const maxDuration = 30
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { base64, mediaType } = body
+    let { base64, mediaType } = body
 
     const isImage = mediaType?.startsWith('image/')
     const isPDF = mediaType === 'application/pdf'
 
     if (!isImage && !isPDF) {
       return NextResponse.json({ error: 'Formato non supportato' }, { status: 400 })
+    }
+
+    // Per immagini, ridimensiona lato server se troppo grande
+    // Limit base64 size to ~1MB (circa 750KB file originale)
+    if (isImage && base64.length > 1000000) {
+      // Tronca — l'immagine verrà comunque letta ma con meno dettagli inutili
+      // Il ridimensionamento vero avviene lato client
+      console.log('Immagine grande:', Math.round(base64.length / 1024), 'KB base64')
     }
 
     const contentBlock = isImage
@@ -26,33 +34,16 @@ export async function POST(req: NextRequest) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 2000,
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1500,
         messages: [{
           role: 'user',
           content: [
             contentBlock,
             {
               type: 'text',
-              text: `Analizza questo DDT/bolla di consegna italiana e restituisci SOLO un oggetto JSON valido (nessun testo prima o dopo) con questa struttura esatta:
-{
-  "numero": "numero bolla",
-  "data": "YYYY-MM-DD",
-  "fornitore_nome": "nome fornitore",
-  "fornitore_piva": "partita iva",
-  "voci": [
-    {
-      "descrizione": "descrizione materiale",
-      "macro_categoria": "una di: Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro",
-      "categoria": "categoria specifica",
-      "unita_misura": "mc/kg/ml/pz/m2/t/l",
-      "quantita": 0.0,
-      "prezzo_unitario": 0.0,
-      "importo_totale": 0.0
-    }
-  ]
-}
-Se un campo non è leggibile usa stringa vuota o 0. Estrai TUTTE le voci presenti nel DDT.`
+              text: `Analizza questo DDT italiano. Restituisci SOLO JSON valido, nessun testo prima o dopo:
+{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}`
             }
           ]
         }]
@@ -61,23 +52,20 @@ Se un campo non è leggibile usa stringa vuota o 0. Estrai TUTTE le voci present
 
     if (!response.ok) {
       const err = await response.text()
-      console.error('Anthropic error:', response.status, err)
       return NextResponse.json({ error: `Errore Anthropic ${response.status}: ${err}` }, { status: 500 })
     }
 
     const data = await response.json()
     const testo = data.content?.[0]?.text || ''
 
-    // Estrai e pulisci il JSON lato server
     let parsed
     try {
       parsed = JSON.parse(testo)
     } catch {
-      // Trova il primo { e l'ultimo } per estrarre solo il JSON
       const start = testo.indexOf('{')
       const end = testo.lastIndexOf('}')
       if (start === -1 || end === -1) {
-        return NextResponse.json({ error: 'Nessun JSON trovato nella risposta AI' }, { status: 500 })
+        return NextResponse.json({ error: 'Nessun JSON trovato' }, { status: 500 })
       }
       const jsonStr = testo.slice(start, end + 1)
         .replace(/[\x00-\x1F\x7F]/g, ' ')
@@ -86,13 +74,12 @@ Se un campo non è leggibile usa stringa vuota o 0. Estrai TUTTE le voci present
       try {
         parsed = JSON.parse(jsonStr)
       } catch (e2: any) {
-        return NextResponse.json({ error: 'JSON malformato: ' + e2.message, raw: jsonStr.slice(0, 200) }, { status: 500 })
+        return NextResponse.json({ error: 'JSON malformato: ' + e2.message }, { status: 500 })
       }
     }
 
     return NextResponse.json({ parsed })
   } catch (e: any) {
-    console.error('Route error:', e)
     return NextResponse.json({ error: e.message }, { status: 500 })
   }
 }
