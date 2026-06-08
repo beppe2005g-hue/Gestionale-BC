@@ -64,7 +64,31 @@ Se un campo non è leggibile usa stringa vuota o 0. Estrai TUTTE le voci present
     }
 
     const data = await response.json()
-    return NextResponse.json(data)
+    const testo = data.content?.[0]?.text || ''
+
+    // Estrai e pulisci il JSON lato server
+    let parsed
+    try {
+      parsed = JSON.parse(testo)
+    } catch {
+      // Trova il primo { e l'ultimo } per estrarre solo il JSON
+      const start = testo.indexOf('{')
+      const end = testo.lastIndexOf('}')
+      if (start === -1 || end === -1) {
+        return NextResponse.json({ error: 'Nessun JSON trovato nella risposta AI' }, { status: 500 })
+      }
+      const jsonStr = testo.slice(start, end + 1)
+        .replace(/[\x00-\x1F\x7F]/g, ' ')
+        .replace(/,\s*\]/g, ']')
+        .replace(/,\s*\}/g, '}')
+      try {
+        parsed = JSON.parse(jsonStr)
+      } catch (e2: any) {
+        return NextResponse.json({ error: 'JSON malformato: ' + e2.message, raw: jsonStr.slice(0, 200) }, { status: 500 })
+      }
+    }
+
+    return NextResponse.json({ parsed })
   } catch (e: any) {
     console.error('Route error:', e)
     return NextResponse.json({ error: e.message }, { status: 500 })
