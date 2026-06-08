@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-6',
+        model: 'claude-opus-4-6-20251101',
         max_tokens: 2000,
         messages: [{
           role: 'user',
@@ -51,7 +51,8 @@ Se un campo non è leggibile usa stringa vuota o 0. Estrai TUTTE le voci present
 
     if (!response.ok) {
       const err = await response.text()
-      return NextResponse.json({ error: err }, { status: 500 })
+      console.error('Anthropic error:', response.status, err)
+      return NextResponse.json({ error: `Anthropic ${response.status}: ${err}` }, { status: 500 })
     }
 
     const data = await response.json()
