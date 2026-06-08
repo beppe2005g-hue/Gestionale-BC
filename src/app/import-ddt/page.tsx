@@ -142,26 +142,82 @@ export default function ImportDDT() {
       const data = await response.json()
       if (data.error) throw new Error(data.error)
 
-      const parsed = data.parsed
-      setFiles(prev => prev.map(f => f.id === fileId ? {
-        ...f,
-        stato: 'approvazione',
-        ddt: {
-          numero: parsed.numero || '',
-          data: parsed.data || new Date().toISOString().split('T')[0],
-          fornitore_nome: parsed.fornitore_nome || '',
-          fornitore_piva: parsed.fornitore_piva || '',
-          voci: (parsed.voci || []).map((v: any) => ({
-            ...v,
-            quantita: parseFloat(v.quantita) || 0,
-            prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
-            importo_totale: parseFloat(v.importo_totale) || 0,
-            approvata: true
-          })),
-          progetto_id: '',
-          note: ''
-        }
-      } : f))
+      // La route ora restituisce sempre un array di DDT
+      const ddtArray: any[] = data.parsed || []
+
+      if (ddtArray.length === 0) throw new Error('Nessun DDT trovato nel file')
+
+      if (ddtArray.length === 1) {
+        // PDF con una sola bolla
+        const parsed = ddtArray[0]
+        setFiles(prev => prev.map(f => f.id === fileId ? {
+          ...f,
+          stato: 'approvazione',
+          ddt: {
+            numero: parsed.numero || '',
+            data: parsed.data || new Date().toISOString().split('T')[0],
+            fornitore_nome: parsed.fornitore_nome || '',
+            fornitore_piva: parsed.fornitore_piva || '',
+            voci: (parsed.voci || []).map((v: any) => ({
+              ...v,
+              quantita: parseFloat(v.quantita) || 0,
+              prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
+              importo_totale: parseFloat(v.importo_totale) || 0,
+              approvata: true
+            })),
+            progetto_id: '',
+            note: ''
+          }
+        } : f))
+      } else {
+        // PDF con più bolle — crea un file virtuale per ogni DDT
+        const nuoviFile: FileDDT[] = ddtArray.slice(1).map((parsed: any, idx: number) => ({
+          id: Math.random().toString(36).slice(2),
+          file: fileObj,
+          nome: `${fileObj.name} — Bolla ${idx + 2}`,
+          stato: 'approvazione' as const,
+          ddt: {
+            numero: parsed.numero || '',
+            data: parsed.data || new Date().toISOString().split('T')[0],
+            fornitore_nome: parsed.fornitore_nome || '',
+            fornitore_piva: parsed.fornitore_piva || '',
+            voci: (parsed.voci || []).map((v: any) => ({
+              ...v,
+              quantita: parseFloat(v.quantita) || 0,
+              prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
+              importo_totale: parseFloat(v.importo_totale) || 0,
+              approvata: true
+            })),
+            progetto_id: '',
+            note: ''
+          }
+        }))
+
+        const parsed0 = ddtArray[0]
+        setFiles(prev => [
+          ...prev.map(f => f.id === fileId ? {
+            ...f,
+            stato: 'approvazione' as const,
+            nome: `${f.nome} — Bolla 1`,
+            ddt: {
+              numero: parsed0.numero || '',
+              data: parsed0.data || new Date().toISOString().split('T')[0],
+              fornitore_nome: parsed0.fornitore_nome || '',
+              fornitore_piva: parsed0.fornitore_piva || '',
+              voci: (parsed0.voci || []).map((v: any) => ({
+                ...v,
+                quantita: parseFloat(v.quantita) || 0,
+                prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
+                importo_totale: parseFloat(v.importo_totale) || 0,
+                approvata: true
+              })),
+              progetto_id: '',
+              note: ''
+            }
+          } : f),
+          ...nuoviFile
+        ])
+      }
     } catch (e: any) {
       setFiles(prev => prev.map(f => f.id === fileId ? { ...f, stato: 'errore', errore: e.message } : f))
     }
