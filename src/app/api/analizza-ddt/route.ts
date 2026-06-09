@@ -11,7 +11,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Parametri mancanti' }, { status: 400 })
     }
 
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY || ''
+    const apiKey = process.env.GOOGLE_API_KEY || ''
+    console.log('API Key presente:', apiKey ? 'SI (' + apiKey.length + ' chars)' : 'NO')
     const isPDF = mediaType === 'application/pdf'
 
     const prompt = isPDF
