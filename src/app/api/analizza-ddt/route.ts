@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Parametri mancanti' }, { status: 400 })
     }
 
-    const apiKey = process.env.GOOGLE_API_KEY || ''
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY || ''
     const isPDF = mediaType === 'application/pdf'
 
     const prompt = isPDF
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
 Se non è un DDT rispondi: [{"skip":true}]`
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
