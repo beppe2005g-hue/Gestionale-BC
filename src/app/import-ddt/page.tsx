@@ -47,44 +47,65 @@ export default function ImportDDT() {
           reader.readAsDataURL(file)
         })
 
-        const response = await fetch('/api/analizza-ddt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base64, mediaType: file.type })
-        })
+        // Chiama Gemini direttamente dal browser
+        const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY || ''
+        const isPDF = file.type === 'application/pdf'
+        const prompt = isPDF
+          ? `Questo PDF contiene una o più bolle DDT italiane. Analizza TUTTE le pagine ed estrai TUTTI i DDT. Restituisci SOLO un array JSON valido senza testo prima o dopo:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]`
+          : `Analizza questa bolla DDT italiana. Restituisci SOLO un array JSON senza testo prima o dopo:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]\nSe non è un DDT rispondi: [{"skip":true}]`
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [
+                { inline_data: { mime_type: file.type, data: base64 } },
+                { text: prompt }
+              ]}],
+              generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
+            })
+          }
+        )
 
         if (!response.ok) {
           const err = await response.json()
-          throw new Error(err.error || 'Errore API')
+          throw new Error(`Errore Gemini ${response.status}: ${err.error?.message || JSON.stringify(err)}`)
         }
 
         const data = await response.json()
-        if (data.error) throw new Error(data.error)
+        const testo = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
 
-        const ddtArray: any[] = data.parsed || []
-        for (const parsed of ddtArray) {
-          if (parsed && !parsed.skip && parsed.numero !== undefined) {
+        let parsed: any[]
+        try {
+          parsed = JSON.parse(testo)
+        } catch {
+          const arrStart = testo.indexOf('[')
+          const arrEnd = testo.lastIndexOf(']')
+          if (arrStart !== -1 && arrEnd !== -1) {
+            try { parsed = JSON.parse(testo.slice(arrStart, arrEnd + 1).replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}')) }
+            catch { parsed = [] }
+          } else { parsed = [] }
+        }
+
+        const ddtArray = Array.isArray(parsed) ? parsed : [parsed]
+        for (const p of ddtArray) {
+          if (p && !p.skip && p.numero !== undefined) {
             const nuovaBolla: BollaDDT = {
               id: Math.random().toString(36).slice(2),
-              numero: parsed.numero || '',
-              data: parsed.data || new Date().toISOString().split('T')[0],
-              fornitore_nome: parsed.fornitore_nome || '',
-              fornitore_piva: parsed.fornitore_piva || '',
-              voci: (parsed.voci || []).map((v: any) => ({
-                ...v,
-                quantita: parseFloat(v.quantita) || 0,
+              numero: p.numero || '', data: p.data || new Date().toISOString().split('T')[0],
+              fornitore_nome: p.fornitore_nome || '', fornitore_piva: p.fornitore_piva || '',
+              voci: (p.voci || []).map((v: any) => ({
+                ...v, quantita: parseFloat(v.quantita) || 0,
                 prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
-                importo_totale: parseFloat(v.importo_totale) || 0,
-                approvata: true
+                importo_totale: parseFloat(v.importo_totale) || 0, approvata: true
               })),
-              progetto_id: '', note: '',
-              stato: 'approvazione',
-              nomefile: file.name
+              progetto_id: '', note: '', stato: 'approvazione', nomefile: file.name
             }
             setBolle(prev => {
-              const nuove = [...prev, nuovaBolla]
               if (prev.length === 0) setBollaAttiva(nuovaBolla.id)
-              return nuove
+              return [...prev, nuovaBolla]
             })
           }
         }
