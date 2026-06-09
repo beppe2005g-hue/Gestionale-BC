@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { google } from '@ai-sdk/google'
-import { generateText } from 'ai'
 
 export const maxDuration = 60
 
@@ -15,35 +13,52 @@ export async function POST(req: NextRequest) {
 
     const isPDF = mediaType === 'application/pdf'
 
+    const contentBlock = isPDF
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
+      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } }
+
     const prompt = isPDF
-      ? `Questo PDF contiene una o più bolle DDT italiane. Analizza TUTTE le pagine ed estrai TUTTI i DDT. Restituisci SOLO un array JSON valido senza testo prima o dopo:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]`
+      ? `Questo PDF contiene più bolle DDT italiane. Analizza TUTTE le pagine ed estrai TUTTI i DDT. Restituisci SOLO un array JSON valido senza testo prima o dopo, con un elemento per ogni DDT trovato:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]`
       : `Analizza questa bolla DDT italiana. Restituisci SOLO un array JSON:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]\nSe non è un DDT: [{"skip":true}]`
 
-    const contentParts: any[] = [
-      isPDF
-        ? { type: 'file', data: base64, mimeType: mediaType }
-        : { type: 'image', image: base64, mimeType: mediaType },
-      { type: 'text', text: prompt }
-    ]
-
-    const { text } = await generateText({
-      model: google('gemini-3.5-flash'),
-      messages: [{ role: 'user', content: contentParts }]
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY || '',
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 8000,
+        messages: [{
+          role: 'user',
+          content: [contentBlock, { type: 'text', text: prompt }]
+        }]
+      })
     })
+
+    if (!response.ok) {
+      const err = await response.text()
+      return NextResponse.json({ error: `Errore API ${response.status}: ${err}` }, { status: 500 })
+    }
+
+    const data = await response.json()
+    const testo = data.content?.[0]?.text || ''
 
     let parsed
     try {
-      parsed = JSON.parse(text)
+      parsed = JSON.parse(testo)
     } catch {
-      const arrStart = text.indexOf('[')
-      const arrEnd = text.lastIndexOf(']')
-      const objStart = text.indexOf('{')
-      const objEnd = text.lastIndexOf('}')
+      const arrStart = testo.indexOf('[')
+      const arrEnd = testo.lastIndexOf(']')
+      const objStart = testo.indexOf('{')
+      const objEnd = testo.lastIndexOf('}')
       let jsonStr = ''
       if (arrStart !== -1 && arrEnd !== -1) {
-        jsonStr = text.slice(arrStart, arrEnd + 1)
+        jsonStr = testo.slice(arrStart, arrEnd + 1)
       } else if (objStart !== -1 && objEnd !== -1) {
-        jsonStr = `[${text.slice(objStart, objEnd + 1)}]`
+        jsonStr = `[${testo.slice(objStart, objEnd + 1)}]`
       } else {
         return NextResponse.json({ parsed: [] })
       }
@@ -56,7 +71,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ parsed: filtrati })
 
   } catch (e: any) {
-    console.error('Route error:', e)
     return NextResponse.json({ error: e.message }, { status: 500 })
   }
 }
