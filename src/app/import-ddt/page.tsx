@@ -72,8 +72,14 @@ export default function ImportDDT() {
         try {
           const arrayBuffer = await file.arrayBuffer()
           const pdfJS = await import('pdfjs-dist')
-          pdfJS.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfJS.version}/pdf.worker.min.js`
-          const pdfDoc = await pdfJS.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
+          // Disabilita worker — usa modalità sincrona nel browser
+          pdfJS.GlobalWorkerOptions.workerSrc = ''
+          const pdfDoc = await pdfJS.getDocument({ 
+            data: new Uint8Array(arrayBuffer),
+            useWorkerFetch: false,
+            isEvalSupported: false,
+            useSystemFonts: true
+          }).promise
           const numPages = pdfDoc.numPages
           console.log(`PDF: ${numPages} pagine`)
 
