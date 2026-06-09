@@ -12,28 +12,22 @@ export async function POST(req: NextRequest) {
     }
 
     const apiKey = process.env.GOOGLE_API_KEY || ''
-    console.log('API Key presente:', apiKey ? 'SI (' + apiKey.length + ' chars)' : 'NO')
     const isPDF = mediaType === 'application/pdf'
 
     const prompt = isPDF
-      ? `Questo PDF contiene una o più bolle DDT italiane, una per pagina. Analizza TUTTE le pagine ed estrai TUTTI i DDT trovati. Restituisci SOLO un array JSON valido senza testo prima o dopo, con un elemento per ogni DDT:
-[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]`
-      : `Analizza questa bolla DDT italiana. Restituisci SOLO un array JSON valido senza testo prima o dopo:
-[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]
-Se non è un DDT rispondi: [{"skip":true}]`
+      ? `Questo PDF contiene una o più bolle DDT italiane. Analizza TUTTE le pagine ed estrai TUTTI i DDT. Restituisci SOLO un array JSON valido senza testo prima o dopo:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]`
+      : `Analizza questa bolla DDT italiana. Restituisci SOLO un array JSON:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]\nSe non è un DDT: [{"skip":true}]`
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{
-            parts: [
-              { inline_data: { mime_type: mediaType, data: base64 } },
-              { text: prompt }
-            ]
-          }],
+          contents: [{ parts: [
+            { inline_data: { mime_type: mediaType, data: base64 } },
+            { text: prompt }
+          ]}],
           generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
         })
       }
@@ -41,7 +35,6 @@ Se non è un DDT rispondi: [{"skip":true}]`
 
     if (!response.ok) {
       const err = await response.text()
-      console.error('Gemini error:', response.status, err)
       return NextResponse.json({ error: `Errore Gemini ${response.status}: ${err}` }, { status: 500 })
     }
 
@@ -73,7 +66,6 @@ Se non è un DDT rispondi: [{"skip":true}]`
     return NextResponse.json({ parsed: filtrati })
 
   } catch (e: any) {
-    console.error('Route error:', e)
     return NextResponse.json({ error: e.message }, { status: 500 })
   }
 }
