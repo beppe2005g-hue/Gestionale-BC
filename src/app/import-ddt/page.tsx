@@ -72,14 +72,9 @@ export default function ImportDDT() {
         try {
           const arrayBuffer = await file.arrayBuffer()
           const pdfJS = await import('pdfjs-dist')
-          // Disabilita worker — usa modalità sincrona nel browser
-          pdfJS.GlobalWorkerOptions.workerSrc = ''
-          const pdfDoc = await pdfJS.getDocument({ 
-            data: new Uint8Array(arrayBuffer),
-            useWorkerFetch: false,
-            isEvalSupported: false,
-            useSystemFonts: true
-          }).promise
+          const workerSrc = await import('pdfjs-dist/build/pdf.worker.mjs')
+          pdfJS.GlobalWorkerOptions.workerSrc = workerSrc.default || workerSrc
+          const pdfDoc = await pdfJS.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
           const numPages = pdfDoc.numPages
           console.log(`PDF: ${numPages} pagine`)
 
