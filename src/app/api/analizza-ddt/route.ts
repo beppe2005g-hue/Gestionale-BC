@@ -16,22 +16,19 @@ export async function POST(req: NextRequest) {
     const isPDF = mediaType === 'application/pdf'
 
     const prompt = isPDF
-      ? `Questo PDF contiene una o più bolle DDT italiane. Analizza TUTTE le pagine ed estrai TUTTI i DDT. Restituisci SOLO un array JSON valido senza testo prima o dopo, con un elemento per ogni DDT trovato:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]`
+      ? `Questo PDF contiene una o più bolle DDT italiane. Analizza TUTTE le pagine ed estrai TUTTI i DDT. Restituisci SOLO un array JSON valido senza testo prima o dopo:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]`
       : `Analizza questa bolla DDT italiana. Restituisci SOLO un array JSON:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]\nSe non è un DDT: [{"skip":true}]`
+
+    const contentParts: any[] = [
+      isPDF
+        ? { type: 'file', data: base64, mimeType: mediaType }
+        : { type: 'image', image: base64, mimeType: mediaType },
+      { type: 'text', text: prompt }
+    ]
 
     const { text } = await generateText({
       model: google('gemini-2.0-flash'),
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: isPDF ? 'file' : 'image',
-            data: base64,
-            mimeType: mediaType
-          },
-          { type: 'text', text: prompt }
-        ]
-      }]
+      messages: [{ role: 'user', content: contentParts }]
     })
 
     let parsed
