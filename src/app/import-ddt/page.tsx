@@ -36,7 +36,6 @@ export default function ImportDDT() {
   async function caricaFile(files: FileList | null) {
     if (!files || elaborando) return
     setElaborando(true)
-
     for (const file of Array.from(files)) {
       setProgressoTesto(`Analisi di ${file.name}...`)
       try {
@@ -46,29 +45,45 @@ export default function ImportDDT() {
           reader.onerror = reject
           reader.readAsDataURL(file)
         })
-
-       const response = await fetch('/api/analizza-ddt', {
+        const response = await fetch('/api/analizza-ddt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ base64, mediaType: file.type })
         })
-
         if (!response.ok) {
           const err = await response.json()
           throw new Error(err.error || 'Errore API ' + response.status)
         }
-
         const data = await response.json()
         if (data.error) throw new Error(data.error)
-
         const ddtArray: any[] = data.parsed || []
         for (const p of ddtArray) {
           if (p && !p.skip && p.numero !== undefined) {
+            const nuovaBolla: BollaDDT = {
+              id: Math.random().toString(36).slice(2),
+              numero: p.numero || '',
+              data: p.data || new Date().toISOString().split('T')[0],
+              fornitore_nome: p.fornitore_nome || '',
+              fornitore_piva: p.fornitore_piva || '',
+              voci: (p.voci || []).map((v: any) => ({
+                ...v,
+                quantita: parseFloat(v.quantita) || 0,
+                prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
+                importo_totale: parseFloat(v.importo_totale) || 0,
+                approvata: true
+              })),
+              progetto_id: '', note: '', stato: 'approvazione', nomefile: file.name
+            }
+            setBolle(prev => {
+              if (prev.length === 0) setBollaAttiva(nuovaBolla.id)
+              return [...prev, nuovaBolla]
+            })
+          }
+        }
       } catch (e: any) {
         alert(`Errore su ${file.name}: ${e.message}`)
       }
     }
-
     setElaborando(false)
     setProgressoTesto('')
   }
@@ -105,73 +120,48 @@ export default function ImportDDT() {
     if (!bolla.progetto_id) { alert('Seleziona il cantiere'); return }
     const vociOk = bolla.voci.filter(v => v.approvata && v.descrizione)
     if (vociOk.length === 0) { alert('Approva almeno una voce'); return }
-
     setSalvando(true)
     let { data: fornExist } = await supabase.from('fornitori').select('id').ilike('ragione_sociale', `%${bolla.fornitore_nome}%`).limit(1)
     let fornitoreId = fornExist?.[0]?.id
     if (!fornitoreId) {
       const { data: nf } = await supabase.from('fornitori').insert({
-        ragione_sociale: bolla.fornitore_nome, cf_piva: bolla.fornitore_piva,
-        categoria: 'Materiali', attivo: true
+        ragione_sociale: bolla.fornitore_nome, cf_piva: bolla.fornitore_piva, categoria: 'Materiali', attivo: true
       }).select('id').single()
       fornitoreId = nf?.id
     }
     const prj = progetti.find(p => p.id === bolla.progetto_id)
     const importoTotale = vociOk.reduce((s, v) => s + v.importo_totale, 0)
     const { data: ddtCreato } = await supabase.from('ddt').insert({
-      data: bolla.data, numero: bolla.numero,
-      fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome,
-      progetto_id: bolla.progetto_id,
-      progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
-      descrizione: `DDT con ${vociOk.length} voci`,
-      importo: importoTotale, stato: 'Da Fatturare', note: bolla.note
+      data: bolla.data, numero: bolla.numero, fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome,
+      progetto_id: bolla.progetto_id, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
+      descrizione: `DDT con ${vociOk.length} voci`, importo: importoTotale, stato: 'Da Fatturare', note: bolla.note
     }).select('id').single()
-
     if (ddtCreato) {
       for (const voce of vociOk) {
         await supabase.from('ddt_voci').insert({
-          ddt_id: ddtCreato.id, descrizione: voce.descrizione,
-          categoria: voce.categoria, macro_categoria: voce.macro_categoria,
-          unita_misura: voce.unita_misura, quantita: voce.quantita,
-          prezzo_unitario: voce.prezzo_unitario, importo_totale: voce.importo_totale,
+          ddt_id: ddtCreato.id, descrizione: voce.descrizione, categoria: voce.categoria,
+          macro_categoria: voce.macro_categoria, unita_misura: voce.unita_misura,
+          quantita: voce.quantita, prezzo_unitario: voce.prezzo_unitario, importo_totale: voce.importo_totale,
           fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome, data_ddt: bolla.data
         })
         if (voce.prezzo_unitario > 0 && voce.descrizione) {
-          const { data: pe } = await supabase.from('prezzario')
-            .select('id,prezzo_medio,n_acquisti')
-            .ilike('descrizione', voce.descrizione)
-            .eq('fornitore_nome', bolla.fornitore_nome).limit(1)
+          const { data: pe } = await supabase.from('prezzario').select('id,prezzo_medio,n_acquisti').ilike('descrizione', voce.descrizione).eq('fornitore_nome', bolla.fornitore_nome).limit(1)
           if (pe && pe.length > 0) {
             const p = pe[0]
             const media = ((p.prezzo_medio * p.n_acquisti) + voce.prezzo_unitario) / (p.n_acquisti + 1)
-            await supabase.from('prezzario').update({
-              ultimo_prezzo: voce.prezzo_unitario,
-              prezzo_medio: Math.round(media * 10000) / 10000,
-              ultima_data: bolla.data, n_acquisti: p.n_acquisti + 1
-            }).eq('id', p.id)
-            await supabase.from('prezzario_storico').insert({
-              prezzario_id: p.id, ddt_id: ddtCreato.id,
-              fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome,
-              prezzo_unitario: voce.prezzo_unitario, quantita: voce.quantita, data: bolla.data
-            })
+            await supabase.from('prezzario').update({ ultimo_prezzo: voce.prezzo_unitario, prezzo_medio: Math.round(media * 10000) / 10000, ultima_data: bolla.data, n_acquisti: p.n_acquisti + 1 }).eq('id', p.id)
+            await supabase.from('prezzario_storico').insert({ prezzario_id: p.id, ddt_id: ddtCreato.id, fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome, prezzo_unitario: voce.prezzo_unitario, quantita: voce.quantita, data: bolla.data })
           } else {
             const { data: np } = await supabase.from('prezzario').insert({
-              descrizione: voce.descrizione, categoria: voce.categoria,
-              macro_categoria: voce.macro_categoria, unita_misura: voce.unita_misura,
-              fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome,
-              ultimo_prezzo: voce.prezzo_unitario, prezzo_medio: voce.prezzo_unitario,
-              ultima_data: bolla.data, n_acquisti: 1
+              descrizione: voce.descrizione, categoria: voce.categoria, macro_categoria: voce.macro_categoria,
+              unita_misura: voce.unita_misura, fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome,
+              ultimo_prezzo: voce.prezzo_unitario, prezzo_medio: voce.prezzo_unitario, ultima_data: bolla.data, n_acquisti: 1
             }).select('id').single()
-            if (np) await supabase.from('prezzario_storico').insert({
-              prezzario_id: np.id, ddt_id: ddtCreato.id,
-              fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome,
-              prezzo_unitario: voce.prezzo_unitario, quantita: voce.quantita, data: bolla.data
-            })
+            if (np) await supabase.from('prezzario_storico').insert({ prezzario_id: np.id, ddt_id: ddtCreato.id, fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome, prezzo_unitario: voce.prezzo_unitario, quantita: voce.quantita, data: bolla.data })
           }
         }
       }
     }
-
     setBolle(prev => prev.map(b => b.id === bollaId ? { ...b, stato: 'salvato' } : b))
     setSalvando(false)
     const prossima = bolle.find(b => b.stato === 'approvazione' && b.id !== bollaId)
@@ -195,7 +185,6 @@ export default function ImportDDT() {
             <button className="btn" onClick={() => { setBolle([]); setBollaAttiva(null) }}>🗑 Svuota</button>
           )}
         </div>
-
         <div className="grid grid-cols-3 gap-4">
           <div className="space-y-3">
             <div className="card border-2 border-dashed border-blue-200 hover:border-blue-400 cursor-pointer text-center py-8"
@@ -204,19 +193,17 @@ export default function ImportDDT() {
               onDrop={e => { e.preventDefault(); caricaFile(e.dataTransfer.files) }}>
               <div className="text-4xl mb-3">📂</div>
               <p className="text-sm font-medium text-blue-700">Clicca o trascina i file</p>
-              <p className="text-xs text-gray-400 mt-1">JPG, PNG, PDF (anche multipagina)</p>
+              <p className="text-xs text-gray-400 mt-1">JPG, PNG, PDF anche multipagina</p>
               <input ref={inputRef} type="file" accept="image/*,.pdf" multiple className="hidden"
                 onChange={e => caricaFile(e.target.files)} />
             </div>
-
             {elaborando && (
               <div className="card text-center py-6">
                 <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-                <p className="text-sm text-blue-700">Gemini sta analizzando...</p>
+                <p className="text-sm text-blue-700">Analisi in corso...</p>
                 <p className="text-xs text-gray-400 mt-1">{progressoTesto}</p>
               </div>
             )}
-
             {bolle.length > 0 && (
               <>
                 <div className="grid grid-cols-2 gap-2">
@@ -254,7 +241,6 @@ export default function ImportDDT() {
               </>
             )}
           </div>
-
           <div className="col-span-2">
             {!bollaCorrente || bollaCorrente.stato === 'salvato' ? (
               <div className="card h-full flex items-center justify-center text-gray-400 min-h-96">
@@ -278,7 +264,6 @@ export default function ImportDDT() {
                   </div>
                   <span className="text-green-600 font-medium">{bolleSalvate.length} salvate</span>
                 </div>
-
                 <div className="card">
                   <h3 className="text-sm font-medium text-gray-600 mb-3">📋 {bollaCorrente.nomefile}</h3>
                   <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -308,7 +293,6 @@ export default function ImportDDT() {
                     </div>
                   </div>
                 </div>
-
                 <div className="card">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-medium text-gray-600">📦 Voci ({bollaCorrente.voci.length})</h3>
@@ -343,7 +327,6 @@ export default function ImportDDT() {
                     <span className="font-semibold text-sm">{euro(bollaCorrente.voci.filter(v => v.approvata).reduce((s, v) => s + v.importo_totale, 0))}</span>
                   </div>
                 </div>
-
                 <div className="flex gap-3 justify-end">
                   <button className="btn" onClick={() => {
                     const prossima = bolle.find(b => b.stato === 'approvazione' && b.id !== bollaCorrente.id)
@@ -361,4 +344,3 @@ export default function ImportDDT() {
     </div>
   )
 }
- 
