@@ -48,8 +48,7 @@ export default function ImportDDT() {
         })
 
         // Chiama Gemini direttamente dal browser
-        const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY || ''
-        const isPDF = file.type === 'application/pdf'
+const apiKey = 'AQ.Ab8RN6KdjVQSI7xJ0NBj3kbcmWYHHDxmgmIYFR91WsjPn6QM8w'        const isPDF = file.type === 'application/pdf'
         const prompt = isPDF
           ? `Questo PDF contiene una o più bolle DDT italiane. Analizza TUTTE le pagine ed estrai TUTTI i DDT. Restituisci SOLO un array JSON valido senza testo prima o dopo:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]`
           : `Analizza questa bolla DDT italiana. Restituisci SOLO un array JSON senza testo prima o dopo:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]\nSe non è un DDT rispondi: [{"skip":true}]`
