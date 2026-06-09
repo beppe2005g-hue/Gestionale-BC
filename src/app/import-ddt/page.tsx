@@ -18,34 +18,6 @@ interface BollaDDT {
   stato: 'approvazione' | 'salvato'; nomefile: string
 }
 
-// Renderizza una pagina PDF come immagine JPEG base64
-async function renderizzaPaginaPDF(pdfDoc: any, pageNum: number): Promise<string> {
-  const page = await pdfDoc.getPage(pageNum)
-  const viewport = page.getViewport({ scale: 1.5 })
-  const canvas = document.createElement('canvas')
-  canvas.width = viewport.width
-  canvas.height = viewport.height
-  const ctx = canvas.getContext('2d')!
-  await page.render({ canvasContext: ctx, viewport }).promise
-  return canvas.toDataURL('image/jpeg', 0.75).split(',')[1]
-}
-
-// Chiama l'API per analizzare una singola immagine
-async function analizzaImmagine(base64: string): Promise<any> {
-  const response = await fetch('/api/analizza-ddt', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ base64, mediaType: 'image/jpeg' })
-  })
-  if (!response.ok) {
-    const err = await response.json()
-    throw new Error(err.error || 'Errore API')
-  }
-  const data = await response.json()
-  if (data.error) throw new Error(data.error)
-  return data.parsed // array
-}
-
 export default function ImportDDT() {
   const [bolle, setBolle] = useState<BollaDDT[]>([])
   const [bollaAttiva, setBollaAttiva] = useState<string | null>(null)
@@ -64,113 +36,61 @@ export default function ImportDDT() {
   async function caricaFile(files: FileList | null) {
     if (!files || elaborando) return
     setElaborando(true)
-    const nuoveBolle: BollaDDT[] = []
 
     for (const file of Array.from(files)) {
-      if (file.type === 'application/pdf') {
-        setProgressoTesto(`Apertura PDF: ${file.name}`)
-        try {
-          const arrayBuffer = await file.arrayBuffer()
-          const pdfJS = await import('pdfjs-dist')
-          const workerSrc = await import('pdfjs-dist/build/pdf.worker.mjs')
-          pdfJS.GlobalWorkerOptions.workerSrc = workerSrc.default || workerSrc
-          const pdfDoc = await pdfJS.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
-          const numPages = pdfDoc.numPages
-          console.log(`PDF: ${numPages} pagine`)
+      setProgressoTesto(`Analisi di ${file.name}...`)
+      try {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve((reader.result as string).split(',')[1])
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
 
-          for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-            setProgressoTesto(`Analisi pagina ${pageNum}/${numPages}...`)
-            try {
-              const imgBase64 = await renderizzaPaginaPDF(pdfDoc, pageNum)
-              const ddtArray = await analizzaImmagine(imgBase64)
-              for (const parsed of ddtArray) {
-                if (parsed && !parsed.skip && parsed.numero !== undefined) {
-                  const nuovaBolla: BollaDDT = {
-                    id: Math.random().toString(36).slice(2),
-                    numero: parsed.numero || '',
-                    data: parsed.data || new Date().toISOString().split('T')[0],
-                    fornitore_nome: parsed.fornitore_nome || '',
-                    fornitore_piva: parsed.fornitore_piva || '',
-                    voci: (parsed.voci || []).map((v: any) => ({
-                      ...v,
-                      quantita: parseFloat(v.quantita) || 0,
-                      prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
-                      importo_totale: parseFloat(v.importo_totale) || 0,
-                      approvata: true
-                    })),
-                    progetto_id: '',
-                    note: '',
-                    stato: 'approvazione',
-                    nomefile: `${file.name} — pag. ${pageNum}`
-                  }
-                  nuoveBolle.push(nuovaBolla)
-                  // Aggiorna lista in tempo reale
-                  setBolle(prev => [...prev, nuovaBolla])
-                  // Apri la prima bolla trovata subito
-                  if (nuoveBolle.length === 1) setBollaAttiva(nuovaBolla.id)
-                }
-              }
-            } catch (e: any) {
-              console.warn(`Pagina ${pageNum} saltata:`, e.message)
-            }
-          }
-        } catch (pdfErr: any) {
-          console.error('Errore PDF:', pdfErr)
-          alert(`Errore apertura PDF: ${pdfErr.message}`)
+        const response = await fetch('/api/analizza-ddt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64, mediaType: file.type })
+        })
+
+        if (!response.ok) {
+          const err = await response.json()
+          throw new Error(err.error || 'Errore API')
         }
-      } else if (file.type.startsWith('image/')) {
-        // Immagine singola
-        setProgressoTesto(`Analisi immagine: ${file.name}`)
-        try {
-          const base64Raw = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader()
-            reader.onload = () => resolve((reader.result as string).split(',')[1])
-            reader.onerror = reject
-            reader.readAsDataURL(file)
-          })
-          // Comprimi
-          const compressed = await new Promise<string>((resolve) => {
-            const img = new Image()
-            img.onload = () => {
-              const canvas = document.createElement('canvas')
-              const maxSize = 1200
-              let w = img.width, h = img.height
-              if (w > maxSize || h > maxSize) {
-                if (w > h) { h = Math.round(h * maxSize / w); w = maxSize }
-                else { w = Math.round(w * maxSize / h); h = maxSize }
-              }
-              canvas.width = w; canvas.height = h
-              canvas.getContext('2d')!.drawImage(img, 0, 0, w, h)
-              resolve(canvas.toDataURL('image/jpeg', 0.75).split(',')[1])
+
+        const data = await response.json()
+        if (data.error) throw new Error(data.error)
+
+        const ddtArray: any[] = data.parsed || []
+        for (const parsed of ddtArray) {
+          if (parsed && !parsed.skip && parsed.numero !== undefined) {
+            const nuovaBolla: BollaDDT = {
+              id: Math.random().toString(36).slice(2),
+              numero: parsed.numero || '',
+              data: parsed.data || new Date().toISOString().split('T')[0],
+              fornitore_nome: parsed.fornitore_nome || '',
+              fornitore_piva: parsed.fornitore_piva || '',
+              voci: (parsed.voci || []).map((v: any) => ({
+                ...v,
+                quantita: parseFloat(v.quantita) || 0,
+                prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
+                importo_totale: parseFloat(v.importo_totale) || 0,
+                approvata: true
+              })),
+              progetto_id: '', note: '',
+              stato: 'approvazione',
+              nomefile: file.name
             }
-            img.src = 'data:' + file.type + ';base64,' + base64Raw
-          })
-          const ddtArray = await analizzaImmagine(compressed)
-          for (const parsed of ddtArray) {
-            if (parsed && !parsed.skip) {
-              nuoveBolle.push({
-                id: Math.random().toString(36).slice(2),
-                numero: parsed.numero || '',
-                data: parsed.data || new Date().toISOString().split('T')[0],
-                fornitore_nome: parsed.fornitore_nome || '',
-                fornitore_piva: parsed.fornitore_piva || '',
-                voci: (parsed.voci || []).map((v: any) => ({
-                  ...v,
-                  quantita: parseFloat(v.quantita) || 0,
-                  prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
-                  importo_totale: parseFloat(v.importo_totale) || 0,
-                  approvata: true
-                })),
-                progetto_id: '',
-                note: '',
-                stato: 'approvazione',
-                nomefile: file.name
-              })
-            }
+            setBolle(prev => {
+              const nuove = [...prev, nuovaBolla]
+              if (prev.length === 0) setBollaAttiva(nuovaBolla.id)
+              return nuove
+            })
           }
-        } catch (e: any) {
-          console.warn(`Immagine saltata:`, e.message)
         }
+      } catch (e: any) {
+        console.error(`Errore file ${file.name}:`, e.message)
+        alert(`Errore su ${file.name}: ${e.message}`)
       }
     }
 
@@ -266,7 +186,7 @@ export default function ImportDDT() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-xl font-semibold">Import DDT con AI</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Carica foto o PDF — l'AI analizza ogni pagina separatamente</p>
+            <p className="text-sm text-gray-500 mt-0.5">Carica foto o PDF — Gemini AI analizza tutto automaticamente</p>
           </div>
           {bolle.length > 0 && !elaborando && (
             <button className="btn" onClick={() => { setBolle([]); setBollaAttiva(null) }}>🗑 Svuota tutto</button>
@@ -274,7 +194,6 @@ export default function ImportDDT() {
         </div>
 
         <div className="grid grid-cols-3 gap-4">
-          {/* Colonna sinistra */}
           <div className="space-y-3">
             <div className="card border-2 border-dashed border-blue-200 hover:border-blue-400 cursor-pointer text-center py-8 transition-all"
               onClick={() => !elaborando && inputRef.current?.click()}
@@ -282,7 +201,7 @@ export default function ImportDDT() {
               onDrop={e => { e.preventDefault(); caricaFile(e.dataTransfer.files) }}>
               <div className="text-4xl mb-3">📂</div>
               <p className="text-sm font-medium text-blue-700">Clicca o trascina i file</p>
-              <p className="text-xs text-gray-400 mt-1">JPG, PNG, PDF multipagina</p>
+              <p className="text-xs text-gray-400 mt-1">JPG, PNG, PDF (anche multipagina)</p>
               <input ref={inputRef} type="file" accept="image/*,.pdf" multiple className="hidden"
                 onChange={e => caricaFile(e.target.files)} />
             </div>
@@ -290,7 +209,7 @@ export default function ImportDDT() {
             {elaborando && (
               <div className="card text-center py-6">
                 <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-                <p className="text-sm font-medium text-blue-700">Analisi in corso...</p>
+                <p className="text-sm font-medium text-blue-700">Gemini sta analizzando...</p>
                 <p className="text-xs text-gray-400 mt-1">{progressoTesto}</p>
               </div>
             )}
@@ -307,29 +226,23 @@ export default function ImportDDT() {
                     <p className="text-xs text-gray-400">Salvate</p>
                   </div>
                 </div>
-
                 <div className="card p-0 overflow-hidden">
                   <div className="px-3 py-2 bg-gray-50 border-b border-gray-100">
                     <span className="text-xs font-medium text-gray-600">{bolle.length} bolle trovate</span>
                   </div>
                   <div className="max-h-96 overflow-y-auto">
                     {bolle.map(b => (
-                      <div key={b.id}
-                        onClick={() => b.stato === 'approvazione' && setBollaAttiva(b.id)}
+                      <div key={b.id} onClick={() => b.stato === 'approvazione' && setBollaAttiva(b.id)}
                         className={`flex items-center gap-2 px-3 py-2 border-b border-gray-50 cursor-pointer transition-all ${bollaAttiva === b.id ? 'bg-amber-50' : 'hover:bg-gray-50'}`}>
                         <span className="text-base">{b.stato === 'salvato' ? '✅' : '✋'}</span>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium truncate">{b.numero || '(senza numero)'} — {b.fornitore_nome || '?'}</p>
                           <p className="text-xs text-gray-400 truncate">{b.nomefile}</p>
                         </div>
-                        {b.stato === 'approvazione' && bollaAttiva !== b.id && (
-                          <span className="text-xs text-amber-600 font-medium">Apri</span>
-                        )}
                       </div>
                     ))}
                   </div>
                 </div>
-
                 {bolleApprovazione.length > 0 && !bollaAttiva && (
                   <button className="btn btn-primary w-full" onClick={() => setBollaAttiva(bolleApprovazione[0].id)}>
                     ✋ Inizia approvazione ({bolleApprovazione.length})
@@ -339,12 +252,11 @@ export default function ImportDDT() {
             )}
           </div>
 
-          {/* Colonna destra: approvazione */}
           <div className="col-span-2">
             {!bollaCorrente || bollaCorrente.stato === 'salvato' ? (
               <div className="card h-full flex items-center justify-center text-gray-400 min-h-96">
                 <div className="text-center">
-                  <p className="text-4xl mb-3">{elaborando ? '🔄' : bolleSalvate.length === bolle.length && bolle.length > 0 ? '🎉' : '📋'}</p>
+                  <p className="text-4xl mb-3">{elaborando ? '🤖' : bolleSalvate.length === bolle.length && bolle.length > 0 ? '🎉' : '📋'}</p>
                   <p className="text-sm">
                     {elaborando ? progressoTesto :
                      bolleSalvate.length === bolle.length && bolle.length > 0 ? `Tutte le ${bolle.length} bolle salvate!` :
