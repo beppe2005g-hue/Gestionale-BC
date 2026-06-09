@@ -68,44 +68,54 @@ export default function ImportDDT() {
 
     for (const file of Array.from(files)) {
       if (file.type === 'application/pdf') {
-        // PDF: usa pdfjs per renderizzare pagina per pagina
         setProgressoTesto(`Apertura PDF: ${file.name}`)
-        const arrayBuffer = await file.arrayBuffer()
-        const pdfJS = await import('pdfjs-dist')
-        pdfJS.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfJS.version}/pdf.worker.min.mjs`
-        const pdfDoc = await pdfJS.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
-        const numPages = pdfDoc.numPages
+        try {
+          const arrayBuffer = await file.arrayBuffer()
+          const pdfJS = await import('pdfjs-dist')
+          pdfJS.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfJS.version}/pdf.worker.min.js`
+          const pdfDoc = await pdfJS.getDocument({ data: new Uint8Array(arrayBuffer) }).promise
+          const numPages = pdfDoc.numPages
+          console.log(`PDF: ${numPages} pagine`)
 
-        for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-          setProgressoTesto(`Analisi pagina ${pageNum}/${numPages} di ${file.name}...`)
-          try {
-            const imgBase64 = await renderizzaPaginaPDF(pdfDoc, pageNum)
-            const ddtArray = await analizzaImmagine(imgBase64)
-            for (const parsed of ddtArray) {
-              if (parsed && !parsed.skip && parsed.numero !== undefined) {
-                nuoveBolle.push({
-                  id: Math.random().toString(36).slice(2),
-                  numero: parsed.numero || '',
-                  data: parsed.data || new Date().toISOString().split('T')[0],
-                  fornitore_nome: parsed.fornitore_nome || '',
-                  fornitore_piva: parsed.fornitore_piva || '',
-                  voci: (parsed.voci || []).map((v: any) => ({
-                    ...v,
-                    quantita: parseFloat(v.quantita) || 0,
-                    prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
-                    importo_totale: parseFloat(v.importo_totale) || 0,
-                    approvata: true
-                  })),
-                  progetto_id: '',
-                  note: '',
-                  stato: 'approvazione',
-                  nomefile: `${file.name} — pag. ${pageNum}`
-                })
+          for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+            setProgressoTesto(`Analisi pagina ${pageNum}/${numPages}...`)
+            try {
+              const imgBase64 = await renderizzaPaginaPDF(pdfDoc, pageNum)
+              const ddtArray = await analizzaImmagine(imgBase64)
+              for (const parsed of ddtArray) {
+                if (parsed && !parsed.skip && parsed.numero !== undefined) {
+                  const nuovaBolla: BollaDDT = {
+                    id: Math.random().toString(36).slice(2),
+                    numero: parsed.numero || '',
+                    data: parsed.data || new Date().toISOString().split('T')[0],
+                    fornitore_nome: parsed.fornitore_nome || '',
+                    fornitore_piva: parsed.fornitore_piva || '',
+                    voci: (parsed.voci || []).map((v: any) => ({
+                      ...v,
+                      quantita: parseFloat(v.quantita) || 0,
+                      prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
+                      importo_totale: parseFloat(v.importo_totale) || 0,
+                      approvata: true
+                    })),
+                    progetto_id: '',
+                    note: '',
+                    stato: 'approvazione',
+                    nomefile: `${file.name} — pag. ${pageNum}`
+                  }
+                  nuoveBolle.push(nuovaBolla)
+                  // Aggiorna lista in tempo reale
+                  setBolle(prev => [...prev, nuovaBolla])
+                  // Apri la prima bolla trovata subito
+                  if (nuoveBolle.length === 1) setBollaAttiva(nuovaBolla.id)
+                }
               }
+            } catch (e: any) {
+              console.warn(`Pagina ${pageNum} saltata:`, e.message)
             }
-          } catch (e: any) {
-            console.warn(`Pagina ${pageNum} saltata:`, e.message)
           }
+        } catch (pdfErr: any) {
+          console.error('Errore PDF:', pdfErr)
+          alert(`Errore apertura PDF: ${pdfErr.message}`)
         }
       } else if (file.type.startsWith('image/')) {
         // Immagine singola
@@ -163,8 +173,6 @@ export default function ImportDDT() {
       }
     }
 
-    setBolle(prev => [...prev, ...nuoveBolle])
-    if (nuoveBolle.length > 0) setBollaAttiva(nuoveBolle[0].id)
     setElaborando(false)
     setProgressoTesto('')
   }
