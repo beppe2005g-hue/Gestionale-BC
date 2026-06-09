@@ -47,7 +47,7 @@ export default function ImportDDT() {
           reader.readAsDataURL(file)
         })
 
-        const response = await fetch('/api/analizza-ddt', {
+       const response = await fetch('/api/analizza-ddt', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ base64, mediaType: file.type })
@@ -64,27 +64,6 @@ export default function ImportDDT() {
         const ddtArray: any[] = data.parsed || []
         for (const p of ddtArray) {
           if (p && !p.skip && p.numero !== undefined) {
-            const nuovaBolla: BollaDDT = {
-              id: Math.random().toString(36).slice(2),
-              numero: p.numero || '',
-              data: p.data || new Date().toISOString().split('T')[0],
-              fornitore_nome: p.fornitore_nome || '',
-              fornitore_piva: p.fornitore_piva || '',
-              voci: (p.voci || []).map((v: any) => ({
-                ...v,
-                quantita: parseFloat(v.quantita) || 0,
-                prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
-                importo_totale: parseFloat(v.importo_totale) || 0,
-                approvata: true
-              })),
-              progetto_id: '', note: '', stato: 'approvazione', nomefile: file.name
-            }
-            setBolle(prev => {
-              if (prev.length === 0) setBollaAttiva(nuovaBolla.id)
-              return [...prev, nuovaBolla]
-            })
-          }
-        }
       } catch (e: any) {
         alert(`Errore su ${file.name}: ${e.message}`)
       }
