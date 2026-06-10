@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export const maxDuration = 60
 
-async function callGemini(apiKey: string, body: any, retries = 3): Promise<any> {
+async function callGemini(apiKey: string, body: any, retries = 5): Promise<any> {
   for (let i = 0; i < retries; i++) {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
@@ -13,7 +13,7 @@ async function callGemini(apiKey: string, body: any, retries = 3): Promise<any> 
       }
     )
     if (res.status === 503 && i < retries - 1) {
-      await new Promise(r => setTimeout(r, 3000 * (i + 1)))
+      await new Promise(r => setTimeout(r, 5000 * (i + 1)))
       continue
     }
     return res
@@ -53,8 +53,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Errore Gemini ${genRes.status}: ${err}` }, { status: 500 })
     }
 
-    const genData = await genRes.json()
-    const testo = genData.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    const data = await genRes.json()
+    const testo = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+
+    if (!testo) {
+      return NextResponse.json({ parsed: [] })
+    }
 
     if (!testo) {
       return NextResponse.json({ parsed: [] })
