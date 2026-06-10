@@ -2,6 +2,24 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export const maxDuration = 60
 
+async function callGemini(apiKey: string, body: any, retries = 3): Promise<any> {
+  for (let i = 0; i < retries; i++) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }
+    )
+    if (res.status === 503 && i < retries - 1) {
+      await new Promise(r => setTimeout(r, 3000 * (i + 1)))
+      continue
+    }
+    return res
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -11,64 +29,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Nessuna pagina fornita' }, { status: 400 })
     }
 
-    // Costruisci il contenuto con tutte le pagine
-    const content: any[] = []
-    
+    const apiKey = process.env.GOOGLE_API_KEY || ''
+
+    const parts: any[] = []
     for (const pagina of pagine) {
       const { base64, mediaType } = pagina
-      const isImage = mediaType?.startsWith('image/')
-      
-      if (isImage) {
-        content.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } })
-      } else {
-        content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } })
+      if (base64 && mediaType) {
+        parts.push({ inline_data: { mime_type: mediaType, data: base64 } })
       }
     }
 
-    content.push({
-      type: 'text',
-      text: `Questo DDT è composto da ${pagine.length} pagine. Analizza tutte le pagine insieme e restituisci SOLO un oggetto JSON valido con questa struttura:
-{
-  "numero": "numero bolla",
-  "data": "YYYY-MM-DD",
-  "fornitore_nome": "nome fornitore",
-  "fornitore_piva": "partita iva",
-  "voci": [
-    {
-      "descrizione": "descrizione materiale",
-      "macro_categoria": "una di: Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro",
-      "categoria": "categoria specifica",
-      "unita_misura": "mc/kg/ml/pz/m2/t/l",
-      "quantita": 0.0,
-      "prezzo_unitario": 0.0,
-      "importo_totale": 0.0
-    }
-  ]
-}
-Estrai TUTTE le voci da tutte le pagine. Non duplicare voci già presenti.`
+    parts.push({
+      text: `Questo DDT è composto da ${pagine.length} pagine. Analizza tutte le pagine insieme e restituisci SOLO un oggetto JSON valido:\n{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}`
     })
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY || '',
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 4000,
-        messages: [{ role: 'user', content }]
-      })
+    const genRes = await callGemini(apiKey, {
+      contents: [{ parts }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
     })
 
-    if (!response.ok) {
-      const err = await response.text()
-      return NextResponse.json({ error: `Errore Anthropic ${response.status}: ${err}` }, { status: 500 })
+    if (!genRes.ok) {
+      const err = await genRes.text()
+      return NextResponse.json({ error: `Errore Gemini ${genRes.status}: ${err}` }, { status: 500 })
     }
 
-    const data = await response.json()
-    const testo = data.content?.[0]?.text || ''
+    const data = await genRes.json()
+    const testo = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
 
     let parsed
     try {
