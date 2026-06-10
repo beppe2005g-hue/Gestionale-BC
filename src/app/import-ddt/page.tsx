@@ -1,4 +1,4 @@
-// v2 'use client'
+'use client'
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
@@ -344,4 +344,3 @@ export default function ImportDDT() {
     </div>
   )
 }
-
