@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export const maxDuration = 60
 
-async function callGemini(apiKey: string, body: any, retries = 3): Promise<any> {
+async function callGemini(apiKey: string, body: any, retries = 5): Promise<any> {
   for (let i = 0; i < retries; i++) {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
@@ -13,7 +13,7 @@ async function callGemini(apiKey: string, body: any, retries = 3): Promise<any> 
       }
     )
     if (res.status === 503 && i < retries - 1) {
-      await new Promise(r => setTimeout(r, 3000 * (i + 1)))
+      await new Promise(r => setTimeout(r, 5000 * (i + 1)))
       continue
     }
     return res
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     }
 
     parts.push({
-      text: `DDT italiano. JSON only, no text:\n{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}`
+      text: `DDT italiano. JSON only:\n{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}`
     })
 
     const genRes = await callGemini(apiKey, {
@@ -55,6 +55,10 @@ export async function POST(req: NextRequest) {
 
     const data = await genRes.json()
     const testo = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+
+    if (!testo) {
+      return NextResponse.json({ error: 'Nessun testo da Gemini' }, { status: 500 })
+    }
 
     let parsed
     try {
