@@ -18,7 +18,7 @@ interface BollaDDT {
   stato: 'approvazione' | 'salvato'; nomefile: string
 }
 
-export default function ImportDDT() {
+export default function ImportDDTV2() {
   const [bolle, setBolle] = useState<BollaDDT[]>([])
   const [bollaAttiva, setBollaAttiva] = useState<string | null>(null)
   const [progetti, setProgetti] = useState<any[]>([])
