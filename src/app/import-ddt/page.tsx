@@ -45,18 +45,51 @@ export default function ImportDDTV2() {
           reader.onerror = reject
           reader.readAsDataURL(file)
         })
-        const response = await fetch('/api/analizza-ddt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ base64, mediaType: file.type })
-        })
-        if (!response.ok) {
-          const err = await response.json()
-          throw new Error(err.error || 'Errore API ' + response.status)
+        const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY || ''
+
+        let geminiResponse
+        for (let attempt = 0; attempt < 3; attempt++) {
+          geminiResponse = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{
+                  parts: [
+                    { inline_data: { mime_type: file.type, data: base64 } },
+                    { text: `DDT italiano. JSON array only:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]` }
+                  ]
+                }],
+                generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+              })
+            }
+          )
+          if (geminiResponse.status !== 503) break
+          await new Promise(r => setTimeout(r, 2000 * (attempt + 1)))
         }
-        const data = await response.json()
-        if (data.error) throw new Error(data.error)
-        const ddtArray: any[] = data.parsed || []
+
+        if (!geminiResponse || !geminiResponse.ok) {
+          const err = await geminiResponse?.json()
+          throw new Error(`Errore Gemini ${geminiResponse?.status}: ${err?.error?.message || 'errore sconosciuto'}`)
+        }
+
+        const geminiData = await geminiResponse.json()
+        const testo = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || ''
+
+        let parsed: any[]
+        try {
+          parsed = JSON.parse(testo)
+        } catch {
+          const arrStart = testo.indexOf('[')
+          const arrEnd = testo.lastIndexOf(']')
+          if (arrStart !== -1 && arrEnd !== -1) {
+            try { parsed = JSON.parse(testo.slice(arrStart, arrEnd + 1).replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}')) }
+            catch { parsed = [] }
+          } else { parsed = [] }
+        }
+
+        const ddtArray = Array.isArray(parsed) ? parsed : [parsed]
         for (const p of ddtArray) {
           if (p && !p.skip && p.numero !== undefined) {
             const nuovaBolla: BollaDDT = {
