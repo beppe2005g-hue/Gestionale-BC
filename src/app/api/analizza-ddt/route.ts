@@ -11,39 +11,99 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Parametri mancanti' }, { status: 400 })
     }
 
+    const apiKey = process.env.GOOGLE_API_KEY || ''
     const isPDF = mediaType === 'application/pdf'
 
     const prompt = isPDF
       ? `Questo PDF contiene più bolle DDT italiane. Analizza TUTTE le pagine ed estrai TUTTI i DDT. Restituisci SOLO un array JSON valido senza testo prima o dopo:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]`
       : `Analizza questa bolla DDT italiana. Restituisci SOLO un array JSON:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]\nSe non è un DDT: [{"skip":true}]`
 
-    const apiKey = process.env.GOOGLE_API_KEY || ''
+    let testo = ''
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { inline_data: { mime_type: mediaType, data: base64 } },
-              { text: prompt }
-            ]
-          }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
-        })
+    if (isPDF) {
+      // Step 1: carica il file su Gemini Files API
+      const fileBytes = Buffer.from(base64, 'base64')
+      
+      const uploadRes = await fetch(
+        `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/pdf',
+            'X-Goog-Upload-Protocol': 'raw',
+            'X-Goog-Upload-Command': 'upload, finalize',
+            'X-Goog-Upload-Header-Content-Length': fileBytes.length.toString(),
+            'X-Goog-Upload-Header-Content-Type': 'application/pdf',
+          },
+          body: fileBytes
+        }
+      )
+
+      if (!uploadRes.ok) {
+        const err = await uploadRes.text()
+        return NextResponse.json({ error: `Upload fallito: ${err}` }, { status: 500 })
       }
-    )
 
-    if (!response.ok) {
-      const err = await response.text()
-      console.error('Gemini error:', response.status, err)
-      return NextResponse.json({ error: `Errore Gemini ${response.status}: ${err}` }, { status: 500 })
+      const uploadData = await uploadRes.json()
+      const fileUri = uploadData.file?.uri
+
+      if (!fileUri) {
+        return NextResponse.json({ error: 'URI file non ricevuto' }, { status: 500 })
+      }
+
+      // Step 2: analizza con il file URI
+      const genRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { file_data: { mime_type: 'application/pdf', file_uri: fileUri } },
+                { text: prompt }
+              ]
+            }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
+          })
+        }
+      )
+
+      if (!genRes.ok) {
+        const err = await genRes.text()
+        return NextResponse.json({ error: `Errore Gemini: ${err}` }, { status: 500 })
+      }
+
+      const genData = await genRes.json()
+      testo = genData.candidates?.[0]?.content?.parts?.[0]?.text || ''
+
+    } else {
+      // Immagine: inline_data funziona
+      const genRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { inline_data: { mime_type: mediaType, data: base64 } },
+                { text: prompt }
+              ]
+            }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
+          })
+        }
+      )
+
+      if (!genRes.ok) {
+        const err = await genRes.text()
+        return NextResponse.json({ error: `Errore Gemini: ${err}` }, { status: 500 })
+      }
+
+      const genData = await genRes.json()
+      testo = genData.candidates?.[0]?.content?.parts?.[0]?.text || ''
     }
-
-    const data = await response.json()
-    const testo = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
 
     let parsed
     try {
