@@ -19,6 +19,7 @@
     "pdfjs-dist": "^4.4.168",
     "ai": "^4.0.0",
     "@ai-sdk/google": "^1.0.0"
+    "jspdf": "^2.5.1",
   },
   "devDependencies": {
     "typescript": "^5",
