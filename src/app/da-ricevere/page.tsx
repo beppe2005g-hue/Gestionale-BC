@@ -3,8 +3,116 @@ import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import { logActivity } from '@/lib/logActivity'
+import jsPDF from 'jspdf'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+function generaAutorizzazionePDF(opts: {
+  fornitore: string, numeroFattura: string, impFattura: number,
+  ddtList: any[], note: string
+}) {
+  const { fornitore, numeroFattura, impFattura, ddtList, note } = opts
+  const totDdt = ddtList.reduce((s, d) => s + d.importo, 0)
+  const scostamento = impFattura - totDdt
+  const corrispondente = Math.abs(scostamento) < 0.02
+
+  const doc = new jsPDF()
+  let y = 20
+
+  doc.setFontSize(16)
+  doc.setFont('helvetica', 'bold')
+  doc.text('AUTORIZZAZIONE A PAGARE', 105, y, { align: 'center' })
+  y += 12
+
+  doc.setFontSize(10)
+  doc.setFont('helvetica', 'normal')
+  doc.text(`Data: ${new Date().toLocaleDateString('it-IT')}`, 14, y)
+  y += 7
+  doc.text(`Fornitore: ${fornitore}`, 14, y)
+  y += 7
+  doc.text(`Fattura n°: ${numeroFattura}`, 14, y)
+  y += 10
+
+  // Tabella DDT
+  doc.setFont('helvetica', 'bold')
+  doc.text('DDT abbinati', 14, y)
+  y += 6
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+
+  doc.text('Data', 14, y)
+  doc.text('N° DDT', 45, y)
+  doc.text('Cantiere', 85, y)
+  doc.text('Importo', 180, y, { align: 'right' })
+  y += 2
+  doc.line(14, y, 196, y)
+  y += 5
+
+  ddtList.forEach(d => {
+    if (y > 270) { doc.addPage(); y = 20 }
+    doc.text(d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—', 14, y)
+    doc.text(String(d.numero || ''), 45, y)
+    doc.text((d.progetto_nome || '—').substring(0, 40), 85, y)
+    doc.text(euro(d.importo), 196, y, { align: 'right' })
+    y += 6
+  })
+
+  y += 2
+  doc.line(14, y, 196, y)
+  y += 7
+
+  doc.setFontSize(10)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Totale DDT:', 140, y)
+  doc.text(euro(totDdt), 196, y, { align: 'right' })
+  y += 7
+  doc.text('Imponibile fattura:', 140, y)
+  doc.text(euro(impFattura), 196, y, { align: 'right' })
+  y += 10
+
+  // Stato
+  if (corrispondente) {
+    doc.setFillColor(220, 252, 231)
+    doc.setTextColor(22, 101, 52)
+    doc.rect(14, y - 5, 182, 10, 'F')
+    doc.text('✅ IMPORTI CORRISPONDENTI', 105, y + 1, { align: 'center' })
+  } else {
+    doc.setFillColor(254, 226, 226)
+    doc.setTextColor(153, 27, 27)
+    doc.rect(14, y - 5, 182, 10, 'F')
+    doc.text(`⚠️ SCOSTAMENTO: ${euro(scostamento)}`, 105, y + 1, { align: 'center' })
+  }
+  doc.setTextColor(0, 0, 0)
+  y += 16
+
+  // Note
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10)
+  doc.text('Note:', 14, y)
+  y += 6
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  if (note) {
+    const lines = doc.splitTextToSize(note, 182)
+    doc.text(lines, 14, y)
+    y += lines.length * 5 + 4
+  } else {
+    doc.rect(14, y, 182, 18)
+    y += 24
+  }
+
+  y = Math.max(y, 230)
+
+  // Firme affiancate
+  doc.setFont('helvetica', 'bold')
+  doc.text('Firma Tecnico', 45, y, { align: 'center' })
+  doc.text('Firma Titolare', 150, y, { align: 'center' })
+  y += 2
+  doc.line(20, y, 90, y)
+  doc.line(120, y, 190, y)
+
+  doc.save(`Autorizzazione_${numeroFattura.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`)
+}
 
 export default function DaRiceverePage() {
   const [tab, setTab] = useState<'aperte'|'fatturate'>('aperte')
@@ -17,19 +125,20 @@ export default function DaRiceverePage() {
   const [nFattura, setNFattura] = useState('')
   const [impFattura, setImpFattura] = useState('')
   const [scadenza, setScadenza] = useState('')
+  const [noteAbbinamento, setNoteAbbinamento] = useState('')
   const [ddtFornitore, setDdtFornitore] = useState<any[]>([])
   const [selezionati, setSelezionati] = useState<Set<string>>(new Set())
   const [filtroCantiere, setFiltroCantiere] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // Filtri tab aperte
   const [cercaFornitoreAperte, setCercaFornitoreAperte] = useState('')
 
-  // Filtri tab storico
   const [cercaFornitoreStorico, setCercaFornitoreStorico] = useState('')
   const [filtroStatoStorico, setFiltroStatoStorico] = useState('tutti')
   const [dataDAStorico, setDataDAStorico] = useState('')
   const [dataAStorico, setDataAStorico] = useState('')
+
+  const [noteStorico, setNoteStorico] = useState<Record<string, string>>({})
 
   useEffect(() => { load() }, [])
 
@@ -64,7 +173,7 @@ export default function DaRiceverePage() {
     setDdtFornitore(g ? g.ddt : [])
     setSelezionati(new Set())
     setFiltroCantiere('')
-    setNFattura(''); setImpFattura(''); setScadenza('')
+    setNFattura(''); setImpFattura(''); setScadenza(''); setNoteAbbinamento('')
     setModal(true)
   }
 
@@ -89,7 +198,6 @@ export default function DaRiceverePage() {
   const scostamento = parseFloat(impFattura || '0') - totSel
   const scostOk = Math.abs(scostamento) < 0.02 && selezionati.size > 0
 
-  // Gruppi filtrati (tab aperte)
   const gruppiFiltrati = useMemo(() => {
     if (!cercaFornitoreAperte) return gruppi
     return gruppi.filter(g => g.fornitore.toLowerCase().includes(cercaFornitoreAperte.toLowerCase()))
@@ -97,7 +205,6 @@ export default function DaRiceverePage() {
 
   const totaleAperte = gruppiFiltrati.reduce((s, g) => s + g.totale, 0)
 
-  // Fatture storico filtrate
   const fattureStoricFiltrate = useMemo(() => {
     return fattureChiuse.filter(f => {
       if (cercaFornitoreStorico && !f.fornitore_nome?.toLowerCase().includes(cercaFornitoreStorico.toLowerCase())) return false
@@ -119,6 +226,7 @@ export default function DaRiceverePage() {
     if (!nFattura || !impFattura) { alert('Inserisci N° fattura e importo'); return }
     if (selezionati.size === 0) { alert('Seleziona almeno un DDT'); return }
     setLoading(true)
+    const ddtSelezionati = ddtFornitore.filter(d => selezionati.has(d.id))
     await supabase.from('ddt').update({ stato: 'Fatturato', fattura_abbinata: nFattura }).in('id', Array.from(selezionati))
     const { data: inserted } = await supabase.from('fatture_fornitori').insert({
       data: new Date().toISOString().split('T')[0],
@@ -130,11 +238,31 @@ export default function DaRiceverePage() {
       rata1_importo: parseFloat(impFattura) * 1.22,
       rata1_scadenza: scadenza || null,
       rata1_stato: 'Da Pagare',
+      note: noteAbbinamento || null,
     }).select('id').single()
     await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `Abbinamento ${selezionati.size} DDT → Fattura ${nFattura} · ${fornSel} · € ${impFattura}`)
+
+    // Genera PDF autorizzazione
+    generaAutorizzazionePDF({
+      fornitore: fornSel,
+      numeroFattura: nFattura,
+      impFattura: parseFloat(impFattura),
+      ddtList: ddtSelezionati,
+      note: noteAbbinamento,
+    })
+
     setModal(false); load()
-    alert(`✅ ${selezionati.size} DDT abbinati a ${nFattura}.`)
     setLoading(false)
+  }
+
+  function generaPdfStorico(f: any) {
+    generaAutorizzazionePDF({
+      fornitore: f.fornitore_nome,
+      numeroFattura: f.numero,
+      impFattura: f.imponibile,
+      ddtList: f.ddt_abbinati,
+      note: noteStorico[f.id] ?? (f.note || ''),
+    })
   }
 
   const statoRataBadge = (f: any) => {
@@ -166,7 +294,6 @@ export default function DaRiceverePage() {
         {/* ── TAB APERTE ── */}
         {tab === 'aperte' && (
           <>
-            {/* Filtro fornitore */}
             <div className="card mb-4">
               <div className="flex gap-3 items-end">
                 <div className="flex-1">
@@ -237,7 +364,6 @@ export default function DaRiceverePage() {
         {/* ── TAB STORICO ── */}
         {tab === 'fatturate' && (
           <>
-            {/* Filtri storico */}
             <div className="card mb-4">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
                 <div className="md:col-span-2">
@@ -278,7 +404,11 @@ export default function DaRiceverePage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {fattureStoricFiltrate.map(f => (
+                {fattureStoricFiltrate.map(f => {
+                  const totDdtF = f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0)
+                  const scostF = f.imponibile - totDdtF
+                  const corrispF = Math.abs(scostF) < 0.02
+                  return (
                   <div key={f.id} className="card p-0 overflow-hidden">
                     <div className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-gray-50"
                       onClick={() => setEspansoFatt(espansoFatt === f.id ? null : f.id)}>
@@ -309,24 +439,36 @@ export default function DaRiceverePage() {
                             ))}
                             <tr className="bg-blue-100">
                               <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Totale DDT</td>
-                              <td className="font-bold text-sm text-blue-700">{euro(f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0))}</td>
+                              <td className="font-bold text-sm text-blue-700">{euro(totDdtF)}</td>
                             </tr>
                             <tr className="bg-blue-100">
                               <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Imponibile fattura</td>
                               <td className="font-bold text-sm text-blue-700">{euro(f.imponibile)}</td>
                             </tr>
-                            <tr className={Math.abs(f.imponibile - f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0)) < 0.02 ? 'bg-green-50' : 'bg-red-50'}>
+                            <tr className={corrispF ? 'bg-green-50' : 'bg-red-50'}>
                               <td colSpan={4} className="text-xs font-medium text-right">Scostamento</td>
-                              <td className={`font-bold text-sm ${Math.abs(f.imponibile - f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0)) < 0.02 ? 'text-green-700' : 'text-red-700'}`}>
-                                {euro(f.imponibile - f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0))}
+                              <td className={`font-bold text-sm ${corrispF ? 'text-green-700' : 'text-red-700'}`}>
+                                {euro(scostF)}
                               </td>
                             </tr>
                           </tbody>
                         </table>
+                        <div className="px-4 py-3 flex items-end gap-3">
+                          <div className="flex-1">
+                            <label className="label">Note per autorizzazione</label>
+                            <input className="input" placeholder="Note (opzionale)"
+                              value={noteStorico[f.id] ?? (f.note || '')}
+                              onChange={e => setNoteStorico(prev => ({ ...prev, [f.id]: e.target.value }))} />
+                          </div>
+                          <button className="btn btn-primary text-sm" onClick={() => generaPdfStorico(f)}>
+                            🖨️ Genera autorizzazione PDF
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </>
@@ -362,6 +504,8 @@ export default function DaRiceverePage() {
                   </select>
                 </div>
               )}
+              <div className="col-span-2"><label className="label">Note (per autorizzazione a pagare)</label>
+                <input className="input" placeholder="Note opzionali" value={noteAbbinamento} onChange={e => setNoteAbbinamento(e.target.value)} /></div>
             </div>
             <div className="mb-4 space-y-3">
               <p className="text-xs font-medium text-gray-600">Spunta i DDT coperti da questa fattura:</p>
@@ -420,7 +564,7 @@ export default function DaRiceverePage() {
               <div className="flex gap-2">
                 <button className="btn" onClick={() => setModal(false)}>Annulla</button>
                 <button className="btn btn-success" onClick={eseguiAbbinamento} disabled={loading}>
-                  {loading ? 'Elaborazione...' : `Abbina ${selezionati.size} DDT`}
+                  {loading ? 'Elaborazione...' : `Abbina ${selezionati.size} DDT e genera PDF`}
                 </button>
               </div>
             </div>
