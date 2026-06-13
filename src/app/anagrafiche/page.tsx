@@ -8,6 +8,7 @@ export default function Anagrafiche() {
   const [clienti, setClienti] = useState<any[]>([])
   const [fornitori, setFornitori] = useState<any[]>([])
   const [modal, setModal] = useState<'cliente'|'fornitore'|null>(null)
+  const [modalModifica, setModalModifica] = useState<{tipo:'cliente'|'fornitore', dati:any}|null>(null)
   const [loading, setLoading] = useState(false)
   const [fc, setFc] = useState({ ragione_sociale:'',cf_piva:'',tipo:'Azienda',indirizzo:'',citta:'',email:'',pec:'',telefono:'',iban:'',termini_pagamento:'30' })
   const [ff, setFf] = useState({ ragione_sociale:'',cf_piva:'',categoria:'Materiali',indirizzo:'',citta:'',email:'',pec:'',telefono:'',iban:'',termini_pagamento:'30',modalita_pagamento:'Bonifico' })
@@ -46,6 +47,35 @@ export default function Anagrafiche() {
     load()
   }
 
+  function apriModificaCliente(c: any) {
+    setModalModifica({ tipo: 'cliente', dati: { ...c, termini_pagamento: String(c.termini_pagamento ?? 30) } })
+  }
+  function apriModificaFornitore(f: any) {
+    setModalModifica({ tipo: 'fornitore', dati: { ...f, termini_pagamento: String(f.termini_pagamento ?? 30) } })
+  }
+
+  async function salvaModifica() {
+    if (!modalModifica) return
+    const { tipo, dati } = modalModifica
+    if (!dati.ragione_sociale) { alert('Inserisci ragione sociale'); return }
+    setLoading(true)
+    const tabella = tipo === 'cliente' ? 'clienti' : 'fornitori'
+    const payload: any = {
+      ragione_sociale: dati.ragione_sociale, cf_piva: dati.cf_piva,
+      indirizzo: dati.indirizzo, citta: dati.citta, email: dati.email,
+      pec: dati.pec, telefono: dati.telefono, iban: dati.iban,
+      termini_pagamento: parseInt(dati.termini_pagamento) || 30,
+    }
+    if (tipo === 'cliente') payload.tipo = dati.tipo
+    else { payload.categoria = dati.categoria; payload.modalita_pagamento = dati.modalita_pagamento }
+
+    const { error } = await supabase.from(tabella).update(payload).eq('id', dati.id)
+    setLoading(false)
+    if (error) { alert('Errore: ' + error.message); return }
+    setModalModifica(null)
+    load()
+  }
+
   return (
     <div className="flex min-h-screen">
       <Sidebar />
@@ -70,22 +100,25 @@ export default function Anagrafiche() {
         <div className="card overflow-x-auto">
           {tab === 'clienti' ? (
             <table className="table-base">
-              <thead><tr><th>Ragione Sociale</th><th>CF / P.IVA</th><th>Tipo</th><th>Email</th><th>Telefono</th><th>Termini</th><th>Stato</th></tr></thead>
+              <thead><tr><th>Ragione Sociale</th><th>CF / P.IVA</th><th>Tipo</th><th>Email</th><th>Telefono</th><th>Termini</th><th>Stato</th><th></th></tr></thead>
               <tbody>
-                {clienti.length === 0 ? <tr><td colSpan={7} className="text-center text-gray-400 py-8">Nessun cliente. Aggiungine uno.</td></tr>
+                {clienti.length === 0 ? <tr><td colSpan={8} className="text-center text-gray-400 py-8">Nessun cliente. Aggiungine uno.</td></tr>
                 : clienti.map(c => (
-                  <tr key={c.id}>
+                  <tr key={c.id} className="cursor-pointer hover:bg-gray-50" onClick={() => apriModificaCliente(c)}>
                     <td className="font-medium text-sm">{c.ragione_sociale}</td>
                     <td className="text-xs text-gray-500">{c.cf_piva || '—'}</td>
                     <td><span className="badge badge-gray">{c.tipo}</span></td>
                     <td className="text-xs text-gray-500">{c.email || '—'}</td>
                     <td className="text-xs text-gray-500">{c.telefono || '—'}</td>
                     <td className="text-xs">{c.termini_pagamento} gg</td>
-                    <td>
+                    <td onClick={e => e.stopPropagation()}>
                       <button onClick={() => toggleAttivo('clienti', c.id, c.attivo)}
                         className={`badge cursor-pointer ${c.attivo ? 'badge-green' : 'badge-red'}`}>
                         {c.attivo ? 'Attivo' : 'Inattivo'}
                       </button>
+                    </td>
+                    <td onClick={e => e.stopPropagation()}>
+                      <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => apriModificaCliente(c)}>✏️</button>
                     </td>
                   </tr>
                 ))}
@@ -93,22 +126,25 @@ export default function Anagrafiche() {
             </table>
           ) : (
             <table className="table-base">
-              <thead><tr><th>Ragione Sociale</th><th>CF / P.IVA</th><th>Categoria</th><th>Email</th><th>Telefono</th><th>Pagamento</th><th>Stato</th></tr></thead>
+              <thead><tr><th>Ragione Sociale</th><th>CF / P.IVA</th><th>Categoria</th><th>Email</th><th>Telefono</th><th>Pagamento</th><th>Stato</th><th></th></tr></thead>
               <tbody>
-                {fornitori.length === 0 ? <tr><td colSpan={7} className="text-center text-gray-400 py-8">Nessun fornitore. Aggiungine uno.</td></tr>
+                {fornitori.length === 0 ? <tr><td colSpan={8} className="text-center text-gray-400 py-8">Nessun fornitore. Aggiungine uno.</td></tr>
                 : fornitori.map(f => (
-                  <tr key={f.id}>
+                  <tr key={f.id} className="cursor-pointer hover:bg-gray-50" onClick={() => apriModificaFornitore(f)}>
                     <td className="font-medium text-sm">{f.ragione_sociale}</td>
                     <td className="text-xs text-gray-500">{f.cf_piva || '—'}</td>
                     <td><span className="badge badge-amber">{f.categoria}</span></td>
                     <td className="text-xs text-gray-500">{f.email || '—'}</td>
                     <td className="text-xs text-gray-500">{f.telefono || '—'}</td>
                     <td className="text-xs">{f.modalita_pagamento} / {f.termini_pagamento}gg</td>
-                    <td>
+                    <td onClick={e => e.stopPropagation()}>
                       <button onClick={() => toggleAttivo('fornitori', f.id, f.attivo)}
                         className={`badge cursor-pointer ${f.attivo ? 'badge-green' : 'badge-red'}`}>
                         {f.attivo ? 'Attivo' : 'Inattivo'}
                       </button>
+                    </td>
+                    <td onClick={e => e.stopPropagation()}>
+                      <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => apriModificaFornitore(f)}>✏️</button>
                     </td>
                   </tr>
                 ))}
@@ -179,6 +215,64 @@ export default function Anagrafiche() {
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModal(null)}>Annulla</button>
               <button className="btn btn-primary" onClick={salvaFornitore} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva fornitore'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal modifica (cliente o fornitore) */}
+      {modalModifica && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">
+                Modifica {modalModifica.tipo === 'cliente' ? 'cliente' : 'fornitore'} — {modalModifica.dati.ragione_sociale}
+              </h2>
+              <button onClick={() => setModalModifica(null)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2"><label className="label">Ragione Sociale *</label>
+                <input className="input" value={modalModifica.dati.ragione_sociale || ''} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, ragione_sociale: e.target.value}})} /></div>
+              <div><label className="label">CF / P.IVA</label>
+                <input className="input" value={modalModifica.dati.cf_piva || ''} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, cf_piva: e.target.value}})} /></div>
+
+              {modalModifica.tipo === 'cliente' ? (
+                <div><label className="label">Tipo</label>
+                  <select className="input" value={modalModifica.dati.tipo || 'Azienda'} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, tipo: e.target.value}})}>
+                    <option>Privato</option><option>Azienda</option><option>Ente Pubblico</option><option>Subappaltatore</option>
+                  </select></div>
+              ) : (
+                <div><label className="label">Categoria</label>
+                  <select className="input" value={modalModifica.dati.categoria || 'Materiali'} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, categoria: e.target.value}})}>
+                    <option>Materiali</option><option>Subappaltatore</option><option>Nolo Mezzi</option><option>Trasporti</option><option>Servizi</option><option>Utenze</option><option>Altro</option>
+                  </select></div>
+              )}
+
+              <div className="col-span-2"><label className="label">Indirizzo</label>
+                <input className="input" value={modalModifica.dati.indirizzo || ''} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, indirizzo: e.target.value}})} /></div>
+              <div><label className="label">Città</label>
+                <input className="input" value={modalModifica.dati.citta || ''} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, citta: e.target.value}})} /></div>
+              <div><label className="label">Telefono</label>
+                <input className="input" value={modalModifica.dati.telefono || ''} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, telefono: e.target.value}})} /></div>
+              <div><label className="label">Email</label>
+                <input className="input" value={modalModifica.dati.email || ''} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, email: e.target.value}})} /></div>
+              <div><label className="label">PEC</label>
+                <input className="input" value={modalModifica.dati.pec || ''} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, pec: e.target.value}})} /></div>
+              <div><label className="label">IBAN</label>
+                <input className="input" value={modalModifica.dati.iban || ''} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, iban: e.target.value}})} /></div>
+
+              {modalModifica.tipo === 'fornitore' && (
+                <div><label className="label">Modalità pagamento</label>
+                  <select className="input" value={modalModifica.dati.modalita_pagamento || 'Bonifico'} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, modalita_pagamento: e.target.value}})}>
+                    <option>Bonifico</option><option>RiBa</option><option>Contanti</option><option>Assegno</option>
+                  </select></div>
+              )}
+              <div><label className="label">Termini pagamento (gg)</label>
+                <input className="input" type="number" value={modalModifica.dati.termini_pagamento || '30'} onChange={e => setModalModifica({...modalModifica, dati: {...modalModifica.dati, termini_pagamento: e.target.value}})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalModifica(null)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva modifiche'}</button>
             </div>
           </div>
         </div>
