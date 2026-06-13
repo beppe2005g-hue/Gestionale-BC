@@ -47,6 +47,16 @@ export default function Anagrafiche() {
     load()
   }
 
+  async function elimina(tipo: 'clienti'|'fornitori', id: string, nome: string) {
+    if (!confirm(`Eliminare definitivamente "${nome}"?\nSe è collegato a DDT o fatture esistenti l'operazione potrebbe non riuscire.`)) return
+    const { error } = await supabase.from(tipo).delete().eq('id', id)
+    if (error) {
+      alert('Impossibile eliminare: è collegato a DDT o fatture esistenti. Puoi solo disattivarlo.\n\n' + error.message)
+      return
+    }
+    load()
+  }
+
   function apriModificaCliente(c: any) {
     setModalModifica({ tipo: 'cliente', dati: { ...c, termini_pagamento: String(c.termini_pagamento ?? 30) } })
   }
@@ -119,6 +129,7 @@ export default function Anagrafiche() {
                     </td>
                     <td onClick={e => e.stopPropagation()}>
                       <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => apriModificaCliente(c)}>✏️</button>
+                      <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50 ml-1" onClick={() => elimina('clienti', c.id, c.ragione_sociale)}>✕</button>
                     </td>
                   </tr>
                 ))}
@@ -145,6 +156,7 @@ export default function Anagrafiche() {
                     </td>
                     <td onClick={e => e.stopPropagation()}>
                       <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => apriModificaFornitore(f)}>✏️</button>
+                      <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50 ml-1" onClick={() => elimina('fornitori', f.id, f.ragione_sociale)}>✕</button>
                     </td>
                   </tr>
                 ))}
