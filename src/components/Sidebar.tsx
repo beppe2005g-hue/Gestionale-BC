@@ -82,11 +82,9 @@ export default function Sidebar() {
     <aside className="w-52 bg-white border-r border-gray-200 flex flex-col min-h-screen flex-shrink-0">
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-blue-700 rounded-lg flex items-center justify-center">
-            <span className="text-white text-sm font-bold">E</span>
-          </div>
+          <img src="/logo.png" alt="BC General Service" className="w-9 h-9 object-contain" />
           <div>
-            <p className="text-sm font-semibold text-gray-900">Gestionale</p>
+            <p className="text-sm font-semibold text-gray-900">BC General Service</p>
             <p className="text-xs text-gray-500">Impresa Edile</p>
           </div>
         </div>
