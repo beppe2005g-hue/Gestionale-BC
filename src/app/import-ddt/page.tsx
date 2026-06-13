@@ -13,7 +13,10 @@ interface VoceDDT {
 }
 
 interface BollaDDT {
-  id: string; numero: string; data: string; fornitore_nome: string
+  id: string; numero: string; data: string
+  fornitore_nome_ai: string // nome estratto dall'AI, solo informativo
+  fornitore_id: string // '' = non scelto, '__nuovo__' = crea nuovo
+  fornitore_nome_nuovo: string // nome per il nuovo fornitore
   fornitore_piva: string; voci: VoceDDT[]; progetto_id: string; note: string
   stato: 'approvazione' | 'salvato'; nomefile: string
 }
@@ -30,8 +33,16 @@ export default function ImportDDTV2() {
 
   useEffect(() => {
     supabase.from('progetti').select('id,codice,nome').eq('stato', 'In Corso').then(({ data }) => setProgetti(data || []))
-    supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true).then(({ data }) => setFornitori(data || []))
+    supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale').then(({ data }) => setFornitori(data || []))
   }, [])
+
+  function trovaFornitoreEsatto(nomeAI: string): string {
+    if (!nomeAI) return ''
+    const norm = (s: string) => s.toLowerCase().trim().replace(/[^a-z0-9]/g, '')
+    const nomeNorm = norm(nomeAI)
+    const match = fornitori.find(f => norm(f.ragione_sociale) === nomeNorm)
+    return match?.id || ''
+  }
 
   async function caricaFile(files: FileList | null) {
     if (!files || elaborando) return
@@ -58,7 +69,7 @@ export default function ImportDDTV2() {
                 contents: [{
                   parts: [
                     { inline_data: { mime_type: file.type, data: base64 } },
-                    { text: `DDT italiano. JSON array only:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]` }
+                    { text: `DDT italiano. JSON array only. Se prezzo non è sulla stessa riga della quantità metti 0. Non cercare prezzi in altre parti del documento:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]` }
                   ]
                 }],
                 generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
@@ -92,11 +103,15 @@ export default function ImportDDTV2() {
         const ddtArray = Array.isArray(parsed) ? parsed : [parsed]
         for (const p of ddtArray) {
           if (p && !p.skip && p.numero !== undefined) {
+            const nomeAI = p.fornitore_nome || ''
+            const fornitoreIdMatch = trovaFornitoreEsatto(nomeAI)
             const nuovaBolla: BollaDDT = {
               id: Math.random().toString(36).slice(2),
               numero: p.numero || '',
               data: p.data || new Date().toISOString().split('T')[0],
-              fornitore_nome: p.fornitore_nome || '',
+              fornitore_nome_ai: nomeAI,
+              fornitore_id: fornitoreIdMatch,
+              fornitore_nome_nuovo: fornitoreIdMatch ? '' : nomeAI,
               fornitore_piva: p.fornitore_piva || '',
               voci: (p.voci || []).map((v: any) => ({
                 ...v,
@@ -149,23 +164,39 @@ export default function ImportDDTV2() {
     const bolla = bolle.find(b => b.id === bollaId)
     if (!bolla) return
     if (!bolla.numero) { alert('Inserisci il numero del DDT'); return }
-    if (!bolla.fornitore_nome) { alert('Inserisci il nome del fornitore'); return }
+    if (!bolla.fornitore_id) {
+      alert('Seleziona un fornitore esistente oppure scegli "+ Nuovo fornitore" e inserisci il nome')
+      return
+    }
+    if (bolla.fornitore_id === '__nuovo__' && !bolla.fornitore_nome_nuovo.trim()) {
+      alert('Inserisci il nome del nuovo fornitore')
+      return
+    }
     if (!bolla.progetto_id) { alert('Seleziona il cantiere'); return }
     const vociOk = bolla.voci.filter(v => v.approvata && v.descrizione)
     if (vociOk.length === 0) { alert('Approva almeno una voce'); return }
     setSalvando(true)
-    let { data: fornExist } = await supabase.from('fornitori').select('id').ilike('ragione_sociale', `%${bolla.fornitore_nome}%`).limit(1)
-    let fornitoreId = fornExist?.[0]?.id
-    if (!fornitoreId) {
-      const { data: nf } = await supabase.from('fornitori').insert({
-        ragione_sociale: bolla.fornitore_nome, cf_piva: bolla.fornitore_piva, categoria: 'Materiali', attivo: true
-      }).select('id').single()
-      fornitoreId = nf?.id
+
+    let fornitoreId = bolla.fornitore_id
+    let fornitoreNome = ''
+
+    if (fornitoreId === '__nuovo__') {
+      const nomeNuovo = bolla.fornitore_nome_nuovo.trim()
+      const { data: nf, error } = await supabase.from('fornitori').insert({
+        ragione_sociale: nomeNuovo, cf_piva: bolla.fornitore_piva, categoria: 'Materiali', attivo: true
+      }).select('id,ragione_sociale').single()
+      if (error || !nf) { alert('Errore creazione fornitore: ' + error?.message); setSalvando(false); return }
+      fornitoreId = nf.id
+      fornitoreNome = nf.ragione_sociale
+      setFornitori(prev => [...prev, nf].sort((a, b) => a.ragione_sociale.localeCompare(b.ragione_sociale)))
+    } else {
+      fornitoreNome = fornitori.find(f => f.id === fornitoreId)?.ragione_sociale || ''
     }
+
     const prj = progetti.find(p => p.id === bolla.progetto_id)
     const importoTotale = vociOk.reduce((s, v) => s + v.importo_totale, 0)
     const { data: ddtCreato } = await supabase.from('ddt').insert({
-      data: bolla.data, numero: bolla.numero, fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome,
+      data: bolla.data, numero: bolla.numero, fornitore_id: fornitoreId, fornitore_nome: fornitoreNome,
       progetto_id: bolla.progetto_id, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
       descrizione: `DDT con ${vociOk.length} voci`, importo: importoTotale, stato: 'Da Fatturare', note: bolla.note
     }).select('id').single()
@@ -175,22 +206,22 @@ export default function ImportDDTV2() {
           ddt_id: ddtCreato.id, descrizione: voce.descrizione, categoria: voce.categoria,
           macro_categoria: voce.macro_categoria, unita_misura: voce.unita_misura,
           quantita: voce.quantita, prezzo_unitario: voce.prezzo_unitario, importo_totale: voce.importo_totale,
-          fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome, data_ddt: bolla.data
+          fornitore_id: fornitoreId, fornitore_nome: fornitoreNome, data_ddt: bolla.data
         })
         if (voce.prezzo_unitario > 0 && voce.descrizione) {
-          const { data: pe } = await supabase.from('prezzario').select('id,prezzo_medio,n_acquisti').ilike('descrizione', voce.descrizione).eq('fornitore_nome', bolla.fornitore_nome).limit(1)
+          const { data: pe } = await supabase.from('prezzario').select('id,prezzo_medio,n_acquisti').ilike('descrizione', voce.descrizione).eq('fornitore_nome', fornitoreNome).limit(1)
           if (pe && pe.length > 0) {
             const p = pe[0]
             const media = ((p.prezzo_medio * p.n_acquisti) + voce.prezzo_unitario) / (p.n_acquisti + 1)
             await supabase.from('prezzario').update({ ultimo_prezzo: voce.prezzo_unitario, prezzo_medio: Math.round(media * 10000) / 10000, ultima_data: bolla.data, n_acquisti: p.n_acquisti + 1 }).eq('id', p.id)
-            await supabase.from('prezzario_storico').insert({ prezzario_id: p.id, ddt_id: ddtCreato.id, fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome, prezzo_unitario: voce.prezzo_unitario, quantita: voce.quantita, data: bolla.data })
+            await supabase.from('prezzario_storico').insert({ prezzario_id: p.id, ddt_id: ddtCreato.id, fornitore_id: fornitoreId, fornitore_nome: fornitoreNome, prezzo_unitario: voce.prezzo_unitario, quantita: voce.quantita, data: bolla.data })
           } else {
             const { data: np } = await supabase.from('prezzario').insert({
               descrizione: voce.descrizione, categoria: voce.categoria, macro_categoria: voce.macro_categoria,
-              unita_misura: voce.unita_misura, fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome,
+              unita_misura: voce.unita_misura, fornitore_id: fornitoreId, fornitore_nome: fornitoreNome,
               ultimo_prezzo: voce.prezzo_unitario, prezzo_medio: voce.prezzo_unitario, ultima_data: bolla.data, n_acquisti: 1
             }).select('id').single()
-            if (np) await supabase.from('prezzario_storico').insert({ prezzario_id: np.id, ddt_id: ddtCreato.id, fornitore_id: fornitoreId, fornitore_nome: bolla.fornitore_nome, prezzo_unitario: voce.prezzo_unitario, quantita: voce.quantita, data: bolla.data })
+            if (np) await supabase.from('prezzario_storico').insert({ prezzario_id: np.id, ddt_id: ddtCreato.id, fornitore_id: fornitoreId, fornitore_nome: fornitoreNome, prezzo_unitario: voce.prezzo_unitario, quantita: voce.quantita, data: bolla.data })
           }
         }
       }
@@ -257,9 +288,9 @@ export default function ImportDDTV2() {
                     {bolle.map(b => (
                       <div key={b.id} onClick={() => b.stato === 'approvazione' && setBollaAttiva(b.id)}
                         className={`flex items-center gap-2 px-3 py-2 border-b border-gray-50 cursor-pointer ${bollaAttiva === b.id ? 'bg-amber-50' : 'hover:bg-gray-50'}`}>
-                        <span>{b.stato === 'salvato' ? '✅' : '✋'}</span>
+                        <span>{b.stato === 'salvato' ? '✅' : b.fornitore_id ? '✋' : '⚠️'}</span>
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium truncate">{b.numero || '?'} — {b.fornitore_nome || '?'}</p>
+                          <p className="text-xs font-medium truncate">{b.numero || '?'} — {b.fornitore_nome_ai || '?'}</p>
                           <p className="text-xs text-gray-400 truncate">{b.nomefile}</p>
                         </div>
                       </div>
@@ -310,11 +341,26 @@ export default function ImportDDTV2() {
                       <input className="input" type="date" value={bollaCorrente.data}
                         onChange={e => setBolle(prev => prev.map(b => b.id === bollaCorrente.id ? {...b, data: e.target.value} : b))} />
                     </div>
-                    <div>
-                      <label className="label">Fornitore *</label>
-                      <input className="input" list="forn-list" value={bollaCorrente.fornitore_nome}
-                        onChange={e => setBolle(prev => prev.map(b => b.id === bollaCorrente.id ? {...b, fornitore_nome: e.target.value} : b))} />
-                      <datalist id="forn-list">{fornitori.map(f => <option key={f.id} value={f.ragione_sociale} />)}</datalist>
+                    <div className="col-span-2">
+                      <label className="label">
+                        Fornitore * {bollaCorrente.fornitore_nome_ai && (
+                          <span className="text-gray-400 normal-case font-normal">— rilevato: "{bollaCorrente.fornitore_nome_ai}"</span>
+                        )}
+                      </label>
+                      <select className="input" value={bollaCorrente.fornitore_id}
+                        onChange={e => setBolle(prev => prev.map(b => b.id === bollaCorrente.id ? {...b, fornitore_id: e.target.value, fornitore_nome_nuovo: e.target.value === '__nuovo__' ? (b.fornitore_nome_nuovo || b.fornitore_nome_ai) : b.fornitore_nome_nuovo} : b))}>
+                        <option value="">-- seleziona fornitore --</option>
+                        {fornitori.map(f => <option key={f.id} value={f.id}>{f.ragione_sociale}</option>)}
+                        <option value="__nuovo__">➕ Nuovo fornitore...</option>
+                      </select>
+                      {bollaCorrente.fornitore_id === '__nuovo__' && (
+                        <input className="input mt-2" placeholder="Ragione sociale nuovo fornitore"
+                          value={bollaCorrente.fornitore_nome_nuovo}
+                          onChange={e => setBolle(prev => prev.map(b => b.id === bollaCorrente.id ? {...b, fornitore_nome_nuovo: e.target.value} : b))} />
+                      )}
+                      {!bollaCorrente.fornitore_id && (
+                        <p className="text-xs text-amber-600 mt-1">⚠️ Seleziona un fornitore esistente o creane uno nuovo</p>
+                      )}
                     </div>
                     <div>
                       <label className="label">Cantiere *</label>
