@@ -5,12 +5,22 @@ import Sidebar from '@/components/Sidebar'
 import { logActivity } from '@/lib/logActivity'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const MACRO_CATEGORIE = ['Cementi','Laterizi','Ferro e Acciaio','Legno','Isolanti','Impermeabilizzanti','Inerti e Calcestruzzo','Impianti','Attrezzatura','Noli','Trasporti','Altro']
+
+interface Voce {
+  id?: string
+  descrizione: string; macro_categoria: string; categoria: string
+  unita_misura: string; quantita: number; prezzo_unitario: number; importo_totale: number
+}
 
 export default function DDTPage() {
   const [ddts, setDdts] = useState<any[]>([])
   const [fornitori, setFornitori] = useState<any[]>([])
   const [progetti, setProgetti] = useState<any[]>([])
   const [modal, setModal] = useState(false)
+  const [modalDettaglio, setModalDettaglio] = useState<any>(null)
+  const [vociDettaglio, setVociDettaglio] = useState<Voce[]>([])
+  const [modalModifica, setModalModifica] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const [cercaNumero, setCercaNumero] = useState('')
@@ -21,8 +31,9 @@ export default function DDTPage() {
 
   const [form, setForm] = useState({
     data: '', numero: '', fornitore_id: '', progetto_id: '',
-    descrizione: '', importo: '', mese_fattura_previsto: '', note: ''
+    descrizione: '', mese_fattura_previsto: '', note: ''
   })
+  const [voci, setVoci] = useState<Voce[]>([])
 
   useEffect(() => { load() }, [])
 
@@ -37,9 +48,40 @@ export default function DDTPage() {
     setProgetti(p || [])
   }
 
+  function aggiungiVoce() {
+    setVoci(prev => [...prev, { descrizione: '', macro_categoria: 'Altro', categoria: '', unita_misura: '', quantita: 0, prezzo_unitario: 0, importo_totale: 0 }])
+  }
+
+  function aggiornaVoce(idx: number, campo: string, valore: any) {
+    setVoci(prev => {
+      const n = [...prev]
+      n[idx] = { ...n[idx], [campo]: valore }
+      if (campo === 'quantita' || campo === 'prezzo_unitario') {
+        const q = campo === 'quantita' ? parseFloat(valore) || 0 : n[idx].quantita
+        const p = campo === 'prezzo_unitario' ? parseFloat(valore) || 0 : n[idx].prezzo_unitario
+        n[idx].importo_totale = Math.round(q * p * 100) / 100
+      }
+      return n
+    })
+  }
+
+  function eliminaVoceForm(idx: number) {
+    setVoci(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  const totaleVoci = voci.reduce((s, v) => s + (v.importo_totale || 0), 0)
+
   async function salva() {
-    if (!form.numero || !form.importo || !form.fornitore_id) {
-      alert('Compilare N° DDT, fornitore e importo')
+    if (!form.numero || !form.fornitore_id) {
+      alert('Compilare N° DDT e fornitore')
+      return
+    }
+    const vociValide = voci.filter(v => v.descrizione)
+    const importoTotale = vociValide.length > 0
+      ? vociValide.reduce((s, v) => s + v.importo_totale, 0)
+      : 0
+    if (importoTotale === 0 && vociValide.length === 0) {
+      alert('Inserisci almeno una voce con descrizione')
       return
     }
     setLoading(true)
@@ -52,27 +94,93 @@ export default function DDTPage() {
       fornitore_nome: for_?.ragione_sociale || '',
       progetto_id: form.progetto_id || null,
       progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
-      descrizione: form.descrizione,
-      importo: parseFloat(form.importo) || 0,
+      descrizione: form.descrizione || `DDT con ${vociValide.length} voci`,
+      importo: importoTotale,
       mese_fattura_previsto: form.mese_fattura_previsto,
       stato: 'Da Fatturare',
       note: form.note,
     }).select('id').single()
-    if (error) alert('Errore: ' + error.message)
-    else {
-      await logActivity('inserimento', 'ddt', inserted?.id || '', `DDT ${form.numero} — ${for_?.ragione_sociale} · ${prj ? prj.codice + ' ' + prj.nome : 'nessun cantiere'} · € ${form.importo}`)
-      setModal(false)
-      setForm({ data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '', importo: '', mese_fattura_previsto: '', note: '' })
-      load()
+    if (error) { alert('Errore: ' + error.message); setLoading(false); return }
+
+    for (const v of vociValide) {
+      await supabase.from('ddt_voci').insert({
+        ddt_id: inserted!.id, descrizione: v.descrizione, categoria: v.categoria,
+        macro_categoria: v.macro_categoria, unita_misura: v.unita_misura,
+        quantita: v.quantita, prezzo_unitario: v.prezzo_unitario, importo_totale: v.importo_totale,
+        fornitore_id: form.fornitore_id, fornitore_nome: for_?.ragione_sociale || '', data_ddt: form.data || new Date().toISOString().split('T')[0]
+      })
     }
+
+    await logActivity('inserimento', 'ddt', inserted?.id || '', `DDT ${form.numero} — ${for_?.ragione_sociale} · ${prj ? prj.codice + ' ' + prj.nome : 'nessun cantiere'} · € ${importoTotale}`)
+    setModal(false)
+    setForm({ data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '', mese_fattura_previsto: '', note: '' })
+    setVoci([])
+    load()
     setLoading(false)
   }
 
+  async function apriDettaglio(d: any) {
+    setModalDettaglio(d)
+    const { data: v } = await supabase.from('ddt_voci').select('*').eq('ddt_id', d.id).order('id')
+    setVociDettaglio(v || [])
+  }
+
+  function apriModifica(d: any) {
+    setForm({
+      data: d.data, numero: d.numero, fornitore_id: d.fornitore_id || '',
+      progetto_id: d.progetto_id || '', descrizione: d.descrizione || '',
+      mese_fattura_previsto: d.mese_fattura_previsto || '', note: d.note || ''
+    })
+    setVoci((vociDettaglio.length > 0 && modalDettaglio?.id === d.id) ? vociDettaglio.map(v => ({...v})) : [])
+    setModalDettaglio(d)
+    setModalModifica(true)
+    // carica voci se non già caricate
+    supabase.from('ddt_voci').select('*').eq('ddt_id', d.id).order('id').then(({ data }) => {
+      setVoci((data || []).map((v: any) => ({...v})))
+      setVociDettaglio(data || [])
+    })
+  }
+
+  async function salvaModifica() {
+    if (!modalDettaglio) return
+    if (!form.numero || !form.fornitore_id) { alert('Compilare N° DDT e fornitore'); return }
+    setLoading(true)
+    const for_ = fornitori.find(f => f.id === form.fornitore_id)
+    const prj = progetti.find(p => p.id === form.progetto_id)
+    const vociValide = voci.filter(v => v.descrizione)
+    const importoTotale = vociValide.reduce((s, v) => s + v.importo_totale, 0)
+
+    await supabase.from('ddt').update({
+      data: form.data, numero: form.numero, fornitore_id: form.fornitore_id,
+      fornitore_nome: for_?.ragione_sociale || '', progetto_id: form.progetto_id || null,
+      progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
+      descrizione: form.descrizione || `DDT con ${vociValide.length} voci`,
+      importo: importoTotale, mese_fattura_previsto: form.mese_fattura_previsto, note: form.note
+    }).eq('id', modalDettaglio.id)
+
+    // Rimuovi voci esistenti e reinserisci (semplice e sicuro)
+    await supabase.from('ddt_voci').delete().eq('ddt_id', modalDettaglio.id)
+    for (const v of vociValide) {
+      await supabase.from('ddt_voci').insert({
+        ddt_id: modalDettaglio.id, descrizione: v.descrizione, categoria: v.categoria,
+        macro_categoria: v.macro_categoria, unita_misura: v.unita_misura,
+        quantita: v.quantita, prezzo_unitario: v.prezzo_unitario, importo_totale: v.importo_totale,
+        fornitore_id: form.fornitore_id, fornitore_nome: for_?.ragione_sociale || '', data_ddt: form.data
+      })
+    }
+
+    await logActivity('modifica', 'ddt', modalDettaglio.id, `DDT ${form.numero} — ${for_?.ragione_sociale} · € ${importoTotale}`)
+    setModalModifica(false); setModalDettaglio(null); setVoci([]); setLoading(false)
+    load()
+  }
+
   async function elimina(id: string) {
-    if (!confirm('Eliminare questo DDT?')) return
+    if (!confirm('Eliminare questo DDT e tutte le sue voci?')) return
     const ddt = ddts.find(d => d.id === id)
+    await supabase.from('ddt_voci').delete().eq('ddt_id', id)
     await supabase.from('ddt').delete().eq('id', id)
     await logActivity('eliminazione', 'ddt', id, `DDT ${ddt?.numero} — ${ddt?.fornitore_nome} · ${ddt?.progetto_nome || 'nessun cantiere'} · € ${ddt?.importo}`)
+    setModalDettaglio(null)
     load()
   }
 
@@ -101,13 +209,17 @@ export default function DDTPage() {
     return <span className="badge badge-amber">Da Fatturare</span>
   }
 
+  function chiudiModali() {
+    setModal(false); setModalDettaglio(null); setModalModifica(false); setVoci([]); setVociDettaglio([])
+  }
+
   return (
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 p-6 overflow-auto">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-semibold">DDT / Bolle di consegna</h1>
-          <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuovo DDT</button>
+          <button className="btn btn-primary text-sm" onClick={() => { setForm({ data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '', mese_fattura_previsto: '', note: '' }); setVoci([]); setModal(true) }}>+ Nuovo DDT</button>
         </div>
 
         <div className="card mb-4">
@@ -168,7 +280,7 @@ export default function DDTPage() {
                   {hasFiltriAttivi ? 'Nessun DDT corrisponde ai filtri impostati.' : 'Nessun DDT. Inserisci il primo.'}
                 </td></tr>
               ) : filtered.map(d => (
-                <tr key={d.id}>
+                <tr key={d.id} className="cursor-pointer hover:bg-gray-50" onClick={() => apriDettaglio(d)}>
                   <td className="text-xs">{d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—'}</td>
                   <td className="font-medium text-sm">{d.numero}</td>
                   <td className="text-sm">{d.fornitore_nome}</td>
@@ -176,7 +288,7 @@ export default function DDTPage() {
                   <td className="font-medium text-sm">{euro(d.importo)}</td>
                   <td>{statoBadge(d.stato)}</td>
                   <td className="text-xs text-gray-500">{d.fattura_abbinata || '—'}</td>
-                  <td>
+                  <td onClick={e => e.stopPropagation()}>
                     <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(d.id)}>✕</button>
                   </td>
                 </tr>
@@ -186,14 +298,15 @@ export default function DDTPage() {
         </div>
       </main>
 
+      {/* Modal nuovo DDT con voci */}
       {modal && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+          <div className="bg-white rounded-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-base font-semibold">Nuovo DDT</h2>
-              <button onClick={() => setModal(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+              <button onClick={chiudiModali} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <div><label className="label">Data</label>
                 <input className="input" type="date" value={form.data} onChange={e => setForm({...form, data: e.target.value})} /></div>
               <div><label className="label">N° DDT *</label>
@@ -208,21 +321,182 @@ export default function DDTPage() {
                   <option value="">-- seleziona --</option>
                   {progetti.map(p => <option key={p.id} value={p.id}>{p.codice} - {p.nome}</option>)}
                 </select></div>
-              <div className="col-span-2"><label className="label">Descrizione materiale/servizio</label>
-                <input className="input" placeholder="es. Calcestruzzo C25/30 - 50mc" value={form.descrizione} onChange={e => setForm({...form, descrizione: e.target.value})} /></div>
-              <div><label className="label">Importo (€) *</label>
-                <input className="input" type="number" step="0.01" placeholder="0.00" value={form.importo} onChange={e => setForm({...form, importo: e.target.value})} /></div>
+            </div>
+
+            <div className="mt-4">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-medium text-gray-600">📦 Voci ({voci.length})</h3>
+                <button className="btn btn-sm btn-primary" onClick={aggiungiVoce}>+ Voce</button>
+              </div>
+              {voci.length === 0 ? (
+                <p className="text-xs text-gray-400 py-3 text-center border border-dashed rounded-lg">Nessuna voce. Clicca "+ Voce" per aggiungerne.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="table-base">
+                    <thead><tr>
+                      <th>Descrizione</th><th>Categoria</th><th>U.M.</th><th>Qtà</th><th>€/unit</th><th>Totale</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                      {voci.map((v, idx) => (
+                        <tr key={idx}>
+                          <td><input className="input text-xs py-1" value={v.descrizione} onChange={e => aggiornaVoce(idx, 'descrizione', e.target.value)} /></td>
+                          <td><select className="input text-xs py-1" value={v.macro_categoria} onChange={e => aggiornaVoce(idx, 'macro_categoria', e.target.value)}>
+                            {MACRO_CATEGORIE.map(m => <option key={m}>{m}</option>)}
+                          </select></td>
+                          <td><input className="input text-xs py-1 w-14" value={v.unita_misura} onChange={e => aggiornaVoce(idx, 'unita_misura', e.target.value)} /></td>
+                          <td><input className="input text-xs py-1 w-20" type="number" step="0.001" value={v.quantita || ''} onChange={e => aggiornaVoce(idx, 'quantita', e.target.value)} /></td>
+                          <td><input className="input text-xs py-1 w-24" type="number" step="0.0001" value={v.prezzo_unitario || ''} onChange={e => aggiornaVoce(idx, 'prezzo_unitario', e.target.value)} /></td>
+                          <td className="font-medium text-sm">{euro(v.importo_totale)}</td>
+                          <td><button className="text-gray-300 hover:text-red-500 text-sm" onClick={() => eliminaVoceForm(idx)}>✕</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
+                    <span className="font-semibold text-sm">Totale: {euro(totaleVoci)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-4">
               <div><label className="label">Mese fattura previsto</label>
                 <input className="input" type="month" value={form.mese_fattura_previsto} onChange={e => setForm({...form, mese_fattura_previsto: e.target.value})} /></div>
               <div className="col-span-2"><label className="label">Note</label>
                 <input className="input" value={form.note} onChange={e => setForm({...form, note: e.target.value})} /></div>
             </div>
             <div className="flex gap-2 justify-end mt-4">
-              <button className="btn" onClick={() => setModal(false)}>Annulla</button>
+              <button className="btn" onClick={chiudiModali}>Annulla</button>
               <button className="btn btn-primary" onClick={salva} disabled={loading}>
                 {loading ? 'Salvataggio...' : 'Salva DDT'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal dettaglio / modifica */}
+      {modalDettaglio && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">
+                {modalModifica ? `Modifica — ${modalDettaglio.numero}` : `Dettaglio DDT — ${modalDettaglio.numero}`}
+              </h2>
+              <button onClick={chiudiModali} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+            </div>
+
+            {!modalModifica ? (
+              <>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-4 text-sm">
+                  <div><span className="text-gray-400 text-xs block">Data</span>{new Date(modalDettaglio.data).toLocaleDateString('it-IT')}</div>
+                  <div><span className="text-gray-400 text-xs block">Fornitore</span>{modalDettaglio.fornitore_nome}</div>
+                  <div><span className="text-gray-400 text-xs block">Cantiere</span>{modalDettaglio.progetto_nome || '—'}</div>
+                  <div><span className="text-gray-400 text-xs block">Stato</span>{statoBadge(modalDettaglio.stato)}</div>
+                  <div className="col-span-2"><span className="text-gray-400 text-xs block">Note</span>{modalDettaglio.note || '—'}</div>
+                  <div><span className="text-gray-400 text-xs block">Fattura abbinata</span>{modalDettaglio.fattura_abbinata || '—'}</div>
+                </div>
+
+                <h3 className="text-sm font-medium text-gray-600 mb-2">📦 Voci ({vociDettaglio.length})</h3>
+                {vociDettaglio.length === 0 ? (
+                  <p className="text-xs text-gray-400 py-3 text-center border border-dashed rounded-lg">Nessuna voce registrata per questo DDT.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="table-base">
+                      <thead><tr><th>Descrizione</th><th>Categoria</th><th>U.M.</th><th>Qtà</th><th>€/unit</th><th>Totale</th></tr></thead>
+                      <tbody>
+                        {vociDettaglio.map(v => (
+                          <tr key={v.id}>
+                            <td className="text-sm">{v.descrizione}</td>
+                            <td className="text-xs text-gray-500">{v.macro_categoria}</td>
+                            <td className="text-xs">{v.unita_misura}</td>
+                            <td className="text-xs">{v.quantita}</td>
+                            <td className="text-xs">{euro(v.prezzo_unitario)}</td>
+                            <td className="font-medium text-sm">{euro(v.importo_totale)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
+                      <span className="font-semibold text-sm">Totale: {euro(modalDettaglio.importo)}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2 justify-end mt-4">
+                  <button className="btn text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(modalDettaglio.id)}>✕ Elimina</button>
+                  <button className="btn btn-primary" onClick={() => apriModifica(modalDettaglio)}>✏️ Modifica</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <div><label className="label">Data</label>
+                    <input className="input" type="date" value={form.data} onChange={e => setForm({...form, data: e.target.value})} /></div>
+                  <div><label className="label">N° DDT *</label>
+                    <input className="input" value={form.numero} onChange={e => setForm({...form, numero: e.target.value})} /></div>
+                  <div><label className="label">Fornitore *</label>
+                    <select className="input" value={form.fornitore_id} onChange={e => setForm({...form, fornitore_id: e.target.value})}>
+                      <option value="">-- seleziona --</option>
+                      {fornitori.map(f => <option key={f.id} value={f.id}>{f.ragione_sociale}</option>)}
+                    </select></div>
+                  <div><label className="label">Cantiere</label>
+                    <select className="input" value={form.progetto_id} onChange={e => setForm({...form, progetto_id: e.target.value})}>
+                      <option value="">-- seleziona --</option>
+                      {progetti.map(p => <option key={p.id} value={p.id}>{p.codice} - {p.nome}</option>)}
+                    </select></div>
+                </div>
+
+                <div className="mt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-sm font-medium text-gray-600">📦 Voci ({voci.length})</h3>
+                    <button className="btn btn-sm btn-primary" onClick={aggiungiVoce}>+ Voce</button>
+                  </div>
+                  {voci.length === 0 ? (
+                    <p className="text-xs text-gray-400 py-3 text-center border border-dashed rounded-lg">Nessuna voce. Clicca "+ Voce" per aggiungerne.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="table-base">
+                        <thead><tr>
+                          <th>Descrizione</th><th>Categoria</th><th>U.M.</th><th>Qtà</th><th>€/unit</th><th>Totale</th><th></th>
+                        </tr></thead>
+                        <tbody>
+                          {voci.map((v, idx) => (
+                            <tr key={idx}>
+                              <td><input className="input text-xs py-1" value={v.descrizione} onChange={e => aggiornaVoce(idx, 'descrizione', e.target.value)} /></td>
+                              <td><select className="input text-xs py-1" value={v.macro_categoria} onChange={e => aggiornaVoce(idx, 'macro_categoria', e.target.value)}>
+                                {MACRO_CATEGORIE.map(m => <option key={m}>{m}</option>)}
+                              </select></td>
+                              <td><input className="input text-xs py-1 w-14" value={v.unita_misura} onChange={e => aggiornaVoce(idx, 'unita_misura', e.target.value)} /></td>
+                              <td><input className="input text-xs py-1 w-20" type="number" step="0.001" value={v.quantita || ''} onChange={e => aggiornaVoce(idx, 'quantita', e.target.value)} /></td>
+                              <td><input className="input text-xs py-1 w-24" type="number" step="0.0001" value={v.prezzo_unitario || ''} onChange={e => aggiornaVoce(idx, 'prezzo_unitario', e.target.value)} /></td>
+                              <td className="font-medium text-sm">{euro(v.importo_totale)}</td>
+                              <td><button className="text-gray-300 hover:text-red-500 text-sm" onClick={() => eliminaVoceForm(idx)}>✕</button></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
+                        <span className="font-semibold text-sm">Totale: {euro(totaleVoci)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mt-4">
+                  <div><label className="label">Mese fattura previsto</label>
+                    <input className="input" type="month" value={form.mese_fattura_previsto} onChange={e => setForm({...form, mese_fattura_previsto: e.target.value})} /></div>
+                  <div className="col-span-2"><label className="label">Note</label>
+                    <input className="input" value={form.note} onChange={e => setForm({...form, note: e.target.value})} /></div>
+                </div>
+                <div className="flex gap-2 justify-end mt-4">
+                  <button className="btn" onClick={() => setModalModifica(false)}>← Torna al dettaglio</button>
+                  <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>
+                    {loading ? 'Salvataggio...' : 'Salva modifiche'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
