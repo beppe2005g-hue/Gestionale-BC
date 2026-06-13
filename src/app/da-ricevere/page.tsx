@@ -19,10 +19,17 @@ function generaAutorizzazionePDF(opts: {
   const doc = new jsPDF()
   let y = 20
 
+  // Logo
+  try {
+    doc.addImage('/logo.png', 'PNG', 14, 10, 18, 18)
+  } catch (e) {}
+
   doc.setFontSize(16)
   doc.setFont('helvetica', 'bold')
-  doc.text('AUTORIZZAZIONE A PAGARE', 105, y, { align: 'center' })
-  y += 12
+  doc.text('BC GENERAL SERVICE', 105, 16, { align: 'center' })
+  doc.setFontSize(13)
+  doc.text('AUTORIZZAZIONE A PAGARE', 105, 24, { align: 'center' })
+  y = 36
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
