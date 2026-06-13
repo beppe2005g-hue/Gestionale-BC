@@ -19,7 +19,9 @@ export default function LoginPage() {
     <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl p-8 w-full max-w-sm">
         <div className="mb-8 text-center">
-          <img src="/logo.png" alt="BC General Service" className="h-[35px] w-auto object-contain mx-auto mb-4" style={{ marginRight: '60px' }} />
+          <div className="flex justify-center" style={{ paddingRight: '10%' }}>
+            <img src="/logo.png" alt="BC General Service" className="h-28 w-auto object-contain mb-4" />
+          </div>
           <h1 className="text-xl font-semibold text-gray-900">BC General Service</h1>
           <p className="text-sm text-gray-500 mt-1">Accedi al tuo account</p>
         </div>
