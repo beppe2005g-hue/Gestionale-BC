@@ -7,18 +7,35 @@ import { logActivity } from '@/lib/logActivity'
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const euroShort = (n: number) => (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-const CATEGORIE = ['Ore Operai', 'Materiali', 'Noli mezzi', 'Manodopera esterna', 'Subappalto', 'Trasporti', 'Attrezzatura', 'Smaltimento', 'Altro']
+const CATEGORIE = ['Ore Operai', 'Materiali', 'Noli mezzi', 'Manodopera esterna', 'Subappalto', 'Trasporti', 'Attrezzatura', 'Smaltimento', 'Altro', 'Personalizzato']
 
 const CAT_COLORS: Record<string, string> = {
-  'Ore Operai':        '#0f766e',
-  'Materiali':         '#1d4ed8',
-  'Noli mezzi':        '#7c3aed',
-  'Manodopera esterna':'#0891b2',
-  'Subappalto':        '#b45309',
-  'Trasporti':         '#059669',
-  'Attrezzatura':      '#dc2626',
-  'Smaltimento':       '#9333ea',
-  'Altro':             '#6b7280',
+  'Ore Operai':         '#0f766e',
+  'Materiali':          '#1d4ed8',
+  'Noli mezzi':         '#7c3aed',
+  'Manodopera esterna': '#0891b2',
+  'Subappalto':         '#b45309',
+  'Trasporti':          '#059669',
+  'Attrezzatura':       '#dc2626',
+  'Smaltimento':        '#9333ea',
+  'Altro':              '#6b7280',
+  'Personalizzato':     '#d97706',
+}
+
+interface RigaCosto {
+  id: string
+  data: string
+  categoria: string
+  categoria_personalizzata: string
+  descrizione: string
+  quantita: string
+  prezzo_unitario: string
+  importo: string
+  note: string
+}
+
+function nuovaRiga(data: string): RigaCosto {
+  return { id: Math.random().toString(36).slice(2), data, categoria: 'Ore Operai', categoria_personalizzata: '', descrizione: '', quantita: '', prezzo_unitario: '', importo: '', note: '' }
 }
 
 const statoBadge = (s: string) => {
@@ -36,16 +53,14 @@ export default function CostiCantiere() {
   const [filtroMese, setFiltroMese] = useState('')
   const [modalCosto, setModalCosto] = useState(false)
   const [loadingCosto, setLoadingCosto] = useState(false)
-  const [formCosto, setFormCosto] = useState({
-    data: new Date().toISOString().split('T')[0], categoria: 'Ore Operai', descrizione: '', importo: '', quantita: '', prezzo_unitario: '', note: ''
-  })
+  const [dataBase, setDataBase] = useState(new Date().toISOString().split('T')[0])
+  const [righe, setRighe] = useState<RigaCosto[]>([nuovaRiga(new Date().toISOString().split('T')[0])])
+
   const [ddts, setDdts] = useState<any[]>([])
   const [fornitori, setFornitori] = useState<any[]>([])
   const [modalDdt, setModalDdt] = useState(false)
   const [loadingDdt, setLoadingDdt] = useState(false)
-  const [formDdt, setFormDdt] = useState({
-    data: '', numero: '', fornitore_id: '', descrizione: '', importo: '', mese_fattura_previsto: '', note: ''
-  })
+  const [formDdt, setFormDdt] = useState({ data: '', numero: '', fornitore_id: '', descrizione: '', importo: '', mese_fattura_previsto: '', note: '' })
   const [modalContabilita, setModalContabilita] = useState(false)
   const [meseContabilita, setMeseContabilita] = useState('')
 
@@ -60,17 +75,9 @@ export default function CostiCantiere() {
       profilo = p
       setUtente({ ...user, profilo: p })
     }
-
-    // Se geometra con solo cantieri assegnati → filtra per geometra_id
     const soloAssegnati = profilo?.perm_solo_cantieri_assegnati === true
-    let queryProgetti = supabase.from('progetti')
-      .select('id,codice,nome,geometra_id,geometra_nome,budget_costi,valore_contratto')
-      .eq('stato', 'In Corso')
-      .order('codice')
-    if (soloAssegnati && user) {
-      queryProgetti = queryProgetti.eq('geometra_id', user.id)
-    }
-
+    let queryProgetti = supabase.from('progetti').select('id,codice,nome,geometra_id,geometra_nome,budget_costi,valore_contratto').eq('stato', 'In Corso').order('codice')
+    if (soloAssegnati && user) queryProgetti = queryProgetti.eq('geometra_id', user.id)
     const [{ data: p }, { data: f }] = await Promise.all([
       queryProgetti,
       supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale'),
@@ -82,36 +89,64 @@ export default function CostiCantiere() {
 
   async function loadCosti() {
     if (!progettoSel) return
-    const { data } = await supabase.from('costi_cantiere').select('*')
-      .eq('progetto_id', progettoSel).order('data', { ascending: true })
+    const { data } = await supabase.from('costi_cantiere').select('*').eq('progetto_id', progettoSel).order('data', { ascending: true })
     setCosti(data || [])
   }
 
   async function loadDdt() {
     if (!progettoSel) return
-    const { data } = await supabase.from('ddt').select('*')
-      .eq('progetto_id', progettoSel).order('data', { ascending: false })
+    const { data } = await supabase.from('ddt').select('*').eq('progetto_id', progettoSel).order('data', { ascending: false })
     setDdts(data || [])
   }
 
-  async function salvaCosto() {
-    if (!formCosto.importo || !progettoSel) { alert('Inserisci importo e seleziona un cantiere'); return }
+  function aggiornaRiga(id: string, campo: keyof RigaCosto, valore: string) {
+    setRighe(prev => prev.map(r => {
+      if (r.id !== id) return r
+      const n = { ...r, [campo]: valore }
+      if (campo === 'quantita' || campo === 'prezzo_unitario') {
+        const q = parseFloat(campo === 'quantita' ? valore : r.quantita) || 0
+        const p = parseFloat(campo === 'prezzo_unitario' ? valore : r.prezzo_unitario) || 0
+        if (q > 0 && p > 0) n.importo = (q * p).toFixed(2)
+      }
+      return n
+    }))
+  }
+
+  function eliminaRiga(id: string) {
+    if (righe.length === 1) return
+    setRighe(prev => prev.filter(r => r.id !== id))
+  }
+
+  function apriModalCosto() {
+    const oggi = new Date().toISOString().split('T')[0]
+    setDataBase(oggi)
+    setRighe([nuovaRiga(oggi)])
+    setModalCosto(true)
+  }
+
+  async function salvaCosti() {
+    const righeValide = righe.filter(r => r.importo && parseFloat(r.importo) > 0)
+    if (righeValide.length === 0) { alert('Inserisci almeno un costo con importo'); return }
+    if (!progettoSel) { alert('Seleziona un cantiere'); return }
     setLoadingCosto(true)
     const prj = progetti.find(p => p.id === progettoSel)
     const { data: { user } } = await supabase.auth.getUser()
     const { data: profilo } = await supabase.from('utenti').select('nome').eq('id', user?.id).single()
-    const { data: inserted } = await supabase.from('costi_cantiere').insert({
-      progetto_id: progettoSel, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
-      data: formCosto.data, categoria: formCosto.categoria, descrizione: formCosto.descrizione,
-      importo: parseFloat(formCosto.importo) || 0,
-      quantita: formCosto.quantita ? parseFloat(formCosto.quantita) : null,
-      prezzo_unitario: formCosto.prezzo_unitario ? parseFloat(formCosto.prezzo_unitario) : null,
-      inserito_da: user?.id, inserito_da_nome: profilo?.nome || user?.email, note: formCosto.note
-    }).select('id').single()
-    await logActivity('inserimento', 'costi_cantiere', inserted?.id || '', `${formCosto.categoria} — ${prj?.codice} ${prj?.nome} · € ${formCosto.importo}${formCosto.descrizione ? ' · ' + formCosto.descrizione : ''}`)
+    for (const r of righeValide) {
+      const categoriaEffettiva = r.categoria === 'Personalizzato' ? (r.categoria_personalizzata || 'Personalizzato') : r.categoria
+      const { data: inserted } = await supabase.from('costi_cantiere').insert({
+        progetto_id: progettoSel, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
+        data: r.data || dataBase, categoria: categoriaEffettiva, descrizione: r.descrizione,
+        importo: parseFloat(r.importo) || 0,
+        quantita: r.quantita ? parseFloat(r.quantita) : null,
+        prezzo_unitario: r.prezzo_unitario ? parseFloat(r.prezzo_unitario) : null,
+        inserito_da: user?.id, inserito_da_nome: profilo?.nome || user?.email, note: r.note
+      }).select('id').single()
+      await logActivity('inserimento', 'costi_cantiere', inserted?.id || '', `${categoriaEffettiva} — ${prj?.codice} ${prj?.nome} · € ${r.importo}${r.descrizione ? ' · ' + r.descrizione : ''}`)
+    }
     setModalCosto(false)
-    setFormCosto({ data: new Date().toISOString().split('T')[0], categoria: 'Ore Operai', descrizione: '', importo: '', quantita: '', prezzo_unitario: '', note: '' })
-    setLoadingCosto(false); loadCosti()
+    setLoadingCosto(false)
+    loadCosti()
   }
 
   async function salvaDdt() {
@@ -121,7 +156,7 @@ export default function CostiCantiere() {
     const prj = progetti.find(p => p.id === progettoSel)
     const { data: inserted, error } = await supabase.from('ddt').insert({
       data: formDdt.data || new Date().toISOString().split('T')[0], numero: formDdt.numero,
-      fornitore_id: formDdt.fornitore_id, fornitore_nome: for_?.ragione_superficie || '',
+      fornitore_id: formDdt.fornitore_id, fornitore_nome: for_?.ragione_sociale || '',
       progetto_id: progettoSel, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
       descrizione: formDdt.descrizione, importo: parseFloat(formDdt.importo) || 0,
       mese_fattura_previsto: formDdt.mese_fattura_previsto, stato: 'Da Fatturare', note: formDdt.note,
@@ -141,7 +176,7 @@ export default function CostiCantiere() {
     const costo = costi.find(c => c.id === id)
     const prj = progetti.find(p => p.id === progettoSel)
     await supabase.from('costi_cantiere').delete().eq('id', id)
-    await logActivity('eliminazione', 'costi_cantiere', id, `${costo?.categoria} — ${prj?.codice} ${prj?.nome} · € ${costo?.importo} · inserito da ${costo?.inserito_da_nome}`)
+    await logActivity('eliminazione', 'costi_cantiere', id, `${costo?.categoria} — ${prj?.codice} ${prj?.nome} · € ${costo?.importo}`)
     loadCosti()
   }
 
@@ -154,18 +189,12 @@ export default function CostiCantiere() {
   }
 
   const progetto = progetti.find(p => p.id === progettoSel)
-
-  const costiFiltrati = useMemo(() => {
-    if (!filtroMese) return costi
-    return costi.filter(c => c.data?.startsWith(filtroMese))
-  }, [costi, filtroMese])
-
+  const costiFiltrati = useMemo(() => filtroMese ? costi.filter(c => c.data?.startsWith(filtroMese)) : costi, [costi, filtroMese])
   const totalePerCategoria = useMemo(() => {
     const mappa: Record<string, number> = {}
     costiFiltrati.forEach(c => { mappa[c.categoria] = (mappa[c.categoria] || 0) + (c.importo || 0) })
     return mappa
   }, [costiFiltrati])
-
   const totale = costiFiltrati.reduce((s, c) => s + (c.importo || 0), 0)
   const totaleTutti = costi.reduce((s, c) => s + (c.importo || 0), 0)
   const budgetPerc = progetto?.budget_costi > 0 ? Math.round(totaleTutti / progetto.budget_costi * 100) : 0
@@ -179,7 +208,7 @@ export default function CostiCantiere() {
     const costiPerReport = meseContabilita ? costi.filter(c => c.data?.startsWith(meseContabilita)) : costi
     const giorniSet = new Set(costiPerReport.map(c => c.data).filter(Boolean))
     const giorni = Array.from(giorniSet).sort()
-    const catPresenti = CATEGORIE.filter(cat => costiPerReport.some(c => c.categoria === cat))
+    const catPresenti = [...new Set(costiPerReport.map(c => c.categoria))].filter(Boolean)
     const matrice: Record<string, Record<string, number>> = {}
     catPresenti.forEach(cat => { matrice[cat] = {} })
     costiPerReport.forEach(c => {
@@ -194,10 +223,7 @@ export default function CostiCantiere() {
     return { giorni, catPresenti, matrice, totaliGiorno, totaliCategoria, totaleGenerale }
   }, [costi, meseContabilita])
 
-  function apriContabilita() {
-    setMeseContabilita(filtroMese || mesiDisponibili[0] || '')
-    setModalContabilita(true)
-  }
+  const totaleRighe = righe.reduce((s, r) => s + (parseFloat(r.importo) || 0), 0)
 
   return (
     <div className="flex min-h-screen">
@@ -207,10 +233,10 @@ export default function CostiCantiere() {
           <h1 className="text-xl font-semibold">Costi cantiere giornalieri</h1>
           <div className="flex gap-2">
             {tab === 'costi' && costi.length > 0 && (
-              <button className="btn" onClick={apriContabilita}>📊 Crea Contabilità</button>
+              <button className="btn" onClick={() => { setMeseContabilita(filtroMese || mesiDisponibili[0] || ''); setModalContabilita(true) }}>📊 Crea Contabilità</button>
             )}
             {tab === 'costi'
-              ? <button className="btn btn-primary" onClick={() => setModalCosto(true)}>+ Inserisci costo</button>
+              ? <button className="btn btn-primary" onClick={apriModalCosto}>+ Inserisci costi</button>
               : <button className="btn btn-primary" onClick={() => setModalDdt(true)}>+ Inserisci DDT</button>
             }
           </div>
@@ -253,9 +279,6 @@ export default function CostiCantiere() {
               <div className={`rounded-xl p-4 border ${budgetPerc >= 100 ? 'bg-red-50 border-red-200' : budgetPerc >= 80 ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'}`}>
                 <p className={`text-xs mb-1 ${budgetPerc >= 100 ? 'text-red-600' : budgetPerc >= 80 ? 'text-amber-600' : 'text-green-600'}`}>Budget utilizzato</p>
                 <p className={`text-xl font-semibold ${budgetPerc >= 100 ? 'text-red-700' : budgetPerc >= 80 ? 'text-amber-700' : 'text-green-700'}`}>{budgetPerc}%</p>
-                <div className="h-1.5 bg-white/50 rounded-full mt-2 overflow-hidden">
-                  <div className={`h-full rounded-full ${budgetPerc >= 100 ? 'bg-red-500' : budgetPerc >= 80 ? 'bg-amber-500' : 'bg-green-500'}`} style={{ width: `${Math.min(budgetPerc, 100)}%` }} />
-                </div>
               </div>
               <div className="bg-purple-50 rounded-xl p-4 border border-purple-100">
                 <p className="text-xs text-purple-600 mb-1">Totale DDT cantiere</p>
@@ -277,10 +300,7 @@ export default function CostiCantiere() {
               <>
                 {Object.keys(totalePerCategoria).length > 0 && (
                   <div className="card mb-4">
-                    <h3 className="text-sm font-medium text-gray-600 mb-3">
-                      Ripartizione costi per categoria
-                      {filtroMese && <span className="text-gray-400 font-normal ml-2">— {new Date(filtroMese + '-01').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })}</span>}
-                    </h3>
+                    <h3 className="text-sm font-medium text-gray-600 mb-3">Ripartizione costi per categoria</h3>
                     <div className="space-y-2">
                       {Object.entries(totalePerCategoria).sort((a, b) => b[1] - a[1]).map(([cat, imp]) => (
                         <div key={cat} className="flex items-center gap-3">
@@ -354,72 +374,106 @@ export default function CostiCantiere() {
         )}
       </main>
 
-      {/* Modal costo */}
+      {/* Modal costi multi-riga */}
       {modalCosto && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+          <div className="bg-white rounded-xl p-6 w-full max-w-5xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="text-base font-semibold">Inserisci costo</h2>
+                <h2 className="text-base font-semibold">Inserisci costi giornalieri</h2>
                 <p className="text-xs text-gray-500 mt-0.5">{progetto?.codice} — {progetto?.nome}</p>
               </div>
               <button onClick={() => setModalCosto(false)} className="text-gray-400 text-xl">×</button>
             </div>
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="label">Data *</label><input className="input" type="date" value={formCosto.data} onChange={e => setFormCosto({...formCosto, data: e.target.value})} /></div>
-                <div></div>
-              </div>
-              <div>
-                <label className="label">Categoria *</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {CATEGORIE.map(cat => (
-                    <button key={cat} type="button" onClick={() => setFormCosto({...formCosto, categoria: cat})}
-                      className={`text-xs px-3 py-2 rounded-lg border text-left transition-all ${formCosto.categoria === cat ? 'text-white border-transparent' : 'border-gray-200 text-gray-600 hover:border-blue-300'}`}
-                      style={formCosto.categoria === cat ? { background: CAT_COLORS[cat] } : {}}>
-                      {cat}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div><label className="label">Descrizione</label><input className="input" placeholder="es. Calcestruzzo C25/30, Operaio Mario Rossi..." value={formCosto.descrizione} onChange={e => setFormCosto({...formCosto, descrizione: e.target.value})} /></div>
-              {/* Calcolatore quantità × prezzo */}
-              <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                <p className="text-xs font-medium text-gray-600 mb-2">🧮 Calcolatore (opzionale)</p>
-                <div className="grid grid-cols-3 gap-2 items-end">
-                  <div>
-                    <label className="label">Quantità</label>
-                    <input className="input" type="number" step="0.01" placeholder="es. 8" value={formCosto.quantita}
-                      onChange={e => {
-                        const q = e.target.value
-                        const p = formCosto.prezzo_unitario
-                        const tot = q && p ? (parseFloat(q) * parseFloat(p)).toFixed(2) : formCosto.importo
-                        setFormCosto({...formCosto, quantita: q, importo: tot})
-                      }} />
-                  </div>
-                  <div>
-                    <label className="label">Prezzo unitario (€)</label>
-                    <input className="input" type="number" step="0.01" placeholder="es. 25.00" value={formCosto.prezzo_unitario}
-                      onChange={e => {
-                        const p = e.target.value
-                        const q = formCosto.quantita
-                        const tot = q && p ? (parseFloat(q) * parseFloat(p)).toFixed(2) : formCosto.importo
-                        setFormCosto({...formCosto, prezzo_unitario: p, importo: tot})
-                      }} />
-                  </div>
-                  <div>
-                    <label className="label">= Totale (€) *</label>
-                    <input className="input font-semibold text-blue-800" type="number" step="0.01" placeholder="0.00" value={formCosto.importo}
-                      onChange={e => setFormCosto({...formCosto, importo: e.target.value, quantita: '', prezzo_unitario: ''})} />
-                  </div>
-                </div>
-                <p className="text-xs text-gray-400 mt-1">Puoi inserire direttamente il totale oppure usare il calcolatore</p>
-              </div>
-              <div><label className="label">Note aggiuntive</label><input className="input" placeholder="es. Fornitore, bolla n°..." value={formCosto.note} onChange={e => setFormCosto({...formCosto, note: e.target.value})} /></div>
+
+            <div className="flex items-center gap-3 mb-4">
+              <label className="label mb-0">Data di default per le righe:</label>
+              <input className="input w-40" type="date" value={dataBase}
+                onChange={e => {
+                  setDataBase(e.target.value)
+                  setRighe(prev => prev.map(r => ({ ...r, data: e.target.value })))
+                }} />
+              <span className="text-xs text-gray-400">(puoi cambiare la data singolarmente per ogni riga)</span>
             </div>
-            <div className="flex gap-2 justify-end mt-4">
-              <button className="btn" onClick={() => setModalCosto(false)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salvaCosto} disabled={loadingCosto}>{loadingCosto ? 'Salvataggio...' : 'Salva costo'}</button>
+
+            <div className="overflow-x-auto mb-3">
+              <table className="table-base" style={{ minWidth: 900 }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: 110 }}>Data</th>
+                    <th style={{ width: 160 }}>Categoria</th>
+                    <th>Descrizione</th>
+                    <th style={{ width: 80 }}>Qtà</th>
+                    <th style={{ width: 90 }}>€/unit</th>
+                    <th style={{ width: 100 }}>Importo *</th>
+                    <th style={{ width: 140 }}>Note</th>
+                    <th style={{ width: 36 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {righe.map((r, idx) => (
+                    <tr key={r.id}>
+                      <td>
+                        <input className="input text-xs py-1" type="date" value={r.data}
+                          onChange={e => aggiornaRiga(r.id, 'data', e.target.value)} />
+                      </td>
+                      <td>
+                        <select className="input text-xs py-1" value={r.categoria}
+                          onChange={e => aggiornaRiga(r.id, 'categoria', e.target.value)}>
+                          {CATEGORIE.map(c => <option key={c}>{c}</option>)}
+                        </select>
+                        {r.categoria === 'Personalizzato' && (
+                          <input className="input text-xs py-1 mt-1" placeholder="Nome categoria..."
+                            value={r.categoria_personalizzata}
+                            onChange={e => aggiornaRiga(r.id, 'categoria_personalizzata', e.target.value)} />
+                        )}
+                      </td>
+                      <td>
+                        <input className="input text-xs py-1" placeholder="es. Operaio, calcestruzzo..."
+                          value={r.descrizione}
+                          onChange={e => aggiornaRiga(r.id, 'descrizione', e.target.value)} />
+                      </td>
+                      <td>
+                        <input className="input text-xs py-1" type="number" step="0.01" placeholder="es. 8"
+                          value={r.quantita}
+                          onChange={e => aggiornaRiga(r.id, 'quantita', e.target.value)} />
+                      </td>
+                      <td>
+                        <input className="input text-xs py-1" type="number" step="0.01" placeholder="es. 25"
+                          value={r.prezzo_unitario}
+                          onChange={e => aggiornaRiga(r.id, 'prezzo_unitario', e.target.value)} />
+                      </td>
+                      <td>
+                        <input className="input text-xs py-1 font-semibold text-blue-800" type="number" step="0.01" placeholder="0.00"
+                          value={r.importo}
+                          onChange={e => aggiornaRiga(r.id, 'importo', e.target.value)} />
+                      </td>
+                      <td>
+                        <input className="input text-xs py-1" placeholder="Note..."
+                          value={r.note}
+                          onChange={e => aggiornaRiga(r.id, 'note', e.target.value)} />
+                      </td>
+                      <td>
+                        <button className="text-gray-300 hover:text-red-500 text-sm" onClick={() => eliminaRiga(r.id)} disabled={righe.length === 1}>✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <button className="btn btn-sm" onClick={() => setRighe(prev => [...prev, nuovaRiga(dataBase)])}>+ Aggiungi riga</button>
+              <div className="flex items-center gap-4">
+                <span className="text-sm font-semibold text-gray-700">
+                  Totale: <span className="text-blue-800">{euro(totaleRighe)}</span>
+                  {' '}({righe.filter(r => parseFloat(r.importo) > 0).length} voci)
+                </span>
+                <button className="btn" onClick={() => setModalCosto(false)}>Annulla</button>
+                <button className="btn btn-primary" onClick={salvaCosti} disabled={loadingCosto}>
+                  {loadingCosto ? 'Salvataggio...' : `Salva ${righe.filter(r => parseFloat(r.importo) > 0).length} costi`}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -445,13 +499,10 @@ export default function CostiCantiere() {
                   {fornitori.map(f => <option key={f.id} value={f.id}>{f.ragione_sociale}</option>)}
                 </select>
               </div>
-              <div className="col-span-2"><label className="label">Descrizione materiale/servizio</label><input className="input" placeholder="es. Calcestruzzo C25/30 - 50mc" value={formDdt.descrizione} onChange={e => setFormDdt({...formDdt, descrizione: e.target.value})} /></div>
-              <div><label className="label">Importo (€) *</label><input className="input" type="number" step="0.01" placeholder="0.00" value={formDdt.importo} onChange={e => setFormDdt({...formDdt, importo: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Descrizione</label><input className="input" value={formDdt.descrizione} onChange={e => setFormDdt({...formDdt, descrizione: e.target.value})} /></div>
+              <div><label className="label">Importo (€) *</label><input className="input" type="number" step="0.01" value={formDdt.importo} onChange={e => setFormDdt({...formDdt, importo: e.target.value})} /></div>
               <div><label className="label">Mese fattura previsto</label><input className="input" type="month" value={formDdt.mese_fattura_previsto} onChange={e => setFormDdt({...formDdt, mese_fattura_previsto: e.target.value})} /></div>
               <div className="col-span-2"><label className="label">Note</label><input className="input" value={formDdt.note} onChange={e => setFormDdt({...formDdt, note: e.target.value})} /></div>
-            </div>
-            <div className="mt-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
-              📌 Cantiere preselezionato: <strong>{progetto?.codice} — {progetto?.nome}</strong>
             </div>
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalDdt(false)}>Annulla</button>
@@ -555,32 +606,6 @@ export default function CostiCantiere() {
                       <p style={{ fontSize: 20, fontWeight: 800, color: '#5b21b6' }}>€ {euroShort(datiContabilita.giorni.length > 0 ? datiContabilita.totaleGenerale / datiContabilita.giorni.length : 0)}</p>
                     </div>
                   </div>
-                  <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', marginBottom: 24 }}>
-                    <div style={{ background: '#1e3a8a', color: 'white', padding: '8px 16px', fontWeight: 600, fontSize: 12 }}>Riepilogo per categoria — Costo di vendita</div>
-                    <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
-                      <thead>
-                        <tr style={{ background: '#f8faff' }}>
-                          <th style={{ padding: '8px 16px', textAlign: 'left', borderBottom: '1px solid #e2e8f0', color: '#374151' }}>Categoria</th>
-                          <th style={{ padding: '8px 16px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', color: '#374151' }}>Importo (€)</th>
-                          <th style={{ padding: '8px 16px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', color: '#374151' }}>% sul totale</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {datiContabilita.catPresenti.map((cat, idx) => (
-                          <tr key={cat} style={{ background: idx % 2 === 0 ? 'white' : '#f8faff' }}>
-                            <td style={{ padding: '8px 16px', fontWeight: 500, borderBottom: '1px solid #f1f5f9', color: CAT_COLORS[cat] || '#374151' }}>{cat}</td>
-                            <td style={{ padding: '8px 16px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9' }}>{euroShort(datiContabilita.totaliCategoria[cat])}</td>
-                            <td style={{ padding: '8px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: '#6b7280' }}>{datiContabilita.totaleGenerale > 0 ? Math.round(datiContabilita.totaliCategoria[cat] / datiContabilita.totaleGenerale * 100) : 0}%</td>
-                          </tr>
-                        ))}
-                        <tr style={{ background: '#1e3a8a' }}>
-                          <td style={{ padding: '10px 16px', fontWeight: 700, color: 'white' }}>TOTALE</td>
-                          <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 800, color: '#fbbf24', fontSize: 14 }}>{euroShort(datiContabilita.totaleGenerale)}</td>
-                          <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, color: 'white' }}>100%</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
                   <div className="grid grid-cols-2 gap-8 mt-8 pt-4 border-t border-gray-200">
                     <div>
                       <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 32 }}>Firma geometra</p>
@@ -604,11 +629,7 @@ export default function CostiCantiere() {
         @media print {
           body * { visibility: hidden; }
           #report-contabilita, #report-contabilita * { visibility: visible; }
-          #report-contabilita {
-            position: fixed; top: 0; left: 0;
-            width: 100%; padding: 16px;
-            font-size: 10px;
-          }
+          #report-contabilita { position: fixed; top: 0; left: 0; width: 100%; padding: 16px; font-size: 10px; }
           #report-contabilita table { page-break-inside: auto; }
           #report-contabilita tr { page-break-inside: avoid; page-break-after: auto; }
           #report-contabilita thead { display: table-header-group; }
