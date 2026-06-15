@@ -7,19 +7,25 @@ import jsPDF from 'jspdf'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+interface CostoExtra {
+  descrizione: string
+  importo: number
+}
+
 function generaAutorizzazionePDF(opts: {
   fornitore: string, numeroFattura: string, impFattura: number,
-  ddtList: any[], note: string
+  ddtList: any[], note: string, costiExtra: CostoExtra[]
 }) {
-  const { fornitore, numeroFattura, impFattura, ddtList, note } = opts
+  const { fornitore, numeroFattura, impFattura, ddtList, note, costiExtra } = opts
   const totDdt = ddtList.reduce((s, d) => s + d.importo, 0)
-  const scostamento = impFattura - totDdt
+  const totExtra = costiExtra.reduce((s, c) => s + c.importo, 0)
+  const totale = totDdt + totExtra
+  const scostamento = impFattura - totale
   const corrispondente = Math.abs(scostamento) < 0.02
 
   const doc = new jsPDF()
   let y = 20
 
-  // Logo
   try {
     doc.addImage('/logo.png', 'PNG', 14, 10, 18, 18)
   } catch (e) {}
@@ -56,7 +62,7 @@ function generaAutorizzazionePDF(opts: {
   y += 5
 
   ddtList.forEach(d => {
-    if (y > 270) { doc.addPage(); y = 20 }
+    if (y > 260) { doc.addPage(); y = 20 }
     doc.text(d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—', 14, y)
     doc.text(String(d.numero || ''), 45, y)
     doc.text((d.progetto_nome || '—').substring(0, 40), 85, y)
@@ -66,12 +72,50 @@ function generaAutorizzazionePDF(opts: {
 
   y += 2
   doc.line(14, y, 196, y)
-  y += 7
+  y += 6
 
-  doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
   doc.text('Totale DDT:', 140, y)
   doc.text(euro(totDdt), 196, y, { align: 'right' })
+  y += 8
+
+  // Costi extra
+  if (costiExtra.length > 0) {
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.text('Costi extra', 14, y)
+    y += 6
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9)
+
+    doc.text('Descrizione', 14, y)
+    doc.text('Importo', 180, y, { align: 'right' })
+    y += 2
+    doc.line(14, y, 196, y)
+    y += 5
+
+    costiExtra.forEach(c => {
+      if (y > 260) { doc.addPage(); y = 20 }
+      doc.text(c.descrizione, 14, y)
+      doc.text(euro(c.importo), 196, y, { align: 'right' })
+      y += 6
+    })
+
+    y += 2
+    doc.line(14, y, 196, y)
+    y += 6
+
+    doc.setFont('helvetica', 'bold')
+    doc.text('Totale costi extra:', 140, y)
+    doc.text(euro(totExtra), 196, y, { align: 'right' })
+    y += 8
+  }
+
+  // Totale complessivo
+  doc.setFontSize(10)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Totale DDT + extra:', 140, y)
+  doc.text(euro(totale), 196, y, { align: 'right' })
   y += 7
   doc.text('Imponibile fattura:', 140, y)
   doc.text(euro(impFattura), 196, y, { align: 'right' })
@@ -110,7 +154,6 @@ function generaAutorizzazionePDF(opts: {
 
   y = Math.max(y, 230)
 
-  // Firme affiancate
   doc.setFont('helvetica', 'bold')
   doc.text('Firma Tecnico', 45, y, { align: 'center' })
   doc.text('Firma Titolare', 150, y, { align: 'center' })
@@ -138,13 +181,14 @@ export default function DaRiceverePage() {
   const [filtroCantiere, setFiltroCantiere] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const [cercaFornitoreAperte, setCercaFornitoreAperte] = useState('')
+  // Costi extra nel modal
+  const [costiExtra, setCostiExtra] = useState<CostoExtra[]>([])
 
+  const [cercaFornitoreAperte, setCercaFornitoreAperte] = useState('')
   const [cercaFornitoreStorico, setCercaFornitoreStorico] = useState('')
   const [filtroStatoStorico, setFiltroStatoStorico] = useState('tutti')
   const [dataDAStorico, setDataDAStorico] = useState('')
   const [dataAStorico, setDataAStorico] = useState('')
-
   const [noteStorico, setNoteStorico] = useState<Record<string, string>>({})
 
   useEffect(() => { load() }, [])
@@ -168,9 +212,11 @@ export default function DaRiceverePage() {
       const arricchite = await Promise.all(ff.map(async (f: any) => {
         const { data: ddtAbbinati } = await supabase.from('ddt')
           .select('*').eq('fattura_abbinata', f.numero).order('data', { ascending: true })
-        return { ...f, ddt_abbinati: ddtAbbinati || [] }
+        const { data: extra } = await supabase.from('fattura_costi_extra')
+          .select('*').eq('fattura_id', f.id).order('created_at', { ascending: true })
+        return { ...f, ddt_abbinati: ddtAbbinati || [], costi_extra: extra || [] }
       }))
-      setFattureChiuse(arricchite.filter(f => f.ddt_abbinati.length > 0))
+      setFattureChiuse(arricchite.filter(f => f.ddt_abbinati.length > 0 || f.costi_extra.length > 0))
     }
   }
 
@@ -181,6 +227,7 @@ export default function DaRiceverePage() {
     setSelezionati(new Set())
     setFiltroCantiere('')
     setNFattura(''); setImpFattura(''); setScadenza(''); setNoteAbbinamento('')
+    setCostiExtra([])
     setModal(true)
   }
 
@@ -190,6 +237,21 @@ export default function DaRiceverePage() {
       if (n.has(id)) n.delete(id); else n.add(id)
       return n
     })
+  }
+
+  function aggiungiCostoExtra() {
+    setCostiExtra(prev => [...prev, { descrizione: '', importo: 0 }])
+  }
+
+  function aggiornaCostoExtra(idx: number, field: keyof CostoExtra, value: string) {
+    setCostiExtra(prev => prev.map((c, i) => i === idx ? {
+      ...c,
+      [field]: field === 'importo' ? parseFloat(value) || 0 : value
+    } : c))
+  }
+
+  function rimuoviCostoExtra(idx: number) {
+    setCostiExtra(prev => prev.filter((_, i) => i !== idx))
   }
 
   const cantieriFornitore = [...new Set(ddtFornitore.map(d => d.progetto_nome || '—'))].sort()
@@ -202,8 +264,10 @@ export default function DaRiceverePage() {
   })
 
   const totSel = ddtFornitore.filter(d => selezionati.has(d.id)).reduce((s, d) => s + d.importo, 0)
-  const scostamento = parseFloat(impFattura || '0') - totSel
-  const scostOk = Math.abs(scostamento) < 0.02 && selezionati.size > 0
+  const totExtra = costiExtra.reduce((s, c) => s + (c.importo || 0), 0)
+  const totaleAbbinamento = totSel + totExtra
+  const scostamento = parseFloat(impFattura || '0') - totaleAbbinamento
+  const scostOk = Math.abs(scostamento) < 0.02 && (selezionati.size > 0 || costiExtra.length > 0)
 
   const gruppiFiltrati = useMemo(() => {
     if (!cercaFornitoreAperte) return gruppi
@@ -231,10 +295,14 @@ export default function DaRiceverePage() {
 
   async function eseguiAbbinamento() {
     if (!nFattura || !impFattura) { alert('Inserisci N° fattura e importo'); return }
-    if (selezionati.size === 0) { alert('Seleziona almeno un DDT'); return }
+    if (selezionati.size === 0 && costiExtra.length === 0) { alert('Seleziona almeno un DDT o aggiungi un costo extra'); return }
     setLoading(true)
     const ddtSelezionati = ddtFornitore.filter(d => selezionati.has(d.id))
-    await supabase.from('ddt').update({ stato: 'Fatturato', fattura_abbinata: nFattura }).in('id', Array.from(selezionati))
+
+    if (selezionati.size > 0) {
+      await supabase.from('ddt').update({ stato: 'Fatturato', fattura_abbinata: nFattura }).in('id', Array.from(selezionati))
+    }
+
     const { data: inserted } = await supabase.from('fatture_fornitori').insert({
       data: new Date().toISOString().split('T')[0],
       numero: nFattura,
@@ -247,15 +315,25 @@ export default function DaRiceverePage() {
       rata1_stato: 'Da Pagare',
       note: noteAbbinamento || null,
     }).select('id').single()
-    await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `Abbinamento ${selezionati.size} DDT → Fattura ${nFattura} · ${fornSel} · € ${impFattura}`)
 
-    // Genera PDF autorizzazione
+    if (inserted?.id && costiExtra.length > 0) {
+      const extraValidi = costiExtra.filter(c => c.descrizione && c.importo > 0)
+      if (extraValidi.length > 0) {
+        await supabase.from('fattura_costi_extra').insert(
+          extraValidi.map(c => ({ fattura_id: inserted.id, descrizione: c.descrizione, importo: c.importo }))
+        )
+      }
+    }
+
+    await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `Abbinamento ${selezionati.size} DDT + ${costiExtra.length} extra → Fattura ${nFattura} · ${fornSel} · € ${impFattura}`)
+
     generaAutorizzazionePDF({
       fornitore: fornSel,
       numeroFattura: nFattura,
       impFattura: parseFloat(impFattura),
       ddtList: ddtSelezionati,
       note: noteAbbinamento,
+      costiExtra: costiExtra.filter(c => c.descrizione && c.importo > 0),
     })
 
     setModal(false); load()
@@ -269,6 +347,7 @@ export default function DaRiceverePage() {
       impFattura: f.imponibile,
       ddtList: f.ddt_abbinati,
       note: noteStorico[f.id] ?? (f.note || ''),
+      costiExtra: f.costi_extra || [],
     })
   }
 
@@ -413,7 +492,9 @@ export default function DaRiceverePage() {
               <div className="space-y-2">
                 {fattureStoricFiltrate.map(f => {
                   const totDdtF = f.ddt_abbinati.reduce((s: number, d: any) => s + d.importo, 0)
-                  const scostF = f.imponibile - totDdtF
+                  const totExtraF = (f.costi_extra || []).reduce((s: number, c: any) => s + c.importo, 0)
+                  const totaleF = totDdtF + totExtraF
+                  const scostF = f.imponibile - totaleF
                   const corrispF = Math.abs(scostF) < 0.02
                   return (
                   <div key={f.id} className="card p-0 overflow-hidden">
@@ -447,6 +528,39 @@ export default function DaRiceverePage() {
                             <tr className="bg-blue-100">
                               <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Totale DDT</td>
                               <td className="font-bold text-sm text-blue-700">{euro(totDdtF)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+
+                        {/* Costi extra storico */}
+                        {(f.costi_extra || []).length > 0 && (
+                          <>
+                            <div className="px-4 py-2 text-xs font-medium text-orange-700 bg-orange-50 border-t border-orange-100">
+                              Costi extra ({f.costi_extra.length})
+                            </div>
+                            <table className="table-base">
+                              <thead><tr><th>Descrizione</th><th>Importo</th></tr></thead>
+                              <tbody>
+                                {f.costi_extra.map((c: any) => (
+                                  <tr key={c.id}>
+                                    <td className="text-xs text-gray-700">{c.descrizione}</td>
+                                    <td className="font-medium text-sm text-orange-700">{euro(c.importo)}</td>
+                                  </tr>
+                                ))}
+                                <tr className="bg-orange-50">
+                                  <td className="text-xs font-medium text-right text-orange-700">Totale extra</td>
+                                  <td className="font-bold text-sm text-orange-700">{euro(totExtraF)}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </>
+                        )}
+
+                        <table className="table-base">
+                          <tbody>
+                            <tr className="bg-blue-100">
+                              <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Totale DDT + extra</td>
+                              <td className="font-bold text-sm text-blue-700">{euro(totaleF)}</td>
                             </tr>
                             <tr className="bg-blue-100">
                               <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Imponibile fattura</td>
@@ -514,6 +628,8 @@ export default function DaRiceverePage() {
               <div className="col-span-2"><label className="label">Note (per autorizzazione a pagare)</label>
                 <input className="input" placeholder="Note opzionali" value={noteAbbinamento} onChange={e => setNoteAbbinamento(e.target.value)} /></div>
             </div>
+
+            {/* Selezione DDT */}
             <div className="mb-4 space-y-3">
               <p className="text-xs font-medium text-gray-600">Spunta i DDT coperti da questa fattura:</p>
               {Object.entries(ddtPerCantiere).map(([cantiere, ddt]) => (
@@ -554,24 +670,74 @@ export default function DaRiceverePage() {
                 </div>
               ))}
             </div>
+
+            {/* ── Costi extra ── */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-medium text-gray-600">Costi extra (spese non in bolla)</p>
+                <button onClick={aggiungiCostoExtra}
+                  className="text-xs bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 px-2.5 py-1 rounded-lg transition-colors">
+                  ＋ Aggiungi costo extra
+                </button>
+              </div>
+              {costiExtra.length > 0 && (
+                <div className="border border-orange-200 rounded-lg overflow-hidden">
+                  <div className="px-3 py-2 bg-orange-50 border-b border-orange-100">
+                    <span className="text-xs font-semibold text-orange-700">Costi aggiuntivi</span>
+                  </div>
+                  <div className="divide-y divide-gray-100">
+                    {costiExtra.map((c, idx) => (
+                      <div key={idx} className="flex items-center gap-2 px-3 py-2">
+                        <input
+                          className="input flex-1 text-xs"
+                          placeholder="es. Spese di incasso"
+                          value={c.descrizione}
+                          onChange={e => aggiornaCostoExtra(idx, 'descrizione', e.target.value)}
+                        />
+                        <input
+                          className="input w-28 text-xs text-right"
+                          type="number"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={c.importo || ''}
+                          onChange={e => aggiornaCostoExtra(idx, 'importo', e.target.value)}
+                        />
+                        <span className="text-xs text-gray-400">€</span>
+                        <button onClick={() => rimuoviCostoExtra(idx)}
+                          className="text-red-400 hover:text-red-600 text-lg leading-none px-1">×</button>
+                      </div>
+                    ))}
+                    <div className="flex items-center justify-between px-3 py-2 bg-orange-50">
+                      <span className="text-xs font-medium text-orange-700">Totale extra</span>
+                      <span className="text-sm font-bold text-orange-700">{euro(totExtra)}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Riepilogo scostamento */}
             <div className={`rounded-lg p-3 mb-4 text-sm font-medium ${
-              selezionati.size === 0 ? 'bg-gray-50 text-gray-500' :
+              (selezionati.size === 0 && costiExtra.length === 0) ? 'bg-gray-50 text-gray-500' :
               scostOk ? 'bg-green-50 text-green-800 border border-green-200' :
               scostamento > 0 ? 'bg-red-50 text-red-800 border border-red-200' :
               'bg-amber-50 text-amber-800 border border-amber-200'
             }`}>
-              {selezionati.size === 0 ? 'Seleziona i DDT coperti' :
+              {(selezionati.size === 0 && costiExtra.length === 0) ? 'Seleziona i DDT coperti o aggiungi costi extra' :
                !impFattura ? "Inserisci l'importo della fattura" :
-               scostOk ? `✅ Corrispondente — DDT: ${euro(totSel)} | Fattura: ${euro(parseFloat(impFattura))}` :
-               scostamento > 0 ? `🔴 Fattura supera DDT di ${euro(scostamento)}` :
-               `🟡 Fattura inferiore ai DDT di ${euro(Math.abs(scostamento))}`}
+               scostOk
+                 ? `✅ Corrispondente — DDT: ${euro(totSel)}${totExtra > 0 ? ` + Extra: ${euro(totExtra)}` : ''} = ${euro(totaleAbbinamento)} | Fattura: ${euro(parseFloat(impFattura))}`
+                 : scostamento > 0
+                   ? `🔴 Fattura supera il totale di ${euro(scostamento)} (DDT ${euro(totSel)}${totExtra > 0 ? ` + Extra ${euro(totExtra)}` : ''} = ${euro(totaleAbbinamento)})`
+                   : `🟡 Totale supera la fattura di ${euro(Math.abs(scostamento))} (DDT ${euro(totSel)}${totExtra > 0 ? ` + Extra ${euro(totExtra)}` : ''} = ${euro(totaleAbbinamento)})`
+              }
             </div>
             <div className="flex gap-2 justify-between items-center">
-              <p className="text-xs text-gray-400">{selezionati.size} DDT selezionati · Totale: {euro(totSel)}</p>
+              <p className="text-xs text-gray-400">{selezionati.size} DDT · {euro(totSel)}{totExtra > 0 ? ` + ${euro(totExtra)} extra` : ''} = {euro(totaleAbbinamento)}</p>
               <div className="flex gap-2">
                 <button className="btn" onClick={() => setModal(false)}>Annulla</button>
                 <button className="btn btn-success" onClick={eseguiAbbinamento} disabled={loading}>
-                  {loading ? 'Elaborazione...' : `Abbina ${selezionati.size} DDT e genera PDF`}
+                  {loading ? 'Elaborazione...' : `Abbina e genera PDF`}
                 </button>
               </div>
             </div>
