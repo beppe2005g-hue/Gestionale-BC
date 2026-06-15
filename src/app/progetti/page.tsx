@@ -13,6 +13,45 @@ const FASI = [
   { key: 'avanzamento_impianti', label: 'Impianti' },
 ]
 
+// ── FormProgetto fuori dal componente principale per evitare re-render ad ogni tasto ──
+function FormProgetto({ data, setData, clienti, utenti }: { data: any, setData: any, clienti: any[], utenti: any[] }) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div><label className="label">Codice</label><input className="input bg-gray-50" value={data.codice} readOnly /></div>
+      <div><label className="label">Nome cantiere *</label><input className="input" value={data.nome} onChange={e => setData({...data, nome: e.target.value})} /></div>
+      <div><label className="label">Cliente / Committente</label>
+        <select className="input" value={data.cliente_id} onChange={e => setData({...data, cliente_id: e.target.value})}>
+          <option value="">-- seleziona --</option>
+          {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
+        </select>
+      </div>
+      <div><label className="label">Località cantiere</label><input className="input" placeholder="es. Via Roma 10, Bologna" value={data.localita || ''} onChange={e => setData({...data, localita: e.target.value})} /></div>
+      <div><label className="label">Tipo</label>
+        <select className="input" value={data.tipo} onChange={e => setData({...data, tipo: e.target.value})}>
+          <option>Privato</option><option>Corporate</option><option>Pubblica</option><option>Movimenti Terra</option><option>Gestione Completa</option>
+        </select>
+      </div>
+      <div><label className="label">Stato</label>
+        <select className="input" value={data.stato} onChange={e => setData({...data, stato: e.target.value})}>
+          <option>Offerta</option><option>In Corso</option><option>Completato</option><option>Sospeso</option><option>Annullato</option>
+        </select>
+      </div>
+      <div><label className="label">Geometra assegnato</label>
+        <select className="input" value={data.geometra_id || ''} onChange={e => setData({...data, geometra_id: e.target.value})}>
+          <option value="">-- nessuno --</option>
+          {utenti.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}
+        </select>
+      </div>
+      <div><label className="label">Responsabile cantiere</label><input className="input" value={data.responsabile || ''} onChange={e => setData({...data, responsabile: e.target.value})} /></div>
+      <div><label className="label">Valore contratto (€)</label><input className="input" type="number" step="0.01" value={data.valore_contratto || ''} onChange={e => setData({...data, valore_contratto: e.target.value})} /></div>
+      <div><label className="label">Budget costi (€)</label><input className="input" type="number" step="0.01" value={data.budget_costi || ''} onChange={e => setData({...data, budget_costi: e.target.value})} /></div>
+      <div><label className="label">Data inizio</label><input className="input" type="date" value={data.data_inizio || ''} onChange={e => setData({...data, data_inizio: e.target.value})} /></div>
+      <div><label className="label">Data fine prevista</label><input className="input" type="date" value={data.data_fine || ''} onChange={e => setData({...data, data_fine: e.target.value})} /></div>
+      <div className="col-span-2"><label className="label">Note</label><textarea className="input h-20 resize-none" value={data.note || ''} onChange={e => setData({...data, note: e.target.value})} /></div>
+    </div>
+  )
+}
+
 export default function Progetti() {
   const [progetti, setProgetti] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
@@ -24,7 +63,6 @@ export default function Progetti() {
   const [note, setNote] = useState<any[]>([])
   const [nuovaNota, setNuovaNota] = useState('')
 
-  // Filtri
   const [cercaNome, setCercaNome] = useState('')
   const [cercaCliente, setCercaCliente] = useState('')
   const [cercaLocalita, setCercaLocalita] = useState('')
@@ -47,13 +85,11 @@ export default function Progetti() {
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true),
       supabase.from('utenti').select('id,nome,ruolo,capo_geometra'),
     ])
-
     const [{ data: fc }, { data: ff }, { data: ddt }] = await Promise.all([
       supabase.from('fatture_clienti').select('progetto_id,imponibile'),
       supabase.from('fatture_fornitori').select('progetto_id,imponibile'),
       supabase.from('ddt').select('progetto_id,importo,stato'),
     ])
-
     const enhanced = (p || []).map(proj => {
       const ric = (fc || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
       const cosFF = (ff || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
@@ -87,10 +123,8 @@ export default function Progetti() {
     const { data: { user } } = await supabase.auth.getUser()
     const { data: profilo } = await supabase.from('utenti').select('nome').eq('id', user?.id).single()
     await supabase.from('note_cantiere').insert({
-      progetto_id: modalDettaglio.id,
-      autore_id: user?.id,
-      autore_nome: profilo?.nome || user?.email,
-      testo: nuovaNota.trim(),
+      progetto_id: modalDettaglio.id, autore_id: user?.id,
+      autore_nome: profilo?.nome || user?.email, testo: nuovaNota.trim(),
       data: new Date().toISOString().split('T')[0]
     })
     setNuovaNota('')
@@ -131,17 +165,10 @@ export default function Progetti() {
       budget_costi: parseFloat(form.budget_costi) || 0,
       data_inizio: form.data_inizio || null, data_fine: form.data_fine || null,
       stato: form.stato, note: form.note,
-      geometra_id: form.geometra_id || null,
-      geometra_nome: geo?.nome || '',
+      geometra_id: form.geometra_id || null, geometra_nome: geo?.nome || '',
       localita: form.localita || ''
     })
-    setModal(false); setLoading(false)
-    loadAll()
-  }
-
-  function apriModifica(p: any, e: React.MouseEvent) {
-    e.stopPropagation()
-    setModalModifica({ ...p })
+    setModal(false); setLoading(false); loadAll()
   }
 
   async function salvaModifica() {
@@ -150,27 +177,20 @@ export default function Progetti() {
     const cli = clienti.find(c => c.id === modalModifica.cliente_id)
     const geo = utenti.find(u => u.id === modalModifica.geometra_id)
     await supabase.from('progetti').update({
-      nome: modalModifica.nome,
-      cliente_id: modalModifica.cliente_id || null,
+      nome: modalModifica.nome, cliente_id: modalModifica.cliente_id || null,
       cliente_nome: cli?.ragione_sociale || modalModifica.cliente_nome,
-      tipo: modalModifica.tipo,
-      responsabile: modalModifica.responsabile,
+      tipo: modalModifica.tipo, responsabile: modalModifica.responsabile,
       valore_contratto: parseFloat(modalModifica.valore_contratto) || 0,
       budget_costi: parseFloat(modalModifica.budget_costi) || 0,
-      data_inizio: modalModifica.data_inizio || null,
-      data_fine: modalModifica.data_fine || null,
-      stato: modalModifica.stato,
-      note: modalModifica.note,
+      data_inizio: modalModifica.data_inizio || null, data_fine: modalModifica.data_fine || null,
+      stato: modalModifica.stato, note: modalModifica.note,
       geometra_id: modalModifica.geometra_id || null,
       geometra_nome: geo?.nome || modalModifica.geometra_nome,
       localita: modalModifica.localita || ''
     }).eq('id', modalModifica.id)
-    setModalModifica(null)
-    setLoading(false)
-    loadAll()
+    setModalModifica(null); setLoading(false); loadAll()
   }
 
-  // Filtri applicati
   const progettiFiltered = useMemo(() => {
     return progetti.filter(p => {
       if (filtroStato === 'attivi' && !['In Corso', 'Offerta'].includes(p.stato)) return false
@@ -185,7 +205,6 @@ export default function Progetti() {
     })
   }, [progetti, filtroStato, cercaNome, cercaCliente, cercaLocalita, importoDA, importoA])
 
-  // Raggruppamento per committente
   const progettiGruppi = useMemo(() => {
     if (raggruppaPer === 'nessuno') return { '': progettiFiltered }
     const gruppi: Record<string, any[]> = {}
@@ -214,42 +233,6 @@ export default function Progetti() {
 
   const budgetColore = (perc: number) => perc >= 100 ? 'bg-red-500' : perc >= 80 ? 'bg-amber-500' : 'bg-blue-600'
 
-  const FormProgetto = ({ data, setData }: { data: any, setData: any }) => (
-    <div className="grid grid-cols-2 gap-3">
-      <div><label className="label">Codice</label><input className="input bg-gray-50" value={data.codice} readOnly /></div>
-      <div><label className="label">Nome cantiere *</label><input className="input" value={data.nome} onChange={e => setData({...data, nome: e.target.value})} /></div>
-      <div><label className="label">Cliente / Committente</label>
-        <select className="input" value={data.cliente_id} onChange={e => setData({...data, cliente_id: e.target.value})}>
-          <option value="">-- seleziona --</option>
-          {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
-        </select>
-      </div>
-      <div><label className="label">Località cantiere</label><input className="input" placeholder="es. Via Roma 10, Bologna" value={data.localita || ''} onChange={e => setData({...data, localita: e.target.value})} /></div>
-      <div><label className="label">Tipo</label>
-        <select className="input" value={data.tipo} onChange={e => setData({...data, tipo: e.target.value})}>
-          <option>Privato</option><option>Corporate</option><option>Pubblica</option><option>Movimenti Terra</option><option>Gestione Completa</option>
-        </select>
-      </div>
-      <div><label className="label">Stato</label>
-        <select className="input" value={data.stato} onChange={e => setData({...data, stato: e.target.value})}>
-          <option>Offerta</option><option>In Corso</option><option>Completato</option><option>Sospeso</option><option>Annullato</option>
-        </select>
-      </div>
-      <div><label className="label">Geometra assegnato</label>
-        <select className="input" value={data.geometra_id || ''} onChange={e => setData({...data, geometra_id: e.target.value})}>
-          <option value="">-- nessuno --</option>
-          {utenti.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}
-        </select>
-      </div>
-      <div><label className="label">Responsabile cantiere</label><input className="input" value={data.responsabile || ''} onChange={e => setData({...data, responsabile: e.target.value})} /></div>
-      <div><label className="label">Valore contratto (€)</label><input className="input" type="number" step="0.01" value={data.valore_contratto || ''} onChange={e => setData({...data, valore_contratto: e.target.value})} /></div>
-      <div><label className="label">Budget costi (€)</label><input className="input" type="number" step="0.01" value={data.budget_costi || ''} onChange={e => setData({...data, budget_costi: e.target.value})} /></div>
-      <div><label className="label">Data inizio</label><input className="input" type="date" value={data.data_inizio || ''} onChange={e => setData({...data, data_inizio: e.target.value})} /></div>
-      <div><label className="label">Data fine prevista</label><input className="input" type="date" value={data.data_fine || ''} onChange={e => setData({...data, data_fine: e.target.value})} /></div>
-      <div className="col-span-2"><label className="label">Note</label><textarea className="input h-20 resize-none" value={data.note || ''} onChange={e => setData({...data, note: e.target.value})} /></div>
-    </div>
-  )
-
   return (
     <div className="flex min-h-screen">
       <Sidebar />
@@ -259,23 +242,12 @@ export default function Progetti() {
           <button className="btn btn-primary text-sm" onClick={apriModal}>+ Nuovo progetto</button>
         </div>
 
-        {/* Filtri */}
         <div className="card mb-4">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
-            <div>
-              <label className="label">Cerca cantiere</label>
-              <input className="input" placeholder="Nome o codice..." value={cercaNome} onChange={e => setCercaNome(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Committente</label>
-              <input className="input" placeholder="Nome cliente..." value={cercaCliente} onChange={e => setCercaCliente(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Località</label>
-              <input className="input" placeholder="Città o indirizzo..." value={cercaLocalita} onChange={e => setCercaLocalita(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Stato</label>
+            <div><label className="label">Cerca cantiere</label><input className="input" placeholder="Nome o codice..." value={cercaNome} onChange={e => setCercaNome(e.target.value)} /></div>
+            <div><label className="label">Committente</label><input className="input" placeholder="Nome cliente..." value={cercaCliente} onChange={e => setCercaCliente(e.target.value)} /></div>
+            <div><label className="label">Località</label><input className="input" placeholder="Città o indirizzo..." value={cercaLocalita} onChange={e => setCercaLocalita(e.target.value)} /></div>
+            <div><label className="label">Stato</label>
               <select className="input" value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
                 <option value="attivi">Attivi (In Corso + Offerta)</option>
                 <option value="inattivi">Inattivi (Completati + Sospesi)</option>
@@ -287,32 +259,22 @@ export default function Progetti() {
                 <option value="Annullato">Annullati</option>
               </select>
             </div>
-            <div>
-              <label className="label">Importo da (€)</label>
-              <input className="input" type="number" placeholder="0" value={importoDA} onChange={e => setImportoDA(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Importo a (€)</label>
-              <input className="input" type="number" placeholder="∞" value={importoA} onChange={e => setImportoA(e.target.value)} />
-            </div>
+            <div><label className="label">Importo da (€)</label><input className="input" type="number" placeholder="0" value={importoDA} onChange={e => setImportoDA(e.target.value)} /></div>
+            <div><label className="label">Importo a (€)</label><input className="input" type="number" placeholder="∞" value={importoA} onChange={e => setImportoA(e.target.value)} /></div>
           </div>
           <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
             <div className="flex items-center gap-3">
               <span className="text-xs text-gray-500">{progettiFiltered.length} cantieri</span>
               <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
                 <input type="checkbox" checked={raggruppaPer === 'committente'}
-                  onChange={e => setRaggruppaPer(e.target.checked ? 'committente' : 'nessuno')}
-                  className="rounded" />
+                  onChange={e => setRaggruppaPer(e.target.checked ? 'committente' : 'nessuno')} className="rounded" />
                 Raggruppa per committente
               </label>
             </div>
-            {haFiltri && (
-              <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">× Azzera filtri</button>
-            )}
+            {haFiltri && <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">× Azzera filtri</button>}
           </div>
         </div>
 
-        {/* Lista cantieri */}
         {progettiFiltered.length === 0 ? (
           <div className="card text-center py-12 text-gray-400">
             {haFiltri ? 'Nessun cantiere corrisponde ai filtri.' : 'Nessun progetto. Crea il primo cantiere.'}
@@ -329,8 +291,7 @@ export default function Progetti() {
               )}
               <div className="grid grid-cols-1 gap-4 mb-2">
                 {items.map(p => (
-                  <div key={p.id} className="card hover:shadow-md transition-shadow cursor-pointer"
-                    onClick={() => apriDettaglio(p)}>
+                  <div key={p.id} className="card hover:shadow-md transition-shadow cursor-pointer" onClick={() => apriDettaglio(p)}>
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -348,8 +309,6 @@ export default function Progetti() {
                         {p.geometra_nome && <p className="text-xs text-gray-400 mt-1">👷 {p.geometra_nome}</p>}
                       </div>
                     </div>
-
-                    {/* Avanzamento */}
                     <div className="mb-3">
                       <div className="flex justify-between text-xs mb-1">
                         <span className="text-gray-500">Avanzamento lavori</span>
@@ -359,8 +318,6 @@ export default function Progetti() {
                         <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${p.avanzamento_medio}%` }} />
                       </div>
                     </div>
-
-                    {/* KPI */}
                     <div className="grid grid-cols-4 gap-3 mb-3">
                       <div className="bg-gray-50 rounded-lg p-2 text-center">
                         <p className="text-xs text-gray-400">Ricavi</p>
@@ -379,8 +336,6 @@ export default function Progetti() {
                         <p className={`text-sm font-medium ${p.budget_perc >= 100 ? 'text-red-700' : p.budget_perc >= 80 ? 'text-amber-700' : 'text-gray-700'}`}>{p.budget_perc}%</p>
                       </div>
                     </div>
-
-                    {/* Barra budget */}
                     <div className="mb-3">
                       <div className="flex justify-between text-xs mb-1">
                         <span className="text-gray-400">Utilizzo budget</span>
@@ -389,14 +344,12 @@ export default function Progetti() {
                         </span>
                       </div>
                       <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full transition-all ${budgetColore(p.budget_perc)}`}
-                          style={{ width: `${Math.min(p.budget_perc, 100)}%` }} />
+                        <div className={`h-full rounded-full transition-all ${budgetColore(p.budget_perc)}`} style={{ width: `${Math.min(p.budget_perc, 100)}%` }} />
                       </div>
                     </div>
-
                     <div className="flex justify-end gap-2">
                       <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50"
-                        onClick={e => apriModifica(p, e)}>✏️ Modifica</button>
+                        onClick={e => { e.stopPropagation(); setModalModifica({...p}) }}>✏️ Modifica</button>
                     </div>
                   </div>
                 ))}
@@ -414,7 +367,7 @@ export default function Progetti() {
               <h2 className="text-base font-semibold">Nuovo progetto</h2>
               <button onClick={() => setModal(false)} className="text-gray-400 text-xl">×</button>
             </div>
-            <FormProgetto data={form} setData={setForm} />
+            <FormProgetto data={form} setData={setForm} clienti={clienti} utenti={utenti} />
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModal(false)}>Annulla</button>
               <button className="btn btn-primary" onClick={salva} disabled={loading}>{loading ? 'Salvataggio...' : 'Crea progetto'}</button>
@@ -423,7 +376,7 @@ export default function Progetti() {
         </div>
       )}
 
-      {/* Modal modifica progetto */}
+      {/* Modal modifica */}
       {modalModifica && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -434,7 +387,7 @@ export default function Progetti() {
               </div>
               <button onClick={() => setModalModifica(null)} className="text-gray-400 text-xl">×</button>
             </div>
-            <FormProgetto data={modalModifica} setData={setModalModifica} />
+            <FormProgetto data={modalModifica} setData={setModalModifica} clienti={clienti} utenti={utenti} />
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalModifica(null)}>Annulla</button>
               <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva modifiche'}</button>
@@ -443,7 +396,7 @@ export default function Progetti() {
         </div>
       )}
 
-      {/* Modal dettaglio cantiere */}
+      {/* Modal dettaglio */}
       {modalDettaglio && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -461,23 +414,12 @@ export default function Progetti() {
                 <button onClick={() => setModalDettaglio(null)} className="text-gray-400 hover:text-white text-2xl">×</button>
               </div>
               <div className="grid grid-cols-3 gap-4 mt-4">
-                <div className="bg-white/10 rounded-lg p-3">
-                  <p className="text-xs text-gray-400">Contratto</p>
-                  <p className="font-semibold">{euro(modalDettaglio.valore_contratto)}</p>
-                </div>
-                <div className="bg-white/10 rounded-lg p-3">
-                  <p className="text-xs text-gray-400">Budget costi</p>
-                  <p className="font-semibold">{euro(modalDettaglio.budget_costi)}</p>
-                </div>
-                <div className="bg-white/10 rounded-lg p-3">
-                  <p className="text-xs text-gray-400">Geometra</p>
-                  <p className="font-semibold">{modalDettaglio.geometra_nome || '—'}</p>
-                </div>
+                <div className="bg-white/10 rounded-lg p-3"><p className="text-xs text-gray-400">Contratto</p><p className="font-semibold">{euro(modalDettaglio.valore_contratto)}</p></div>
+                <div className="bg-white/10 rounded-lg p-3"><p className="text-xs text-gray-400">Budget costi</p><p className="font-semibold">{euro(modalDettaglio.budget_costi)}</p></div>
+                <div className="bg-white/10 rounded-lg p-3"><p className="text-xs text-gray-400">Geometra</p><p className="font-semibold">{modalDettaglio.geometra_nome || '—'}</p></div>
               </div>
             </div>
-
             <div className="p-5 space-y-5">
-              {/* Avanzamento fasi */}
               <div className="card">
                 <h3 className="font-medium text-sm mb-4">📊 Avanzamento per fase</h3>
                 <div className="space-y-4">
@@ -501,36 +443,23 @@ export default function Progetti() {
                 <div className="mt-3 pt-3 border-t border-gray-100">
                   <div className="flex justify-between text-xs text-gray-500 mb-1">
                     <span>Avanzamento medio complessivo</span>
-                    <span className="font-semibold text-gray-700">
-                      {Math.round(FASI.reduce((s, f) => s + (modalDettaglio[f.key] || 0), 0) / FASI.length)}%
-                    </span>
+                    <span className="font-semibold text-gray-700">{Math.round(FASI.reduce((s, f) => s + (modalDettaglio[f.key] || 0), 0) / FASI.length)}%</span>
                   </div>
                   <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full rounded-full bg-blue-600"
-                      style={{ width: `${Math.round(FASI.reduce((s, f) => s + (modalDettaglio[f.key] || 0), 0) / FASI.length)}%` }} />
+                    <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.round(FASI.reduce((s, f) => s + (modalDettaglio[f.key] || 0), 0) / FASI.length)}%` }} />
                   </div>
                 </div>
               </div>
-
-              {/* KPI finanziari */}
               <div className="card">
                 <h3 className="font-medium text-sm mb-3">💰 Situazione finanziaria</h3>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-green-50 rounded-lg p-3">
-                    <p className="text-xs text-gray-500">Ricavi fatturati</p>
-                    <p className="font-semibold text-green-700">{euro(modalDettaglio.ricavi)}</p>
-                  </div>
-                  <div className="bg-red-50 rounded-lg p-3">
-                    <p className="text-xs text-gray-500">Costi sostenuti</p>
-                    <p className="font-semibold text-red-700">{euro(modalDettaglio.costi)}</p>
-                  </div>
+                  <div className="bg-green-50 rounded-lg p-3"><p className="text-xs text-gray-500">Ricavi fatturati</p><p className="font-semibold text-green-700">{euro(modalDettaglio.ricavi)}</p></div>
+                  <div className="bg-red-50 rounded-lg p-3"><p className="text-xs text-gray-500">Costi sostenuti</p><p className="font-semibold text-red-700">{euro(modalDettaglio.costi)}</p></div>
                 </div>
                 <div className="mt-3">
                   <div className="flex justify-between text-xs mb-1">
                     <span className="text-gray-500">Utilizzo budget ({modalDettaglio.budget_perc}%)</span>
-                    <span className={modalDettaglio.budget_perc >= 100 ? 'text-red-600 font-medium' : 'text-gray-500'}>
-                      {euro(modalDettaglio.costi)} / {euro(modalDettaglio.budget_costi)}
-                    </span>
+                    <span className={modalDettaglio.budget_perc >= 100 ? 'text-red-600 font-medium' : 'text-gray-500'}>{euro(modalDettaglio.costi)} / {euro(modalDettaglio.budget_costi)}</span>
                   </div>
                   <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
                     <div className={`h-full rounded-full ${modalDettaglio.budget_perc >= 100 ? 'bg-red-500' : modalDettaglio.budget_perc >= 80 ? 'bg-amber-500' : 'bg-blue-600'}`}
@@ -543,13 +472,10 @@ export default function Progetti() {
                   )}
                 </div>
               </div>
-
-              {/* Diario */}
               <div className="card">
                 <h3 className="font-medium text-sm mb-3">📝 Diario di cantiere</h3>
                 <div className="flex gap-2 mb-4">
-                  <textarea className="input flex-1 resize-none h-16 text-sm"
-                    placeholder="Inserisci una nota di cantiere..."
+                  <textarea className="input flex-1 resize-none h-16 text-sm" placeholder="Inserisci una nota di cantiere..."
                     value={nuovaNota} onChange={e => setNuovaNota(e.target.value)} />
                   <button className="btn btn-primary self-end" onClick={salvaNota}>Aggiungi</button>
                 </div>
@@ -570,7 +496,6 @@ export default function Progetti() {
                   ))}
                 </div>
               </div>
-
               {modalDettaglio.note && (
                 <div className="card bg-amber-50 border-amber-200">
                   <h3 className="font-medium text-sm mb-2">📌 Note progetto</h3>
