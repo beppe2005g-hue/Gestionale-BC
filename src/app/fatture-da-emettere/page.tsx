@@ -6,10 +6,24 @@ import { logActivity } from '@/lib/logActivity'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+interface RigaFde {
+  descrizione: string
+  quantita: string
+  unita_misura: string
+  prezzo_unitario: string
+  importo: string
+  importoModificatoManualmente: boolean
+}
+
+function nuovaRigaFde(): RigaFde {
+  return { descrizione: '', quantita: '', unita_misura: '', prezzo_unitario: '', importo: '', importoModificatoManualmente: false }
+}
+
 export default function FattureDaEmetterePage() {
   const [progetti, setProgetti] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
   const [fatture, setFatture] = useState<any[]>([])
+  const [aliquote, setAliquote] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   const [tab, setTab] = useState<'da_emettere' | 'emesse'>('da_emettere')
@@ -19,30 +33,38 @@ export default function FattureDaEmetterePage() {
 
   const [modalFde, setModalFde] = useState(false)
   const [loadingFde, setLoadingFde] = useState(false)
-  const [formFde, setFormFde] = useState<{ progetto_id: string, cliente_id: string, aliquota_iva: string, scadenza_prevista: string, note: string, righe: { descrizione: string, importo: string }[] }>({
-    progetto_id: '', cliente_id: '', aliquota_iva: '22', scadenza_prevista: '', note: '', righe: [{ descrizione: '', importo: '' }]
+  const [formFde, setFormFde] = useState<{ progetto_id: string, cliente_id: string, aliquota_id: string, scadenza_prevista: string, note: string, righe: RigaFde[] }>({
+    progetto_id: '', cliente_id: '', aliquota_id: '', scadenza_prevista: '', note: '', righe: [nuovaRigaFde()]
   })
 
   const [modalEmissione, setModalEmissione] = useState<any>(null)
   const [formEmissione, setFormEmissione] = useState({ numero_fattura_emessa: '', importo_emesso: '', scadenza_emessa: '' })
 
+  // Gestione aliquote
+  const [modalAliquote, setModalAliquote] = useState(false)
+  const [formNuovaAliquota, setFormNuovaAliquota] = useState({ percentuale: '', descrizione: '' })
+  const [loadingAliquota, setLoadingAliquota] = useState(false)
+
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
     setLoading(true)
-    const [{ data: p }, { data: cl }, { data: f }] = await Promise.all([
+    const [{ data: p }, { data: cl }, { data: f }, { data: al }] = await Promise.all([
       supabase.from('progetti').select('id,codice,nome,cliente_id').order('codice'),
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale'),
       supabase.from('fatture_da_emettere').select('*, fatture_da_emettere_righe(*), progetti(codice,nome)').order('created_at', { ascending: false }),
+      supabase.from('aliquote_iva').select('*').eq('attiva', true).order('percentuale', { ascending: false }),
     ])
     setProgetti(p || [])
     setClienti(cl || [])
     setFatture(f || [])
+    setAliquote(al || [])
     setLoading(false)
   }
 
   function apriModalFde() {
-    setFormFde({ progetto_id: '', cliente_id: '', aliquota_iva: '22', scadenza_prevista: '', note: '', righe: [{ descrizione: '', importo: '' }] })
+    const aliquotaDefault = aliquote.find(a => a.percentuale === 22) || aliquote[0]
+    setFormFde({ progetto_id: '', cliente_id: '', aliquota_id: aliquotaDefault?.id || '', scadenza_prevista: '', note: '', righe: [nuovaRigaFde()] })
     setModalFde(true)
   }
 
@@ -52,11 +74,26 @@ export default function FattureDaEmetterePage() {
   }
 
   function aggiungiRigaFde() {
-    setFormFde(prev => ({ ...prev, righe: [...prev.righe, { descrizione: '', importo: '' }] }))
+    setFormFde(prev => ({ ...prev, righe: [...prev.righe, nuovaRigaFde()] }))
   }
 
-  function aggiornaRigaFde(idx: number, campo: 'descrizione' | 'importo', valore: string) {
-    setFormFde(prev => ({ ...prev, righe: prev.righe.map((r, i) => i === idx ? { ...r, [campo]: valore } : r) }))
+  function aggiornaRigaFde(idx: number, campo: keyof RigaFde, valore: string) {
+    setFormFde(prev => ({
+      ...prev,
+      righe: prev.righe.map((r, i) => {
+        if (i !== idx) return r
+        const n = { ...r, [campo]: valore }
+        if (campo === 'importo') {
+          n.importoModificatoManualmente = true
+        }
+        if ((campo === 'quantita' || campo === 'prezzo_unitario') && !n.importoModificatoManualmente) {
+          const q = parseFloat(campo === 'quantita' ? valore : r.quantita) || 0
+          const p = parseFloat(campo === 'prezzo_unitario' ? valore : r.prezzo_unitario) || 0
+          if (q > 0 && p > 0) n.importo = (q * p).toFixed(2)
+        }
+        return n
+      })
+    }))
   }
 
   function rimuoviRigaFde(idx: number) {
@@ -64,20 +101,24 @@ export default function FattureDaEmetterePage() {
   }
 
   const totaleImponibileFde = formFde.righe.reduce((s, r) => s + (parseFloat(r.importo) || 0), 0)
+  const aliquotaSelFde = aliquote.find(a => a.id === formFde.aliquota_id)
 
   async function salvaFde() {
     const righeValide = formFde.righe.filter(r => r.descrizione && parseFloat(r.importo) > 0)
     if (righeValide.length === 0) { alert('Inserisci almeno una riga con descrizione e importo'); return }
     if (!formFde.progetto_id) { alert('Seleziona il cantiere'); return }
     if (!formFde.cliente_id) { alert('Seleziona il cliente'); return }
+    if (!formFde.aliquota_id) { alert('Seleziona l\'aliquota IVA'); return }
     setLoadingFde(true)
     const prj = progetti.find(p => p.id === formFde.progetto_id)
     const cli = clienti.find(c => c.id === formFde.cliente_id)
+    const aliq = aliquote.find(a => a.id === formFde.aliquota_id)
     const { data: inserted, error } = await supabase.from('fatture_da_emettere').insert({
       progetto_id: formFde.progetto_id,
       cliente_id: formFde.cliente_id,
       cliente_nome: cli?.ragione_sociale || '',
-      aliquota_iva: parseFloat(formFde.aliquota_iva) || 22,
+      aliquota_iva: aliq?.percentuale ?? 22,
+      aliquota_id: formFde.aliquota_id,
       scadenza_prevista: formFde.scadenza_prevista || null,
       stato: 'Da Emettere',
       note: formFde.note || null,
@@ -85,7 +126,14 @@ export default function FattureDaEmetterePage() {
     if (error) { alert('Errore: ' + error.message); setLoadingFde(false); return }
     if (inserted?.id) {
       await supabase.from('fatture_da_emettere_righe').insert(
-        righeValide.map(r => ({ fattura_da_emettere_id: inserted.id, descrizione: r.descrizione, importo: parseFloat(r.importo) || 0 }))
+        righeValide.map(r => ({
+          fattura_da_emettere_id: inserted.id,
+          descrizione: r.descrizione,
+          importo: parseFloat(r.importo) || 0,
+          quantita: r.quantita ? parseFloat(r.quantita) : null,
+          unita_misura: r.unita_misura || null,
+          prezzo_unitario: r.prezzo_unitario ? parseFloat(r.prezzo_unitario) : null,
+        }))
       )
       await logActivity('inserimento', 'fatture_da_emettere', inserted.id, `Richiesta fattura — ${prj?.codice} ${prj?.nome} · ${cli?.ragione_sociale} · € ${totaleImponibileFde.toFixed(2)}`)
     }
@@ -130,6 +178,29 @@ export default function FattureDaEmetterePage() {
     loadAll()
   }
 
+  // ── Gestione aliquote IVA ──
+  async function salvaNuovaAliquota() {
+    if (!formNuovaAliquota.percentuale || !formNuovaAliquota.descrizione) { alert('Inserisci percentuale e descrizione'); return }
+    setLoadingAliquota(true)
+    const { error } = await supabase.from('aliquote_iva').insert({
+      percentuale: parseFloat(formNuovaAliquota.percentuale) || 0,
+      descrizione: formNuovaAliquota.descrizione,
+      attiva: true,
+    })
+    if (error) alert('Errore: ' + error.message)
+    else {
+      setFormNuovaAliquota({ percentuale: '', descrizione: '' })
+      loadAll()
+    }
+    setLoadingAliquota(false)
+  }
+
+  async function disattivaAliquota(id: string) {
+    if (!confirm('Disattivare questa aliquota? Non sarà più selezionabile per nuove fatture.')) return
+    await supabase.from('aliquote_iva').update({ attiva: false }).eq('id', id)
+    loadAll()
+  }
+
   const fattureFiltrate = useMemo(() => {
     return fatture.filter(f => {
       if (tab === 'da_emettere' && f.stato !== 'Da Emettere') return false
@@ -154,7 +225,10 @@ export default function FattureDaEmetterePage() {
       <main className="flex-1 p-6 overflow-auto">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold">Fatture da emettere</h1>
-          <button className="btn btn-primary text-sm" onClick={apriModalFde}>+ Richiedi fattura</button>
+          <div className="flex gap-2">
+            <button className="btn" onClick={() => setModalAliquote(true)}>⚙️ Aliquote IVA</button>
+            <button className="btn btn-primary text-sm" onClick={apriModalFde}>+ Richiedi fattura</button>
+          </div>
         </div>
 
         <div className="grid grid-cols-4 gap-3 mb-4">
@@ -228,16 +302,19 @@ export default function FattureDaEmetterePage() {
                   {espansaFde === f.id && (
                     <div className="border-t border-gray-100 bg-gray-50 p-4">
                       <table className="table-base mb-3">
-                        <thead><tr><th>Descrizione</th><th>Importo</th></tr></thead>
+                        <thead><tr><th>Descrizione</th><th>Quantità</th><th>U.M.</th><th>Prezzo unit.</th><th>Importo</th></tr></thead>
                         <tbody>
                           {(f.fatture_da_emettere_righe || []).map((r: any) => (
                             <tr key={r.id}>
                               <td className="text-sm">{r.descrizione}</td>
+                              <td className="text-xs text-gray-500">{r.quantita ?? '—'}</td>
+                              <td className="text-xs text-gray-500">{r.unita_misura || '—'}</td>
+                              <td className="text-xs text-gray-500">{r.prezzo_unitario != null ? euro(r.prezzo_unitario) : '—'}</td>
                               <td className="font-medium text-sm">{euro(r.importo)}</td>
                             </tr>
                           ))}
                           <tr className="bg-gray-100">
-                            <td className="text-xs font-medium text-right text-gray-600">Imponibile</td>
+                            <td colSpan={4} className="text-xs font-medium text-right text-gray-600">Imponibile</td>
                             <td className="font-bold text-sm">{euro(imponibile)}</td>
                           </tr>
                         </tbody>
@@ -273,7 +350,7 @@ export default function FattureDaEmetterePage() {
       {/* ── MODAL RICHIEDI FATTURA ── */}
       {modalFde && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-base font-semibold">Richiedi emissione fattura</h2>
               <button onClick={() => setModalFde(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
@@ -291,8 +368,16 @@ export default function FattureDaEmetterePage() {
                   {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
                 </select>
               </div>
-              <div><label className="label">Aliquota IVA (%)</label>
-                <input className="input" type="number" step="0.01" value={formFde.aliquota_iva} onChange={e => setFormFde({...formFde, aliquota_iva: e.target.value})} /></div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="label">Aliquota IVA *</label>
+                  <button type="button" className="text-xs text-blue-600 hover:underline mb-1" onClick={() => setModalAliquote(true)}>+ Gestisci aliquote</button>
+                </div>
+                <select className="input" value={formFde.aliquota_id} onChange={e => setFormFde({...formFde, aliquota_id: e.target.value})}>
+                  <option value="">-- seleziona --</option>
+                  {aliquote.map(a => <option key={a.id} value={a.id}>{a.percentuale}% — {a.descrizione}</option>)}
+                </select>
+              </div>
               <div><label className="label">Scadenza prevista</label>
                 <input className="input" type="date" value={formFde.scadenza_prevista} onChange={e => setFormFde({...formFde, scadenza_prevista: e.target.value})} /></div>
               <div className="col-span-2"><label className="label">Note</label>
@@ -300,24 +385,42 @@ export default function FattureDaEmetterePage() {
             </div>
 
             <div className="mb-4">
-              <p className="text-xs font-medium text-gray-600 mb-2">Righe descrizione (si sommano per l'imponibile):</p>
-              <div className="space-y-2">
-                {formFde.righe.map((r, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <input className="input flex-1 text-sm" placeholder="es. Lavori di fondazione" value={r.descrizione}
-                      onChange={e => aggiornaRigaFde(idx, 'descrizione', e.target.value)} />
-                    <input className="input w-32 text-sm text-right" type="number" step="0.01" placeholder="0.00" value={r.importo}
-                      onChange={e => aggiornaRigaFde(idx, 'importo', e.target.value)} />
-                    <button onClick={() => rimuoviRigaFde(idx)} disabled={formFde.righe.length === 1}
-                      className="text-gray-300 hover:text-red-500 text-sm disabled:opacity-30">✕</button>
-                  </div>
-                ))}
+              <p className="text-xs font-medium text-gray-600 mb-2">Righe — come una bolla: quantità × unità di misura × prezzo unitario (l'importo si calcola da solo, ma puoi sempre correggerlo a mano):</p>
+              <div className="overflow-x-auto">
+                <table className="table-base" style={{ minWidth: 700 }}>
+                  <thead>
+                    <tr>
+                      <th>Descrizione</th><th style={{ width: 80 }}>Qtà</th><th style={{ width: 90 }}>U.M.</th>
+                      <th style={{ width: 100 }}>€/unit</th><th style={{ width: 100 }}>Importo *</th><th style={{ width: 36 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {formFde.righe.map((r, idx) => (
+                      <tr key={idx}>
+                        <td><input className="input text-sm py-1" placeholder="es. Lavori di fondazione" value={r.descrizione}
+                          onChange={e => aggiornaRigaFde(idx, 'descrizione', e.target.value)} /></td>
+                        <td><input className="input text-sm py-1" type="number" step="0.01" value={r.quantita}
+                          onChange={e => aggiornaRigaFde(idx, 'quantita', e.target.value)} /></td>
+                        <td><input className="input text-sm py-1" placeholder="es. mq" value={r.unita_misura}
+                          onChange={e => aggiornaRigaFde(idx, 'unita_misura', e.target.value)} /></td>
+                        <td><input className="input text-sm py-1" type="number" step="0.01" value={r.prezzo_unitario}
+                          onChange={e => aggiornaRigaFde(idx, 'prezzo_unitario', e.target.value)} /></td>
+                        <td><input className="input text-sm py-1 font-semibold text-blue-800" type="number" step="0.01" placeholder="0.00" value={r.importo}
+                          onChange={e => aggiornaRigaFde(idx, 'importo', e.target.value)} /></td>
+                        <td><button onClick={() => rimuoviRigaFde(idx)} disabled={formFde.righe.length === 1}
+                          className="text-gray-300 hover:text-red-500 text-sm disabled:opacity-30">✕</button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
               <button className="btn btn-sm mt-2" onClick={aggiungiRigaFde}>+ Aggiungi riga</button>
             </div>
 
             <div className="bg-gray-50 rounded-lg p-3 mb-4 flex items-center justify-between">
-              <span className="text-sm font-medium text-gray-600">Imponibile totale</span>
+              <span className="text-sm font-medium text-gray-600">
+                Imponibile totale {aliquotaSelFde && <span className="text-xs text-gray-400">(+IVA {aliquotaSelFde.percentuale}% {aliquotaSelFde.descrizione})</span>}
+              </span>
               <span className="text-lg font-bold text-gray-800">{euro(totaleImponibileFde)}</span>
             </div>
 
@@ -354,6 +457,49 @@ export default function FattureDaEmetterePage() {
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalEmissione(null)}>Annulla</button>
               <button className="btn btn-success" onClick={confermaEmissione}>Conferma emissione</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL GESTIONE ALIQUOTE IVA ── */}
+      {modalAliquote && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">Aliquote IVA</h2>
+              <button onClick={() => setModalAliquote(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+            </div>
+
+            <div className="space-y-2 mb-4">
+              {aliquote.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-4">Nessuna aliquota configurata.</p>
+              ) : aliquote.map(a => (
+                <div key={a.id} className="flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2">
+                  <div>
+                    <span className="font-semibold text-sm">{a.percentuale}%</span>
+                    <span className="text-sm text-gray-500 ml-2">{a.descrizione}</span>
+                  </div>
+                  <button className="text-gray-300 hover:text-red-500 text-sm" onClick={() => disattivaAliquota(a.id)} title="Disattiva">✕</button>
+                </div>
+              ))}
+            </div>
+
+            <div className="border-t border-gray-100 pt-4">
+              <p className="text-xs font-medium text-gray-600 mb-2">Aggiungi nuova aliquota</p>
+              <div className="flex gap-2">
+                <input className="input w-24" type="number" step="0.01" placeholder="%" value={formNuovaAliquota.percentuale}
+                  onChange={e => setFormNuovaAliquota({...formNuovaAliquota, percentuale: e.target.value})} />
+                <input className="input flex-1" placeholder="Descrizione (es. Ristrutturazioni)" value={formNuovaAliquota.descrizione}
+                  onChange={e => setFormNuovaAliquota({...formNuovaAliquota, descrizione: e.target.value})} />
+                <button className="btn btn-primary" onClick={salvaNuovaAliquota} disabled={loadingAliquota}>
+                  {loadingAliquota ? '...' : '+ Aggiungi'}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button className="btn" onClick={() => setModalAliquote(false)}>Chiudi</button>
             </div>
           </div>
         </div>
