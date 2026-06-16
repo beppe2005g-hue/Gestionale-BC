@@ -30,7 +30,6 @@ const nav = [
     { href: '/scadenzario', label: 'Scadenzario', icon: '📅', perm: 'perm_scadenzario' },
     { href: '/cashflow', label: 'Cash flow', icon: '📈', perm: 'perm_cashflow' },
     { href: '/budget', label: 'Budget vs Consuntivo', icon: '⚖', perm: 'perm_budget' },
-    { href: '/sal-vs-fatturato', label: 'SAL vs Fatturato', icon: '📊', perm: 'perm_costi_cantiere' },
   ]},
   { section: 'Impostazioni', items: [
     { href: '/anagrafiche', label: 'Anagrafiche', icon: '👥', perm: 'perm_anagrafiche' },
