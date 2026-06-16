@@ -5,6 +5,8 @@ import { usePathname } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
 const ADMIN_EMAIL = 'bonarrigogiuseppe05@gmail.com'
+const PREAVVISO_VISITA = 60   // giorni, stessa logica di dipendenti/page.tsx
+const PREAVVISO_CONTRATTO = 25 // giorni, stessa logica di dipendenti/page.tsx
 
 const nav = [
   { section: 'Principale', items: [
@@ -22,6 +24,7 @@ const nav = [
   ]},
   { section: 'Ciclo Attivo', items: [
     { href: '/fatture-clienti', label: 'Fatt. clienti', icon: '🧾', perm: 'perm_fatture_clienti' },
+    { href: '/fatture-da-emettere', label: 'Fatture da emettere', icon: '🔔', perm: 'perm_costi_cantiere', badgeKey: 'fattureDaEmettere' },
   ]},
   { section: 'Controllo', items: [
     { href: '/scadenzario', label: 'Scadenzario', icon: '📅', perm: 'perm_scadenzario' },
@@ -31,16 +34,32 @@ const nav = [
   ]},
   { section: 'Impostazioni', items: [
     { href: '/anagrafiche', label: 'Anagrafiche', icon: '👥', perm: 'perm_anagrafiche' },
-    { href: '/dipendenti', label: 'Dipendenti', icon: '👷', perm: 'perm_dipendenti' },
+    { href: '/dipendenti', label: 'Dipendenti', icon: '👷', perm: 'perm_dipendenti', badgeKey: 'dipendentiScadenze' },
     { href: '/utenti', label: 'Utenti e permessi', icon: '🔒', perm: 'perm_utenti' },
   ]},
 ]
+
+function giorniAllaScadenza(data: string | null): number | null {
+  if (!data) return null
+  const oggi = new Date()
+  oggi.setHours(0, 0, 0, 0)
+  const d = new Date(data)
+  d.setHours(0, 0, 0, 0)
+  return Math.ceil((d.getTime() - oggi.getTime()) / 86400000)
+}
+
+function inAllertaConPreavviso(data: string | null, giorniPreavviso: number): boolean {
+  const giorni = giorniAllaScadenza(data)
+  if (giorni === null) return false
+  return giorni <= giorniPreavviso
+}
 
 export default function Sidebar() {
   const path = usePathname()
   const [permessi, setPermessi] = useState<Record<string, boolean> | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [badges, setBadges] = useState<Record<string, number>>({})
 
   useEffect(() => {
     async function loadPermessi() {
@@ -65,6 +84,33 @@ export default function Sidebar() {
       setLoaded(true)
     }
     loadPermessi()
+  }, [])
+
+  useEffect(() => {
+    async function loadBadges() {
+      // Fatture da emettere: conta righe in stato "Da Emettere"
+      const { count: countFde } = await supabase
+        .from('fatture_da_emettere')
+        .select('id', { count: 'exact', head: true })
+        .eq('stato', 'Da Emettere')
+
+      // Dipendenti: conta attivi con visita medica o contratto scaduti/in preavviso
+      const { data: dip } = await supabase
+        .from('dipendenti')
+        .select('id,attivo,scadenza_visita_medica,data_fine_contratto')
+        .eq('attivo', true)
+
+      const dipendentiInAllerta = (dip || []).filter(d =>
+        inAllertaConPreavviso(d.scadenza_visita_medica, PREAVVISO_VISITA) ||
+        inAllertaConPreavviso(d.data_fine_contratto, PREAVVISO_CONTRATTO)
+      ).length
+
+      setBadges({
+        fattureDaEmettere: countFde || 0,
+        dipendentiScadenze: dipendentiInAllerta,
+      })
+    }
+    loadBadges()
   }, [])
 
   function hasPerm(permKey: string) {
@@ -99,16 +145,24 @@ export default function Sidebar() {
               <p className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wide">
                 {group.section}
               </p>
-              {visibleItems.map(item => (
-                <Link key={item.href} href={item.href}
-                  className={`flex items-center gap-2 px-4 py-2 text-sm transition-colors border-l-2
-                    ${path === item.href
-                      ? 'text-blue-700 bg-blue-50 border-blue-700 font-medium'
-                      : 'text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900'}`}>
-                  <span className="text-base">{item.icon}</span>
-                  {item.label}
-                </Link>
-              ))}
+              {visibleItems.map(item => {
+                const badgeCount = item.badgeKey ? (badges[item.badgeKey] || 0) : 0
+                return (
+                  <Link key={item.href} href={item.href}
+                    className={`flex items-center gap-2 px-4 py-2 text-sm transition-colors border-l-2
+                      ${path === item.href
+                        ? 'text-blue-700 bg-blue-50 border-blue-700 font-medium'
+                        : 'text-gray-600 border-transparent hover:bg-gray-50 hover:text-gray-900'}`}>
+                    <span className="text-base">{item.icon}</span>
+                    <span className="flex-1">{item.label}</span>
+                    {badgeCount > 0 && (
+                      <span className="text-xs font-semibold bg-red-500 text-white rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center">
+                        {badgeCount}
+                      </span>
+                    )}
+                  </Link>
+                )
+              })}
             </div>
           )
         })}
