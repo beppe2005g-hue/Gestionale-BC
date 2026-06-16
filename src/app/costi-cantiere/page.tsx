@@ -1236,36 +1236,52 @@ export default function CostiCantiere() {
         @media print {
           @page { size: A4; margin: 12mm; }
 
+          /* Nasconde tutto tranne il report attivo */
           body * { visibility: hidden !important; }
 
-          /* Stampa solo il report attivo */
           ${printMode === 'interna' ? `
-            #report-interna,
-            #report-interna * { visibility: visible !important; }
-            #report-interna {
-              position: absolute !important;
-              top: 0 !important;
-              left: 0 !important;
-              width: 100% !important;
-              padding: 0 !important;
-              font-size: 10px !important;
-              overflow: visible !important;
-            }
+            #report-interna, #report-interna * { visibility: visible !important; }
+          ` : ''}
+          ${printMode === 'esterna' ? `
+            #report-esterno, #report-esterno * { visibility: visible !important; }
           ` : ''}
 
-          ${printMode === 'esterna' ? `
-            #report-esterno,
-            #report-esterno * { visibility: visible !important; }
-            #report-esterno {
-              position: absolute !important;
-              top: 0 !important;
-              left: 0 !important;
-              width: 100% !important;
-              padding: 0 !important;
-              font-size: 10px !important;
-              overflow: visible !important;
-            }
-          ` : ''}
+          /* IMPORTANTE: nessun position:absolute qui.
+             Il contenuto deve restare nel flusso normale del documento
+             perché il browser possa impaginarlo correttamente su più pagine.
+             position:absolute ancorava il blocco in cima ad ogni pagina,
+             facendo sovrapporre l'header al contenuto che scorreva sotto. */
+
+          /* Rimuove tutti i vincoli di overlay/dimensione pensati per lo schermo
+             (modal scuro, bordi arrotondati, max-height, overflow) che altrimenti
+             tagliano o comprimono il contenuto reale quando si stampa */
+          .fixed.inset-0 {
+            position: static !important;
+            background: none !important;
+            padding: 0 !important;
+            display: block !important;
+          }
+          .fixed.inset-0 > div {
+            position: static !important;
+            max-width: none !important;
+            max-height: none !important;
+            width: 100% !important;
+            height: auto !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            display: block !important;
+            overflow: visible !important;
+          }
+
+          #report-interna, #report-esterno {
+            position: static !important;
+            width: 100% !important;
+            max-height: none !important;
+            height: auto !important;
+            overflow: visible !important;
+            padding: 0 !important;
+            font-size: 10px !important;
+          }
 
           /* L'header azienda compare una sola volta, in cima, senza ripetersi a metà pagina */
           .report-header {
