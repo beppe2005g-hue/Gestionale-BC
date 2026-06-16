@@ -208,21 +208,42 @@ export default function CostiCantiere() {
   // ── CONTABILITÀ INTERNA ──
   const datiInterna = useMemo(() => {
     const costiPer = meseInterna ? costi.filter(c => c.data?.startsWith(meseInterna)) : costi
+
+    // Giorni ordinati (per il blocco "dettaglio per giornata")
     const giorniSet = new Set(costiPer.map(c => c.data).filter(Boolean))
     const giorni = Array.from(giorniSet).sort()
-    const catPresenti = [...new Set(costiPer.map(c => c.categoria))].filter(Boolean)
-    const matrice: Record<string, Record<string, number>> = {}
-    catPresenti.forEach(cat => { matrice[cat] = {} })
-    costiPer.forEach(c => {
-      if (!matrice[c.categoria]) matrice[c.categoria] = {}
-      matrice[c.categoria][c.data] = (matrice[c.categoria][c.data] || 0) + (c.importo || 0)
-    })
+
+    // Voci raggruppate per giorno (per il rendering verticale)
+    const vociPerGiorno: Record<string, any[]> = {}
+    giorni.forEach(g => { vociPerGiorno[g] = [] })
+    costiPer.forEach(c => { if (vociPerGiorno[c.data]) vociPerGiorno[c.data].push(c) })
     const totaliGiorno: Record<string, number> = {}
-    giorni.forEach(g => { totaliGiorno[g] = catPresenti.reduce((s, cat) => s + (matrice[cat]?.[g] || 0), 0) })
+    giorni.forEach(g => { totaliGiorno[g] = vociPerGiorno[g].reduce((s, c) => s + (c.importo || 0), 0) })
+
+    // Categorie presenti su tutto il periodo filtrato
+    const catPresenti = [...new Set(costiPer.map(c => c.categoria))].filter(Boolean)
     const totaliCategoria: Record<string, number> = {}
-    catPresenti.forEach(cat => { totaliCategoria[cat] = giorni.reduce((s, g) => s + (matrice[cat]?.[g] || 0), 0) })
+    catPresenti.forEach(cat => {
+      totaliCategoria[cat] = costiPer.filter(c => c.categoria === cat).reduce((s, c) => s + (c.importo || 0), 0)
+    })
     const totaleGenerale = catPresenti.reduce((s, cat) => s + totaliCategoria[cat], 0)
-    return { giorni, catPresenti, matrice, totaliGiorno, totaliCategoria, totaleGenerale }
+
+    // Raggruppamento per mese → categoria (per il riepilogo mensile, sempre su TUTTI i costi, non solo il filtro)
+    const mesiSet = new Set(costi.map(c => c.data?.substring(0, 7)).filter(Boolean))
+    const mesiOrdinati = Array.from(mesiSet).sort()
+    const riepilogoMensile = mesiOrdinati.map(mese => {
+      const costiMese = costi.filter(c => c.data?.startsWith(mese))
+      const catMese = [...new Set(costiMese.map(c => c.categoria))].filter(Boolean)
+      const perCategoria = catMese.map(cat => ({
+        categoria: cat,
+        importo: costiMese.filter(c => c.categoria === cat).reduce((s, c) => s + (c.importo || 0), 0)
+      })).sort((a, b) => b.importo - a.importo)
+      const totaleMese = perCategoria.reduce((s, c) => s + c.importo, 0)
+      return { mese, perCategoria, totaleMese }
+    })
+    const totaleComplessivoTutti = riepilogoMensile.reduce((s, m) => s + m.totaleMese, 0)
+
+    return { giorni, vociPerGiorno, totaliGiorno, catPresenti, totaliCategoria, totaleGenerale, riepilogoMensile, totaleComplessivoTutti }
   }, [costi, meseInterna])
 
   function apriInterna() {
@@ -579,7 +600,7 @@ export default function CostiCantiere() {
               </div>
             </div>
             <div className="flex-1 overflow-auto p-6" id="report-interna">
-              <div className="flex items-start justify-between mb-6 pb-4 border-b-2 border-gray-800">
+              <div className="report-header flex items-start justify-between mb-6 pb-4 border-b-2 border-gray-800">
                 <div className="flex items-center gap-4">
                   <img src="/logo.png" alt="BC General Service" style={{ height: 50, objectFit: 'contain' }} />
                   <div>
@@ -596,65 +617,99 @@ export default function CostiCantiere() {
                 </div>
               </div>
 
-              <div className="overflow-x-auto mb-6">
-                <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ background: '#1e3a8a', color: 'white', padding: '8px 12px', textAlign: 'left', minWidth: 140 }}>Categoria</th>
-                      {datiInterna.giorni.map(g => (
-                        <th key={g} style={{ background: '#1e40af', color: 'white', padding: '6px 8px', textAlign: 'center', minWidth: 70 }}>{fmt(g)}</th>
-                      ))}
-                      <th style={{ background: '#374151', color: 'white', padding: '8px 12px', textAlign: 'right', minWidth: 90 }}>TOT. COSTI</th>
-                      <th style={{ background: '#065f46', color: 'white', padding: '8px 12px', textAlign: 'right', minWidth: 90 }}>TOT. RICAVI</th>
-                      <th style={{ background: '#7c3aed', color: 'white', padding: '8px 12px', textAlign: 'right', minWidth: 80 }}>MARGINE</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {datiInterna.catPresenti.map((cat, idx) => {
-                      const totCostiCat = datiInterna.totaliCategoria[cat] || 0
-                      const ricavoCat = usaACorpo ? 0 : (parseFloat(ricaviPerCat[cat]) || 0)
-                      const margineCat = usaACorpo ? 0 : ricavoCat - totCostiCat
-                      return (
-                        <tr key={cat} style={{ background: idx % 2 === 0 ? '#f8faff' : '#fff' }}>
-                          <td style={{ padding: '8px 12px', fontWeight: 600, borderBottom: '1px solid #e2e8f0', color: CAT_COLORS[cat] || '#374151' }}>{cat}</td>
-                          {datiInterna.giorni.map(g => (
-                            <td key={g} style={{ padding: '6px 8px', textAlign: 'right', borderBottom: '1px solid #e2e8f0', borderLeft: '1px solid #f1f5f9' }}>
-                              {datiInterna.matrice[cat]?.[g] ? <span style={{ fontWeight: 500, color: '#1e40af' }}>{euroShort(datiInterna.matrice[cat][g])}</span> : <span style={{ color: '#cbd5e1' }}>—</span>}
-                            </td>
-                          ))}
-                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: '#1e3a8a', background: '#eff6ff' }}>{euroShort(totCostiCat)}</td>
-                          <td style={{ padding: '4px 8px', textAlign: 'right' }}>
-                            {!usaACorpo && (
-                              <input className="no-print" type="number" step="0.01" placeholder="—"
-                                style={{ width: 80, textAlign: 'right', border: '1px solid #d1d5db', borderRadius: 4, padding: '2px 6px', fontSize: 11 }}
-                                value={ricaviPerCat[cat] || ''}
-                                onChange={e => setRicaviPerCat(prev => ({ ...prev, [cat]: e.target.value }))} />
-                            )}
-                            <span className="only-print">{ricavoCat > 0 ? euroShort(ricavoCat) : '—'}</span>
-                          </td>
-                          <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: !usaACorpo && margineCat >= 0 ? '#065f46' : '#991b1b', background: '#f5f3ff' }}>
-                            {!usaACorpo && ricavoCat > 0 ? euroShort(margineCat) : '—'}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                    <tr style={{ background: '#1e3a8a' }}>
-                      <td style={{ padding: '10px 12px', fontWeight: 700, color: 'white' }}>TOTALE GIORNALIERO</td>
-                      {datiInterna.giorni.map(g => (
-                        <td key={g} style={{ padding: '8px', textAlign: 'right', fontWeight: 700, color: 'white' }}>
-                          {datiInterna.totaliGiorno[g] > 0 ? euroShort(datiInterna.totaliGiorno[g]) : '—'}
-                        </td>
-                      ))}
-                      <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 800, color: '#fbbf24' }}>{euroShort(datiInterna.totaleGenerale)}</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 800, color: '#6ee7b7' }}>{totaleRicaviFinale > 0 ? euroShort(totaleRicaviFinale) : '—'}</td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 800, color: margineInterna >= 0 ? '#6ee7b7' : '#fca5a5' }}>
-                        {totaleRicaviFinale > 0 ? euroShort(margineInterna) : '—'}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
+              {/* Inserimento ricavi per categoria (solo schermo) */}
+              {!usaACorpo && datiInterna.catPresenti.length > 0 && (
+                <div className="no-print card mb-4 border-gray-200">
+                  <h3 className="text-sm font-medium text-gray-600 mb-3">Ricavi per categoria (periodo selezionato)</h3>
+                  <div className="space-y-2">
+                    {datiInterna.catPresenti.map(cat => (
+                      <div key={cat} className="flex items-center gap-3">
+                        <span className="text-xs w-40 flex-shrink-0" style={{ color: CAT_COLORS[cat] || '#374151' }}>{cat}</span>
+                        <span className="text-xs text-gray-400 w-28">Costo: {euro(datiInterna.totaliCategoria[cat] || 0)}</span>
+                        <input type="number" step="0.01" placeholder="Ricavo €" className="input w-32 text-sm"
+                          value={ricaviPerCat[cat] || ''}
+                          onChange={e => setRicaviPerCat(prev => ({ ...prev, [cat]: e.target.value }))} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
+              {/* ── DETTAGLIO PER GIORNATA (verticale, illimitato) ── */}
+              {datiInterna.giorni.length > 0 && (
+                <div className="mb-6">
+                  <p style={{ fontSize: 12, fontWeight: 700, color: '#1e3a8a', marginBottom: 8, borderLeft: '4px solid #1e3a8a', paddingLeft: 8 }}>DETTAGLIO COSTI PER GIORNATA</p>
+                  {datiInterna.giorni.map(giorno => {
+                    const vociGiorno = datiInterna.vociPerGiorno[giorno] || []
+                    if (vociGiorno.length === 0) return null
+                    return (
+                      <div key={giorno} className="day-block" style={{ marginBottom: 12 }}>
+                        <div style={{ background: '#1e40af', color: 'white', padding: '4px 12px', borderRadius: '4px 4px 0 0', fontSize: 11, fontWeight: 600 }}>
+                          {new Date(giorno).toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+                        </div>
+                        <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11, border: '1px solid #e5e7eb' }}>
+                          <thead>
+                            <tr style={{ background: '#f8faff' }}>
+                              <th style={{ padding: '6px 10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', color: '#374151' }}>Categoria</th>
+                              <th style={{ padding: '6px 10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', color: '#374151' }}>Descrizione</th>
+                              <th style={{ padding: '6px 10px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', color: '#374151', width: 90 }}>Importo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {vociGiorno.map((c: any, idx: number) => (
+                              <tr key={c.id} style={{ background: idx % 2 === 0 ? '#fff' : '#f8faff' }}>
+                                <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', color: CAT_COLORS[c.categoria] || '#374151', fontWeight: 600 }}>{c.categoria}</td>
+                                <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9' }}>{c.descrizione || '—'}</td>
+                                <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: '#1e40af' }}>€ {euroShort(c.importo)}</td>
+                              </tr>
+                            ))}
+                            <tr style={{ background: '#eff6ff' }}>
+                              <td colSpan={2} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, fontSize: 11, color: '#1e3a8a' }}>Totale giornata</td>
+                              <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, color: '#1e3a8a' }}>€ {euroShort(datiInterna.totaliGiorno[giorno])}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* ── RIEPILOGO PER MESE (categorie + totale mese) ── */}
+              {datiInterna.riepilogoMensile.length > 0 && (
+                <div className="mb-6">
+                  <p style={{ fontSize: 12, fontWeight: 700, color: '#1e3a8a', marginBottom: 8, borderLeft: '4px solid #1e3a8a', paddingLeft: 8 }}>RIEPILOGO PER MESE</p>
+                  {datiInterna.riepilogoMensile.map(({ mese, perCategoria, totaleMese }) => (
+                    <div key={mese} className="month-block" style={{ marginBottom: 14 }}>
+                      <div style={{ background: '#374151', color: 'white', padding: '4px 12px', borderRadius: '4px 4px 0 0', fontSize: 11, fontWeight: 700, textTransform: 'capitalize' }}>
+                        {new Date(mese + '-01').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })}
+                      </div>
+                      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11, border: '1px solid #e5e7eb' }}>
+                        <thead>
+                          <tr style={{ background: '#f8faff' }}>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb', color: '#374151' }}>Categoria</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'right', borderBottom: '1px solid #e5e7eb', color: '#374151', width: 110 }}>Importo</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {perCategoria.map((c, idx) => (
+                            <tr key={c.categoria} style={{ background: idx % 2 === 0 ? '#fff' : '#f8faff' }}>
+                              <td style={{ padding: '6px 10px', borderBottom: '1px solid #f1f5f9', fontWeight: 600, color: CAT_COLORS[c.categoria] || '#374151' }}>{c.categoria}</td>
+                              <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: '#1e40af' }}>€ {euroShort(c.importo)}</td>
+                            </tr>
+                          ))}
+                          <tr style={{ background: '#eff6ff' }}>
+                            <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#1e3a8a' }}>Totale mese</td>
+                            <td style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, color: '#1e3a8a' }}>€ {euroShort(totaleMese)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Ricavi a corpo */}
               <div className="no-print card mb-4 border-green-200 bg-green-50">
                 <div className="flex items-center gap-3 mb-2">
                   <input type="checkbox" id="acorpo" checked={usaACorpo} onChange={e => setUsaACorpo(e.target.checked)} className="rounded" />
@@ -669,25 +724,30 @@ export default function CostiCantiere() {
                 )}
               </div>
 
-              <div className="grid grid-cols-3 gap-4 mb-6">
-                <div style={{ border: '2px solid #1e40af', borderRadius: 8, padding: 16, background: '#eff6ff' }}>
-                  <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>TOTALE COSTI</p>
-                  <p style={{ fontSize: 22, fontWeight: 800, color: '#1e3a8a' }}>€ {euroShort(datiInterna.totaleGenerale)}</p>
-                </div>
-                <div style={{ border: '2px solid #059669', borderRadius: 8, padding: 16, background: '#f0fdf4' }}>
-                  <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>TOTALE RICAVI</p>
-                  <p style={{ fontSize: 22, fontWeight: 800, color: '#065f46' }}>{totaleRicaviFinale > 0 ? '€ ' + euroShort(totaleRicaviFinale) : '—'}</p>
-                  {usaACorpo && <p style={{ fontSize: 10, color: '#6b7280' }}>A corpo</p>}
-                </div>
-                <div style={{ border: `2px solid ${margineInterna >= 0 ? '#7c3aed' : '#dc2626'}`, borderRadius: 8, padding: 16, background: margineInterna >= 0 ? '#f5f3ff' : '#fef2f2' }}>
-                  <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>MARGINE {marginePercInterna > 0 ? `(${marginePercInterna}%)` : ''}</p>
-                  <p style={{ fontSize: 22, fontWeight: 800, color: margineInterna >= 0 ? '#5b21b6' : '#dc2626' }}>
-                    {totaleRicaviFinale > 0 ? '€ ' + euroShort(margineInterna) : '—'}
-                  </p>
+              {/* ── TOTALONI FINALI ── */}
+              <div className="totals-block" style={{ marginTop: 24 }}>
+                <p style={{ fontSize: 12, fontWeight: 700, color: '#1e3a8a', marginBottom: 8, borderLeft: '4px solid #1e3a8a', paddingLeft: 8 }}>TOTALI COMPLESSIVI</p>
+                <div className="grid grid-cols-3 gap-4 mb-6">
+                  <div style={{ border: '2px solid #1e40af', borderRadius: 8, padding: 16, background: '#eff6ff' }}>
+                    <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>TOTALE COSTI</p>
+                    <p style={{ fontSize: 22, fontWeight: 800, color: '#1e3a8a' }}>€ {euroShort(meseInterna ? datiInterna.totaleGenerale : datiInterna.totaleComplessivoTutti)}</p>
+                  </div>
+                  <div style={{ border: '2px solid #059669', borderRadius: 8, padding: 16, background: '#f0fdf4' }}>
+                    <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>TOTALE RICAVI</p>
+                    <p style={{ fontSize: 22, fontWeight: 800, color: '#065f46' }}>{totaleRicaviFinale > 0 ? '€ ' + euroShort(totaleRicaviFinale) : '—'}</p>
+                    {usaACorpo && <p style={{ fontSize: 10, color: '#6b7280' }}>A corpo</p>}
+                  </div>
+                  <div style={{ border: `2px solid ${margineInterna >= 0 ? '#7c3aed' : '#dc2626'}`, borderRadius: 8, padding: 16, background: margineInterna >= 0 ? '#f5f3ff' : '#fef2f2' }}>
+                    <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>MARGINE {marginePercInterna > 0 ? `(${marginePercInterna}%)` : ''}</p>
+                    <p style={{ fontSize: 22, fontWeight: 800, color: margineInterna >= 0 ? '#5b21b6' : '#dc2626' }}>
+                      {totaleRicaviFinale > 0 ? '€ ' + euroShort(margineInterna) : '—'}
+                    </p>
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-8 mt-8 pt-4 border-t border-gray-200">
+              {/* Firme */}
+              <div className="signatures-block grid grid-cols-2 gap-8 mt-8 pt-4 border-t border-gray-200">
                 <div>
                   <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 32 }}>Firma geometra</p>
                   <div style={{ borderBottom: '1px solid #374151', width: 200 }}></div>
@@ -783,7 +843,7 @@ export default function CostiCantiere() {
                 </div>
 
                 <div className="flex-1 overflow-auto p-6" id="report-esterno">
-                  <div className="flex items-start justify-between mb-6 pb-4" style={{ borderBottom: '3px solid #1e3a8a' }}>
+                  <div className="report-header flex items-start justify-between mb-6 pb-4" style={{ borderBottom: '3px solid #1e3a8a' }}>
                     <div className="flex items-center gap-4">
                       <img src="/logo.png" alt="BC General Service" style={{ height: 55, objectFit: 'contain' }} />
                       <div>
@@ -815,7 +875,7 @@ export default function CostiCantiere() {
                         if (vociGiorno.length === 0) return null
                         const totGiorno = vociGiorno.reduce((s, v) => s + (parseFloat(v.quantita_mod) || 1) * (parseFloat(v.prezzo_vendita) || 0), 0)
                         return (
-                          <div key={giorno} style={{ marginBottom: 12 }}>
+                          <div key={giorno} className="day-block" style={{ marginBottom: 12 }}>
                             <div style={{ background: '#1e40af', color: 'white', padding: '4px 12px', borderRadius: '4px 4px 0 0', fontSize: 11, fontWeight: 600 }}>
                               {new Date(giorno).toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
                             </div>
@@ -977,6 +1037,8 @@ export default function CostiCantiere() {
 
       <style>{`
         @media print {
+          @page { size: A4; margin: 12mm; }
+
           body * { visibility: hidden !important; }
 
           /* Stampa solo il report attivo */
@@ -988,7 +1050,7 @@ export default function CostiCantiere() {
               top: 0 !important;
               left: 0 !important;
               width: 100% !important;
-              padding: 16px !important;
+              padding: 0 !important;
               font-size: 10px !important;
               overflow: visible !important;
             }
@@ -1002,11 +1064,24 @@ export default function CostiCantiere() {
               top: 0 !important;
               left: 0 !important;
               width: 100% !important;
-              padding: 16px !important;
+              padding: 0 !important;
               font-size: 10px !important;
               overflow: visible !important;
             }
           ` : ''}
+
+          /* L'header azienda compare una sola volta, in cima, senza ripetersi a metà pagina */
+          .report-header {
+            break-inside: avoid !important;
+            break-after: avoid !important;
+            page-break-inside: avoid !important;
+          }
+
+          /* Ogni blocco giorno/mese non si spezza a metà tra due pagine */
+          .day-block, .month-block, .totals-block, .signatures-block {
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
+          }
 
           .no-print { display: none !important; }
           .only-print { display: inline !important; }
