@@ -30,7 +30,7 @@ const statoBadge = (s: string) => {
 type PrintMode = 'interna' | 'esterna' | null
 
 export default function CostiCantiere() {
-  const [tab, setTab] = useState<'costi' | 'ddt' | 'sal' | 'fatture'>('costi')
+  const [tab, setTab] = useState<'costi' | 'ddt' | 'sal'>('costi')
   const [progetti, setProgetti] = useState<any[]>([])
   const [progettoSel, setProgettoSel] = useState('')
   const [costi, setCosti] = useState<any[]>([])
@@ -53,17 +53,8 @@ export default function CostiCantiere() {
   const [formSal, setFormSal] = useState({ data: '', numero_sal: '', importo_lavori: '', descrizione: '', note: '' })
   const [modalModificaSal, setModalModificaSal] = useState<any>(null)
 
-  // Fatture da Emettere
-  const [clienti, setClienti] = useState<any[]>([])
+  // Fatturato (somma fatture_da_emettere emesse) — per il confronto SAL vs Fatturato, gestite ora in /fatture-da-emettere
   const [fattureDaEmettere, setFattureDaEmettere] = useState<any[]>([])
-  const [modalFde, setModalFde] = useState(false)
-  const [loadingFde, setLoadingFde] = useState(false)
-  const [formFde, setFormFde] = useState<{ cliente_id: string, aliquota_iva: string, scadenza_prevista: string, note: string, righe: { descrizione: string, importo: string }[] }>({
-    cliente_id: '', aliquota_iva: '22', scadenza_prevista: '', note: '', righe: [{ descrizione: '', importo: '' }]
-  })
-  const [modalEmissione, setModalEmissione] = useState<any>(null)
-  const [formEmissione, setFormEmissione] = useState({ numero_fattura_emessa: '', importo_emesso: '', scadenza_emessa: '' })
-  const [espansaFde, setEspansaFde] = useState<string | null>(null)
 
   // Contabilità Interna
   const [modalInterna, setModalInterna] = useState(false)
@@ -96,14 +87,12 @@ export default function CostiCantiere() {
     const soloAssegnati = profilo?.perm_solo_cantieri_assegnati === true
     let queryProgetti = supabase.from('progetti').select('id,codice,nome,geometra_id,geometra_nome,budget_costi,valore_contratto,cliente_id,cliente_nome').eq('stato', 'In Corso').order('codice')
     if (soloAssegnati && user) queryProgetti = queryProgetti.eq('geometra_id', user.id)
-    const [{ data: p }, { data: f }, { data: cl }] = await Promise.all([
+    const [{ data: p }, { data: f }] = await Promise.all([
       queryProgetti,
       supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale'),
-      supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale'),
     ])
     setProgetti(p || [])
     setFornitori(f || [])
-    setClienti(cl || [])
     if (p && p.length > 0) setProgettoSel(p[0].id)
   }
 
@@ -269,91 +258,6 @@ export default function CostiCantiere() {
     await supabase.from('sal_cantiere').delete().eq('id', id)
     await logActivity('eliminazione', 'sal_cantiere', id, `SAL ${sal?.numero_sal || ''} · € ${sal?.importo_lavori}`)
     loadSal()
-  }
-
-  // ── Fatture da Emettere ──
-  function apriModalFde() {
-    const prj = progetti.find(p => p.id === progettoSel)
-    setFormFde({ cliente_id: prj?.cliente_id || '', aliquota_iva: '22', scadenza_prevista: '', note: '', righe: [{ descrizione: '', importo: '' }] })
-    setModalFde(true)
-  }
-
-  function aggiungiRigaFde() {
-    setFormFde(prev => ({ ...prev, righe: [...prev.righe, { descrizione: '', importo: '' }] }))
-  }
-
-  function aggiornaRigaFde(idx: number, campo: 'descrizione' | 'importo', valore: string) {
-    setFormFde(prev => ({ ...prev, righe: prev.righe.map((r, i) => i === idx ? { ...r, [campo]: valore } : r) }))
-  }
-
-  function rimuoviRigaFde(idx: number) {
-    setFormFde(prev => ({ ...prev, righe: prev.righe.filter((_, i) => i !== idx) }))
-  }
-
-  const totaleImponibileFde = formFde.righe.reduce((s, r) => s + (parseFloat(r.importo) || 0), 0)
-
-  async function salvaFde() {
-    const righeValide = formFde.righe.filter(r => r.descrizione && parseFloat(r.importo) > 0)
-    if (righeValide.length === 0) { alert('Inserisci almeno una riga con descrizione e importo'); return }
-    if (!formFde.cliente_id) { alert('Seleziona il cliente'); return }
-    setLoadingFde(true)
-    const prj = progetti.find(p => p.id === progettoSel)
-    const cli = clienti.find(c => c.id === formFde.cliente_id)
-    const { data: inserted, error } = await supabase.from('fatture_da_emettere').insert({
-      progetto_id: progettoSel,
-      cliente_id: formFde.cliente_id,
-      cliente_nome: cli?.ragione_sociale || '',
-      aliquota_iva: parseFloat(formFde.aliquota_iva) || 22,
-      scadenza_prevista: formFde.scadenza_prevista || null,
-      stato: 'Da Emettere',
-      note: formFde.note || null,
-    }).select('id').single()
-    if (error) { alert('Errore: ' + error.message); setLoadingFde(false); return }
-    if (inserted?.id) {
-      await supabase.from('fatture_da_emettere_righe').insert(
-        righeValide.map(r => ({ fattura_da_emettere_id: inserted.id, descrizione: r.descrizione, importo: parseFloat(r.importo) || 0 }))
-      )
-      await logActivity('inserimento', 'fatture_da_emettere', inserted.id, `Richiesta fattura — ${prj?.codice} ${prj?.nome} · ${cli?.ragione_sociale} · € ${totaleImponibileFde.toFixed(2)}`)
-    }
-    setModalFde(false)
-    loadFatture()
-    setLoadingFde(false)
-  }
-
-  function apriModalEmissione(f: any) {
-    const imponibile = (f.fatture_da_emettere_righe || []).reduce((s: number, r: any) => s + (r.importo || 0), 0)
-    setFormEmissione({ numero_fattura_emessa: '', importo_emesso: String(imponibile), scadenza_emessa: f.scadenza_prevista || '' })
-    setModalEmissione(f)
-  }
-
-  async function confermaEmissione() {
-    if (!modalEmissione) return
-    if (!formEmissione.numero_fattura_emessa || !formEmissione.importo_emesso) { alert('Inserisci numero fattura e importo'); return }
-    const { error } = await supabase.from('fatture_da_emettere').update({
-      stato: 'Emessa',
-      numero_fattura_emessa: formEmissione.numero_fattura_emessa,
-      importo_emesso: parseFloat(formEmissione.importo_emesso) || 0,
-      scadenza_emessa: formEmissione.scadenza_emessa || null,
-    }).eq('id', modalEmissione.id)
-    if (error) { alert('Errore: ' + error.message); return }
-    await logActivity('modifica', 'fatture_da_emettere', modalEmissione.id, `Fattura emessa ${formEmissione.numero_fattura_emessa} · € ${formEmissione.importo_emesso}`)
-    setModalEmissione(null)
-    loadFatture()
-  }
-
-  async function riapriFde(id: string) {
-    if (!confirm('Riportare questa fattura a "Da Emettere"?')) return
-    await supabase.from('fatture_da_emettere').update({
-      stato: 'Da Emettere', numero_fattura_emessa: null, importo_emesso: null, scadenza_emessa: null
-    }).eq('id', id)
-    loadFatture()
-  }
-
-  async function eliminaFde(id: string) {
-    if (!confirm('Eliminare questa richiesta di fattura?')) return
-    await supabase.from('fatture_da_emettere').delete().eq('id', id)
-    await logActivity('eliminazione', 'fatture_da_emettere', id, 'Richiesta fattura eliminata')
-    loadFatture()
   }
 
   const progetto = progetti.find(p => p.id === progettoSel)
@@ -529,7 +433,6 @@ export default function CostiCantiere() {
             {tab === 'costi' && <button className="btn btn-primary" onClick={() => { const oggi = new Date().toISOString().split('T')[0]; setDataBase(oggi); setRighe([nuovaRiga(oggi)]); setModalCosto(true) }}>+ Inserisci costi</button>}
             {tab === 'ddt' && <button className="btn btn-primary" onClick={() => setModalDdt(true)}>+ Inserisci DDT</button>}
             {tab === 'sal' && <button className="btn btn-primary" onClick={apriModalSal}>+ Inserisci SAL</button>}
-            {tab === 'fatture' && <button className="btn btn-primary" onClick={apriModalFde}>+ Richiedi fattura</button>}
           </div>
         </div>
 
@@ -607,9 +510,6 @@ export default function CostiCantiere() {
               </button>
               <button onClick={() => setTab('sal')} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'sal' ? 'border-teal-600 text-teal-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                 📈 SAL ({salList.length})
-              </button>
-              <button onClick={() => setTab('fatture')} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'fatture' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                🧾 Fatture da Emettere ({fattureDaEmettere.length})
               </button>
             </div>
 
@@ -722,83 +622,6 @@ export default function CostiCantiere() {
                     ))}
                   </tbody>
                 </table>
-              </div>
-            )}
-
-            {tab === 'fatture' && (
-              <div className="card overflow-x-auto">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-medium text-gray-600">Fatture da emettere per questo cantiere ({fattureDaEmettere.length})</h3>
-                  <div className="flex gap-3 text-sm">
-                    <span className="text-amber-700 font-medium">Da emettere: {euro(totaleFattureDaEmettere)}</span>
-                    <span className="text-emerald-700 font-medium">Emesso: {euro(totaleFatturatoEmesso)}</span>
-                  </div>
-                </div>
-                {fattureDaEmettere.length === 0 ? (
-                  <div className="text-center text-gray-400 py-8">Nessuna richiesta di fattura per questo cantiere.</div>
-                ) : (
-                  <div className="space-y-2">
-                    {fattureDaEmettere.map(f => {
-                      const imponibile = (f.fatture_da_emettere_righe || []).reduce((s: number, r: any) => s + (r.importo || 0), 0)
-                      const iva = imponibile * (f.aliquota_iva || 22) / 100
-                      return (
-                        <div key={f.id} className="border border-gray-200 rounded-lg overflow-hidden">
-                          <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
-                            onClick={() => setEspansaFde(espansaFde === f.id ? null : f.id)}>
-                            <div className="flex-1">
-                              <span className="font-medium text-sm">{f.cliente_nome}</span>
-                              {f.stato === 'Emessa' && <span className="text-gray-400 text-xs ml-2">{f.numero_fattura_emessa}</span>}
-                            </div>
-                            <span className="text-sm font-semibold">{euro(imponibile)}</span>
-                            <span className="text-xs text-gray-400">+IVA {f.aliquota_iva}%: {euro(iva)}</span>
-                            {f.stato === 'Emessa'
-                              ? <span className="badge badge-green">Emessa</span>
-                              : <span className="badge badge-amber">Da Emettere</span>}
-                            <span className="text-gray-400 text-sm">{espansaFde === f.id ? '▲' : '▼'}</span>
-                          </div>
-                          {espansaFde === f.id && (
-                            <div className="border-t border-gray-100 bg-gray-50 p-4">
-                              <table className="table-base mb-3">
-                                <thead><tr><th>Descrizione</th><th>Importo</th></tr></thead>
-                                <tbody>
-                                  {(f.fatture_da_emettere_righe || []).map((r: any) => (
-                                    <tr key={r.id}>
-                                      <td className="text-sm">{r.descrizione}</td>
-                                      <td className="font-medium text-sm">{euro(r.importo)}</td>
-                                    </tr>
-                                  ))}
-                                  <tr className="bg-gray-100">
-                                    <td className="text-xs font-medium text-right text-gray-600">Imponibile</td>
-                                    <td className="font-bold text-sm">{euro(imponibile)}</td>
-                                  </tr>
-                                </tbody>
-                              </table>
-                              <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
-                                <span>Scadenza prevista: {f.scadenza_prevista ? new Date(f.scadenza_prevista).toLocaleDateString('it-IT') : '—'}</span>
-                                {f.note && <span>Note: {f.note}</span>}
-                              </div>
-                              {f.stato === 'Emessa' ? (
-                                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center justify-between">
-                                  <div className="text-sm text-emerald-800">
-                                    <strong>Fattura {f.numero_fattura_emessa}</strong> · {euro(f.importo_emesso)} · Scadenza: {f.scadenza_emessa ? new Date(f.scadenza_emessa).toLocaleDateString('it-IT') : '—'}
-                                  </div>
-                                  <div className="flex gap-2">
-                                    <button className="btn btn-sm" onClick={() => riapriFde(f.id)}>↺ Riapri</button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="flex justify-end gap-2">
-                                  <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaFde(f.id)}>✕ Elimina</button>
-                                  <button className="btn btn-success btn-sm" onClick={() => apriModalEmissione(f)}>✓ Segna come emessa</button>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
               </div>
             )}
           </>
@@ -950,92 +773,6 @@ export default function CostiCantiere() {
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalModificaSal(null)}>Annulla</button>
               <button className="btn btn-primary" onClick={salvaModificaSal}>Salva modifiche</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── MODAL RICHIEDI FATTURA (Fatture da Emettere) ── */}
-      {modalFde && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-base font-semibold">Richiedi emissione fattura</h2>
-                <p className="text-xs text-gray-500 mt-0.5">{progetto?.codice} — {progetto?.nome}</p>
-              </div>
-              <button onClick={() => setModalFde(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
-            </div>
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div className="col-span-2"><label className="label">Cliente *</label>
-                <select className="input" value={formFde.cliente_id} onChange={e => setFormFde({...formFde, cliente_id: e.target.value})}>
-                  <option value="">-- seleziona --</option>
-                  {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
-                </select>
-              </div>
-              <div><label className="label">Aliquota IVA (%)</label>
-                <input className="input" type="number" step="0.01" value={formFde.aliquota_iva} onChange={e => setFormFde({...formFde, aliquota_iva: e.target.value})} /></div>
-              <div><label className="label">Scadenza prevista</label>
-                <input className="input" type="date" value={formFde.scadenza_prevista} onChange={e => setFormFde({...formFde, scadenza_prevista: e.target.value})} /></div>
-              <div className="col-span-2"><label className="label">Note</label>
-                <input className="input" placeholder="Note opzionali" value={formFde.note} onChange={e => setFormFde({...formFde, note: e.target.value})} /></div>
-            </div>
-
-            <div className="mb-4">
-              <p className="text-xs font-medium text-gray-600 mb-2">Righe descrizione (si sommano per l'imponibile):</p>
-              <div className="space-y-2">
-                {formFde.righe.map((r, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <input className="input flex-1 text-sm" placeholder="es. Lavori di fondazione" value={r.descrizione}
-                      onChange={e => aggiornaRigaFde(idx, 'descrizione', e.target.value)} />
-                    <input className="input w-32 text-sm text-right" type="number" step="0.01" placeholder="0.00" value={r.importo}
-                      onChange={e => aggiornaRigaFde(idx, 'importo', e.target.value)} />
-                    <button onClick={() => rimuoviRigaFde(idx)} disabled={formFde.righe.length === 1}
-                      className="text-gray-300 hover:text-red-500 text-sm disabled:opacity-30">✕</button>
-                  </div>
-                ))}
-              </div>
-              <button className="btn btn-sm mt-2" onClick={aggiungiRigaFde}>+ Aggiungi riga</button>
-            </div>
-
-            <div className="bg-gray-50 rounded-lg p-3 mb-4 flex items-center justify-between">
-              <span className="text-sm font-medium text-gray-600">Imponibile totale</span>
-              <span className="text-lg font-bold text-gray-800">{euro(totaleImponibileFde)}</span>
-            </div>
-
-            <div className="flex gap-2 justify-end">
-              <button className="btn" onClick={() => setModalFde(false)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salvaFde} disabled={loadingFde}>{loadingFde ? 'Salvataggio...' : 'Salva richiesta'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── MODAL CONFERMA EMISSIONE FATTURA ── */}
-      {modalEmissione && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-base font-semibold">Segna come emessa</h2>
-                <p className="text-xs text-gray-500 mt-0.5">{modalEmissione.cliente_nome}</p>
-              </div>
-              <button onClick={() => setModalEmissione(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
-            </div>
-            <div className="space-y-3">
-              <div><label className="label">N° Fattura emessa *</label>
-                <input className="input" placeholder="es. FE/2026/012" value={formEmissione.numero_fattura_emessa}
-                  onChange={e => setFormEmissione({...formEmissione, numero_fattura_emessa: e.target.value})} /></div>
-              <div><label className="label">Importo imponibile (€) *</label>
-                <input className="input" type="number" step="0.01" value={formEmissione.importo_emesso}
-                  onChange={e => setFormEmissione({...formEmissione, importo_emesso: e.target.value})} /></div>
-              <div><label className="label">Scadenza pagamento</label>
-                <input className="input" type="date" value={formEmissione.scadenza_emessa}
-                  onChange={e => setFormEmissione({...formEmissione, scadenza_emessa: e.target.value})} /></div>
-            </div>
-            <div className="flex gap-2 justify-end mt-4">
-              <button className="btn" onClick={() => setModalEmissione(null)}>Annulla</button>
-              <button className="btn btn-success" onClick={confermaEmissione}>Confirma emissione</button>
             </div>
           </div>
         </div>
