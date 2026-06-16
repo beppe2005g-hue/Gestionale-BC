@@ -120,7 +120,8 @@ export default function Progetti() {
       const budgetPerc = proj.budget_costi > 0 ? Math.round(cos / proj.budget_costi * 100) : 0
       const avanzamentoMedio = Math.round(FASI.reduce((s, f) => s + (proj[f.key] || 0), 0) / FASI.length)
       const scostamentoFatturazione = ric - fatturato // > 0 = a rilento con la fatturazione
-      return { ...proj, ricavi: ric, fatturato, costi: cos, marg_perc: margPerc, budget_perc: budgetPerc, avanzamento_medio: avanzamentoMedio, scostamento_fatturazione: scostamentoFatturazione }
+      const percFatturatoSuSal = ric > 0 ? Math.round(fatturato / ric * 100) : 0
+      return { ...proj, ricavi: ric, fatturato, costi: cos, marg_perc: margPerc, budget_perc: budgetPerc, avanzamento_medio: avanzamentoMedio, scostamento_fatturazione: scostamentoFatturazione, perc_fatturato_su_sal: percFatturatoSuSal }
     })
     setProgetti(enhanced)
     setClienti(c || [])
@@ -363,7 +364,7 @@ export default function Progetti() {
                         <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${p.avanzamento_medio}%` }} />
                       </div>
                     </div>
-                    <div className="grid grid-cols-4 gap-3 mb-3">
+                    <div className="grid grid-cols-5 gap-3 mb-3">
                       <div className="bg-teal-50 rounded-lg p-2 text-center">
                         <p className="text-xs text-gray-400">Ricavi (SAL)</p>
                         <p className="text-sm font-medium text-teal-700">{euro(p.ricavi)}</p>
@@ -379,6 +380,12 @@ export default function Progetti() {
                       <div className="bg-gray-50 rounded-lg p-2 text-center">
                         <p className="text-xs text-gray-400">Margine (su SAL)</p>
                         <p className={`text-sm font-medium ${p.marg_perc >= 15 ? 'text-green-700' : p.marg_perc >= 8 ? 'text-amber-700' : 'text-red-700'}`}>{p.marg_perc}%</p>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-400">% Fatturato su SAL</p>
+                        <p className={`text-sm font-medium ${p.perc_fatturato_su_sal >= 90 ? 'text-green-700' : p.perc_fatturato_su_sal >= 60 ? 'text-amber-700' : 'text-red-700'}`}>
+                          {p.ricavi > 0 ? `${p.perc_fatturato_su_sal}%` : '—'}
+                        </p>
                       </div>
                     </div>
                     {Math.abs(p.scostamento_fatturazione) > 0.02 && p.ricavi > 0 && (
@@ -510,10 +517,18 @@ export default function Progetti() {
               </div>
               <div className="card">
                 <h3 className="font-medium text-sm mb-3">💰 Situazione finanziaria</h3>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-5 gap-3">
                   <div className="bg-teal-50 rounded-lg p-3"><p className="text-xs text-gray-500">Ricavi (SAL maturati)</p><p className="font-semibold text-teal-700">{euro(modalDettaglio.ricavi)}</p></div>
                   <div className="bg-emerald-50 rounded-lg p-3"><p className="text-xs text-gray-500">Fatturato</p><p className="font-semibold text-emerald-700">{euro(modalDettaglio.fatturato)}</p></div>
                   <div className="bg-red-50 rounded-lg p-3"><p className="text-xs text-gray-500">Costi sostenuti</p><p className="font-semibold text-red-700">{euro(modalDettaglio.costi)}</p></div>
+                  <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">Margine (su SAL)</p>
+                    <p className={`font-semibold ${modalDettaglio.marg_perc >= 15 ? 'text-green-700' : modalDettaglio.marg_perc >= 8 ? 'text-amber-700' : 'text-red-700'}`}>{modalDettaglio.marg_perc}%</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-lg p-3"><p className="text-xs text-gray-500">% Fatturato su SAL</p>
+                    <p className={`font-semibold ${modalDettaglio.perc_fatturato_su_sal >= 90 ? 'text-green-700' : modalDettaglio.perc_fatturato_su_sal >= 60 ? 'text-amber-700' : 'text-red-700'}`}>
+                      {modalDettaglio.ricavi > 0 ? `${modalDettaglio.perc_fatturato_su_sal}%` : '—'}
+                    </p>
+                  </div>
                 </div>
                 {Math.abs(modalDettaglio.scostamento_fatturazione) > 0.02 && modalDettaglio.ricavi > 0 && (
                   <div className={`rounded-lg px-3 py-2 mt-3 text-xs font-medium ${modalDettaglio.scostamento_fatturazione > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-600'}`}>
