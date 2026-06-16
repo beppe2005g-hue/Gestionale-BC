@@ -62,6 +62,7 @@ export default function Progetti() {
   const [loading, setLoading] = useState(false)
   const [note, setNote] = useState<any[]>([])
   const [nuovaNota, setNuovaNota] = useState('')
+  const [erroreCaricamento, setErroreCaricamento] = useState('')
 
   const [cercaNome, setCercaNome] = useState('')
   const [cercaCliente, setCercaCliente] = useState('')
@@ -80,25 +81,46 @@ export default function Progetti() {
   useEffect(() => { loadAll() }, [])
 
   async function loadAll() {
-    const [{ data: p }, { data: c }, { data: u }] = await Promise.all([
-      supabase.from('progetti').select('*').order('updated_at', { ascending: false }).order('codice'),
+    setErroreCaricamento('')
+
+    // Query progetti: ordino solo per codice (colonna sempre presente),
+    // evitando "updated_at" che se non esiste sulla tabella fa fallire la request con 400
+    // e blocca tutto il caricamento della pagina.
+    const { data: p, error: errP } = await supabase
+      .from('progetti')
+      .select('*')
+      .order('codice', { ascending: false })
+
+    if (errP) {
+      console.error('Errore caricamento progetti:', errP)
+      setErroreCaricamento(errP.message || 'Errore nel caricamento dei progetti')
+      setProgetti([])
+      return
+    }
+
+    const [{ data: c }, { data: u }] = await Promise.all([
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true),
       supabase.from('utenti').select('id,nome,ruolo,capo_geometra'),
     ])
-    const [{ data: fc }, { data: ff }, { data: ddt }] = await Promise.all([
-      supabase.from('fatture_clienti').select('progetto_id,imponibile'),
+    const [{ data: sal }, { data: ff }, { data: ddt }, { data: fde }] = await Promise.all([
+      supabase.from('sal_cantiere').select('progetto_id,importo_lavori'),
       supabase.from('fatture_fornitori').select('progetto_id,imponibile'),
       supabase.from('ddt').select('progetto_id,importo,stato'),
+      supabase.from('fatture_da_emettere').select('progetto_id,stato,importo_emesso'),
     ])
     const enhanced = (p || []).map(proj => {
-      const ric = (fc || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
+      // Ricavi = totale SAL maturati (lavoro eseguito), non più fatture_clienti
+      const ric = (sal || []).filter(s => s.progetto_id === proj.id).reduce((s, x) => s + (x.importo_lavori || 0), 0)
+      // Fatturato = somma fatture da emettere effettivamente emesse
+      const fatturato = (fde || []).filter(f => f.progetto_id === proj.id && f.stato === 'Emessa').reduce((s, f) => s + (f.importo_emesso || 0), 0)
       const cosFF = (ff || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
       const cosDDT = (ddt || []).filter(d => d.progetto_id === proj.id && d.stato === 'Da Fatturare').reduce((s, d) => s + (d.importo || 0), 0)
       const cos = cosFF + cosDDT
       const margPerc = ric > 0 ? Math.round((ric - cos) / ric * 100) : 0
       const budgetPerc = proj.budget_costi > 0 ? Math.round(cos / proj.budget_costi * 100) : 0
       const avanzamentoMedio = Math.round(FASI.reduce((s, f) => s + (proj[f.key] || 0), 0) / FASI.length)
-      return { ...proj, ricavi: ric, costi: cos, marg_perc: margPerc, budget_perc: budgetPerc, avanzamento_medio: avanzamentoMedio }
+      const scostamentoFatturazione = ric - fatturato // > 0 = a rilento con la fatturazione
+      return { ...proj, ricavi: ric, fatturato, costi: cos, marg_perc: margPerc, budget_perc: budgetPerc, avanzamento_medio: avanzamentoMedio, scostamento_fatturazione: scostamentoFatturazione }
     })
     setProgetti(enhanced)
     setClienti(c || [])
@@ -139,11 +161,26 @@ export default function Progetti() {
     setNote(prev => prev.filter(n => n.id !== id))
   }
 
+  // ── Nuovo formato codice annuale: 26PJ001, 26PJ002... si riazzera ogni anno ──
   async function generaCodice() {
-    const { data } = await supabase.from('progetti').select('codice').order('created_at', { ascending: false }).limit(1)
+    const annoCorrente = new Date().getFullYear() % 100 // es. 2026 -> 26
+    const prefisso = `${String(annoCorrente).padStart(2, '0')}PJ`
+
+    const { data } = await supabase
+      .from('progetti')
+      .select('codice')
+      .ilike('codice', `${prefisso}%`)
+      .order('codice', { ascending: false })
+      .limit(1)
+
     const last = data?.[0]?.codice
-    const n = last ? parseInt(last.replace(/\D/g, '')) + 1 : 1
-    return 'PRJ' + String(n).padStart(3, '0')
+    let prossimoNumero = 1
+    if (last) {
+      const numeroPart = last.replace(prefisso, '').replace(/\D/g, '')
+      const parsed = parseInt(numeroPart)
+      if (!isNaN(parsed)) prossimoNumero = parsed + 1
+    }
+    return prefisso + String(prossimoNumero).padStart(3, '0')
   }
 
   async function apriModal() {
@@ -242,6 +279,14 @@ export default function Progetti() {
           <button className="btn btn-primary text-sm" onClick={apriModal}>+ Nuovo progetto</button>
         </div>
 
+        {erroreCaricamento && (
+          <div className="card mb-4 bg-red-50 border-red-200">
+            <p className="text-sm text-red-700 font-medium">⚠️ Errore nel caricamento dei progetti</p>
+            <p className="text-xs text-red-600 mt-1">{erroreCaricamento}</p>
+            <button className="btn btn-sm mt-2" onClick={loadAll}>Riprova</button>
+          </div>
+        )}
+
         <div className="card mb-4">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
             <div><label className="label">Cerca cantiere</label><input className="input" placeholder="Nome o codice..." value={cercaNome} onChange={e => setCercaNome(e.target.value)} /></div>
@@ -319,21 +364,34 @@ export default function Progetti() {
                       </div>
                     </div>
                     <div className="grid grid-cols-4 gap-3 mb-3">
-                      <div className="bg-gray-50 rounded-lg p-2 text-center">
-                        <p className="text-xs text-gray-400">Ricavi</p>
-                        <p className="text-sm font-medium text-green-700">{euro(p.ricavi)}</p>
+                      <div className="bg-teal-50 rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-400">Ricavi (SAL)</p>
+                        <p className="text-sm font-medium text-teal-700">{euro(p.ricavi)}</p>
+                      </div>
+                      <div className="bg-emerald-50 rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-400">Fatturato</p>
+                        <p className="text-sm font-medium text-emerald-700">{euro(p.fatturato)}</p>
                       </div>
                       <div className="bg-gray-50 rounded-lg p-2 text-center">
                         <p className="text-xs text-gray-400">Costi</p>
                         <p className="text-sm font-medium text-red-700">{euro(p.costi)}</p>
                       </div>
                       <div className="bg-gray-50 rounded-lg p-2 text-center">
-                        <p className="text-xs text-gray-400">Margine</p>
+                        <p className="text-xs text-gray-400">Margine (su SAL)</p>
                         <p className={`text-sm font-medium ${p.marg_perc >= 15 ? 'text-green-700' : p.marg_perc >= 8 ? 'text-amber-700' : 'text-red-700'}`}>{p.marg_perc}%</p>
                       </div>
-                      <div className="bg-gray-50 rounded-lg p-2 text-center">
-                        <p className="text-xs text-gray-400">Budget usato</p>
-                        <p className={`text-sm font-medium ${p.budget_perc >= 100 ? 'text-red-700' : p.budget_perc >= 80 ? 'text-amber-700' : 'text-gray-700'}`}>{p.budget_perc}%</p>
+                    </div>
+                    {Math.abs(p.scostamento_fatturazione) > 0.02 && p.ricavi > 0 && (
+                      <div className={`rounded-lg px-3 py-1.5 mb-3 text-xs font-medium ${p.scostamento_fatturazione > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-600'}`}>
+                        {p.scostamento_fatturazione > 0
+                          ? `🟡 A rilento con la fatturazione: ${euro(p.scostamento_fatturazione)} ancora da fatturare rispetto al lavoro maturato`
+                          : `${euro(Math.abs(p.scostamento_fatturazione))} fatturati oltre il SAL maturato`}
+                      </div>
+                    )}
+                    <div className="mb-3">
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-gray-400">Budget usato</span>
+                        <span className={`font-medium ${p.budget_perc >= 100 ? 'text-red-700' : p.budget_perc >= 80 ? 'text-amber-700' : 'text-gray-700'}`}>{p.budget_perc}%</span>
                       </div>
                     </div>
                     <div className="mb-3">
@@ -452,10 +510,18 @@ export default function Progetti() {
               </div>
               <div className="card">
                 <h3 className="font-medium text-sm mb-3">💰 Situazione finanziaria</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-green-50 rounded-lg p-3"><p className="text-xs text-gray-500">Ricavi fatturati</p><p className="font-semibold text-green-700">{euro(modalDettaglio.ricavi)}</p></div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-teal-50 rounded-lg p-3"><p className="text-xs text-gray-500">Ricavi (SAL maturati)</p><p className="font-semibold text-teal-700">{euro(modalDettaglio.ricavi)}</p></div>
+                  <div className="bg-emerald-50 rounded-lg p-3"><p className="text-xs text-gray-500">Fatturato</p><p className="font-semibold text-emerald-700">{euro(modalDettaglio.fatturato)}</p></div>
                   <div className="bg-red-50 rounded-lg p-3"><p className="text-xs text-gray-500">Costi sostenuti</p><p className="font-semibold text-red-700">{euro(modalDettaglio.costi)}</p></div>
                 </div>
+                {Math.abs(modalDettaglio.scostamento_fatturazione) > 0.02 && modalDettaglio.ricavi > 0 && (
+                  <div className={`rounded-lg px-3 py-2 mt-3 text-xs font-medium ${modalDettaglio.scostamento_fatturazione > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-600'}`}>
+                    {modalDettaglio.scostamento_fatturazione > 0
+                      ? `🟡 A rilento con la fatturazione: ${euro(modalDettaglio.scostamento_fatturazione)} ancora da fatturare rispetto al SAL maturato`
+                      : `${euro(Math.abs(modalDettaglio.scostamento_fatturazione))} fatturati oltre il SAL maturato`}
+                  </div>
+                )}
                 <div className="mt-3">
                   <div className="flex justify-between text-xs mb-1">
                     <span className="text-gray-500">Utilizzo budget ({modalDettaglio.budget_perc}%)</span>
