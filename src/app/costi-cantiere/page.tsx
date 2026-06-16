@@ -30,7 +30,7 @@ const statoBadge = (s: string) => {
 type PrintMode = 'interna' | 'esterna' | null
 
 export default function CostiCantiere() {
-  const [tab, setTab] = useState<'costi' | 'ddt'>('costi')
+  const [tab, setTab] = useState<'costi' | 'ddt' | 'sal' | 'fatture'>('costi')
   const [progetti, setProgetti] = useState<any[]>([])
   const [progettoSel, setProgettoSel] = useState('')
   const [costi, setCosti] = useState<any[]>([])
@@ -45,6 +45,25 @@ export default function CostiCantiere() {
   const [loadingDdt, setLoadingDdt] = useState(false)
   const [formDdt, setFormDdt] = useState({ data: '', numero: '', fornitore_id: '', descrizione: '', importo: '', mese_fattura_previsto: '', note: '' })
   const [modalModificaCosto, setModalModificaCosto] = useState<any>(null)
+
+  // SAL (Stato Avanzamento Lavori)
+  const [salList, setSalList] = useState<any[]>([])
+  const [modalSal, setModalSal] = useState(false)
+  const [loadingSal, setLoadingSal] = useState(false)
+  const [formSal, setFormSal] = useState({ data: '', numero_sal: '', importo_lavori: '', descrizione: '', note: '' })
+  const [modalModificaSal, setModalModificaSal] = useState<any>(null)
+
+  // Fatture da Emettere
+  const [clienti, setClienti] = useState<any[]>([])
+  const [fattureDaEmettere, setFattureDaEmettere] = useState<any[]>([])
+  const [modalFde, setModalFde] = useState(false)
+  const [loadingFde, setLoadingFde] = useState(false)
+  const [formFde, setFormFde] = useState<{ cliente_id: string, aliquota_iva: string, scadenza_prevista: string, note: string, righe: { descrizione: string, importo: string }[] }>({
+    cliente_id: '', aliquota_iva: '22', scadenza_prevista: '', note: '', righe: [{ descrizione: '', importo: '' }]
+  })
+  const [modalEmissione, setModalEmissione] = useState<any>(null)
+  const [formEmissione, setFormEmissione] = useState({ numero_fattura_emessa: '', importo_emesso: '', scadenza_emessa: '' })
+  const [espansaFde, setEspansaFde] = useState<string | null>(null)
 
   // Contabilità Interna
   const [modalInterna, setModalInterna] = useState(false)
@@ -65,7 +84,7 @@ export default function CostiCantiere() {
   const [printMode, setPrintMode] = useState<PrintMode>(null)
 
   useEffect(() => { loadAll() }, [])
-  useEffect(() => { if (progettoSel) { loadCosti(); loadDdt() } }, [progettoSel])
+  useEffect(() => { if (progettoSel) { loadCosti(); loadDdt(); loadSal(); loadFatture() } }, [progettoSel])
 
   async function loadAll() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -77,12 +96,14 @@ export default function CostiCantiere() {
     const soloAssegnati = profilo?.perm_solo_cantieri_assegnati === true
     let queryProgetti = supabase.from('progetti').select('id,codice,nome,geometra_id,geometra_nome,budget_costi,valore_contratto,cliente_id,cliente_nome').eq('stato', 'In Corso').order('codice')
     if (soloAssegnati && user) queryProgetti = queryProgetti.eq('geometra_id', user.id)
-    const [{ data: p }, { data: f }] = await Promise.all([
+    const [{ data: p }, { data: f }, { data: cl }] = await Promise.all([
       queryProgetti,
       supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale'),
+      supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale'),
     ])
     setProgetti(p || [])
     setFornitori(f || [])
+    setClienti(cl || [])
     if (p && p.length > 0) setProgettoSel(p[0].id)
   }
 
@@ -96,6 +117,18 @@ export default function CostiCantiere() {
     if (!progettoSel) return
     const { data } = await supabase.from('ddt').select('*').eq('progetto_id', progettoSel).order('data', { ascending: false })
     setDdts(data || [])
+  }
+
+  async function loadSal() {
+    if (!progettoSel) return
+    const { data } = await supabase.from('sal_cantiere').select('*').eq('progetto_id', progettoSel).order('data', { ascending: false })
+    setSalList(data || [])
+  }
+
+  async function loadFatture() {
+    if (!progettoSel) return
+    const { data } = await supabase.from('fatture_da_emettere').select('*, fatture_da_emettere_righe(*)').eq('progetto_id', progettoSel).order('created_at', { ascending: false })
+    setFattureDaEmettere(data || [])
   }
 
   function aggiornaRiga(id: string, campo: keyof RigaCosto, valore: string) {
@@ -188,6 +221,141 @@ export default function CostiCantiere() {
     loadDdt()
   }
 
+  // ── SAL (Stato Avanzamento Lavori) ──
+  function apriModalSal() {
+    setFormSal({ data: new Date().toISOString().split('T')[0], numero_sal: '', importo_lavori: '', descrizione: '', note: '' })
+    setModalSal(true)
+  }
+
+  async function salvaSal() {
+    if (!formSal.importo_lavori || parseFloat(formSal.importo_lavori) <= 0) { alert('Inserisci un importo lavori valido'); return }
+    setLoadingSal(true)
+    const prj = progetti.find(p => p.id === progettoSel)
+    const { data: inserted, error } = await supabase.from('sal_cantiere').insert({
+      progetto_id: progettoSel,
+      data: formSal.data || new Date().toISOString().split('T')[0],
+      numero_sal: formSal.numero_sal || null,
+      importo_lavori: parseFloat(formSal.importo_lavori) || 0,
+      descrizione: formSal.descrizione || null,
+      note: formSal.note || null,
+    }).select('id').single()
+    if (error) alert('Errore: ' + error.message)
+    else {
+      await logActivity('inserimento', 'sal_cantiere', inserted?.id || '', `SAL ${formSal.numero_sal || ''} — ${prj?.codice} ${prj?.nome} · € ${formSal.importo_lavori}`)
+      setModalSal(false)
+      loadSal()
+    }
+    setLoadingSal(false)
+  }
+
+  async function salvaModificaSal() {
+    if (!modalModificaSal) return
+    const { error } = await supabase.from('sal_cantiere').update({
+      data: modalModificaSal.data,
+      numero_sal: modalModificaSal.numero_sal || null,
+      importo_lavori: parseFloat(modalModificaSal.importo_lavori) || 0,
+      descrizione: modalModificaSal.descrizione || null,
+      note: modalModificaSal.note || null,
+    }).eq('id', modalModificaSal.id)
+    if (error) { alert('Errore: ' + error.message); return }
+    await logActivity('modifica', 'sal_cantiere', modalModificaSal.id, `SAL ${modalModificaSal.numero_sal || ''} · € ${modalModificaSal.importo_lavori}`)
+    setModalModificaSal(null)
+    loadSal()
+  }
+
+  async function eliminaSal(id: string) {
+    if (!confirm('Eliminare questo SAL?')) return
+    const sal = salList.find(s => s.id === id)
+    await supabase.from('sal_cantiere').delete().eq('id', id)
+    await logActivity('eliminazione', 'sal_cantiere', id, `SAL ${sal?.numero_sal || ''} · € ${sal?.importo_lavori}`)
+    loadSal()
+  }
+
+  // ── Fatture da Emettere ──
+  function apriModalFde() {
+    const prj = progetti.find(p => p.id === progettoSel)
+    setFormFde({ cliente_id: prj?.cliente_id || '', aliquota_iva: '22', scadenza_prevista: '', note: '', righe: [{ descrizione: '', importo: '' }] })
+    setModalFde(true)
+  }
+
+  function aggiungiRigaFde() {
+    setFormFde(prev => ({ ...prev, righe: [...prev.righe, { descrizione: '', importo: '' }] }))
+  }
+
+  function aggiornaRigaFde(idx: number, campo: 'descrizione' | 'importo', valore: string) {
+    setFormFde(prev => ({ ...prev, righe: prev.righe.map((r, i) => i === idx ? { ...r, [campo]: valore } : r) }))
+  }
+
+  function rimuoviRigaFde(idx: number) {
+    setFormFde(prev => ({ ...prev, righe: prev.righe.filter((_, i) => i !== idx) }))
+  }
+
+  const totaleImponibileFde = formFde.righe.reduce((s, r) => s + (parseFloat(r.importo) || 0), 0)
+
+  async function salvaFde() {
+    const righeValide = formFde.righe.filter(r => r.descrizione && parseFloat(r.importo) > 0)
+    if (righeValide.length === 0) { alert('Inserisci almeno una riga con descrizione e importo'); return }
+    if (!formFde.cliente_id) { alert('Seleziona il cliente'); return }
+    setLoadingFde(true)
+    const prj = progetti.find(p => p.id === progettoSel)
+    const cli = clienti.find(c => c.id === formFde.cliente_id)
+    const { data: inserted, error } = await supabase.from('fatture_da_emettere').insert({
+      progetto_id: progettoSel,
+      cliente_id: formFde.cliente_id,
+      cliente_nome: cli?.ragione_sociale || '',
+      aliquota_iva: parseFloat(formFde.aliquota_iva) || 22,
+      scadenza_prevista: formFde.scadenza_prevista || null,
+      stato: 'Da Emettere',
+      note: formFde.note || null,
+    }).select('id').single()
+    if (error) { alert('Errore: ' + error.message); setLoadingFde(false); return }
+    if (inserted?.id) {
+      await supabase.from('fatture_da_emettere_righe').insert(
+        righeValide.map(r => ({ fattura_da_emettere_id: inserted.id, descrizione: r.descrizione, importo: parseFloat(r.importo) || 0 }))
+      )
+      await logActivity('inserimento', 'fatture_da_emettere', inserted.id, `Richiesta fattura — ${prj?.codice} ${prj?.nome} · ${cli?.ragione_sociale} · € ${totaleImponibileFde.toFixed(2)}`)
+    }
+    setModalFde(false)
+    loadFatture()
+    setLoadingFde(false)
+  }
+
+  function apriModalEmissione(f: any) {
+    const imponibile = (f.fatture_da_emettere_righe || []).reduce((s: number, r: any) => s + (r.importo || 0), 0)
+    setFormEmissione({ numero_fattura_emessa: '', importo_emesso: String(imponibile), scadenza_emessa: f.scadenza_prevista || '' })
+    setModalEmissione(f)
+  }
+
+  async function confermaEmissione() {
+    if (!modalEmissione) return
+    if (!formEmissione.numero_fattura_emessa || !formEmissione.importo_emesso) { alert('Inserisci numero fattura e importo'); return }
+    const { error } = await supabase.from('fatture_da_emettere').update({
+      stato: 'Emessa',
+      numero_fattura_emessa: formEmissione.numero_fattura_emessa,
+      importo_emesso: parseFloat(formEmissione.importo_emesso) || 0,
+      scadenza_emessa: formEmissione.scadenza_emessa || null,
+    }).eq('id', modalEmissione.id)
+    if (error) { alert('Errore: ' + error.message); return }
+    await logActivity('modifica', 'fatture_da_emettere', modalEmissione.id, `Fattura emessa ${formEmissione.numero_fattura_emessa} · € ${formEmissione.importo_emesso}`)
+    setModalEmissione(null)
+    loadFatture()
+  }
+
+  async function riapriFde(id: string) {
+    if (!confirm('Riportare questa fattura a "Da Emettere"?')) return
+    await supabase.from('fatture_da_emettere').update({
+      stato: 'Da Emettere', numero_fattura_emessa: null, importo_emesso: null, scadenza_emessa: null
+    }).eq('id', id)
+    loadFatture()
+  }
+
+  async function eliminaFde(id: string) {
+    if (!confirm('Eliminare questa richiesta di fattura?')) return
+    await supabase.from('fatture_da_emettere').delete().eq('id', id)
+    await logActivity('eliminazione', 'fatture_da_emettere', id, 'Richiesta fattura eliminata')
+    loadFatture()
+  }
+
   const progetto = progetti.find(p => p.id === progettoSel)
   const costiFiltrati = useMemo(() => filtroMese ? costi.filter(c => c.data?.startsWith(filtroMese)) : costi, [costi, filtroMese])
   const totalePerCategoria = useMemo(() => {
@@ -204,6 +372,21 @@ export default function CostiCantiere() {
   }, [costi])
   const totaleDdt = ddts.reduce((s, d) => s + (d.importo || 0), 0)
   const totaleRighe = righe.reduce((s, r) => s + (parseFloat(r.importo) || 0), 0)
+
+  // ── Totali SAL e Fatture da Emettere ──
+  const totaleSal = useMemo(() => salList.reduce((s, sal) => s + (sal.importo_lavori || 0), 0), [salList])
+  const totaleFatturatoEmesso = useMemo(() =>
+    fattureDaEmettere.filter(f => f.stato === 'Emessa').reduce((s, f) => s + (f.importo_emesso || 0), 0)
+  , [fattureDaEmettere])
+  const totaleFattureDaEmettere = useMemo(() =>
+    fattureDaEmettere.filter(f => f.stato === 'Da Emettere').reduce((s, f) => {
+      const imp = (f.fatture_da_emettere_righe || []).reduce((ss: number, r: any) => ss + (r.importo || 0), 0)
+      return s + imp
+    }, 0)
+  , [fattureDaEmettere])
+  const scostamentoSalFatturato = totaleSal - totaleFatturatoEmesso
+  const margineSal = totaleSal - totaleTutti
+  const margineSalPerc = totaleSal > 0 ? Math.round(margineSal / totaleSal * 100) : 0
 
   // ── CONTABILITÀ INTERNA ──
   const datiInterna = useMemo(() => {
@@ -343,10 +526,10 @@ export default function CostiCantiere() {
                 <button className="btn" onClick={apriEsterna}>📋 Contabilità Cliente</button>
               </>
             )}
-            {tab === 'costi'
-              ? <button className="btn btn-primary" onClick={() => { const oggi = new Date().toISOString().split('T')[0]; setDataBase(oggi); setRighe([nuovaRiga(oggi)]); setModalCosto(true) }}>+ Inserisci costi</button>
-              : <button className="btn btn-primary" onClick={() => setModalDdt(true)}>+ Inserisci DDT</button>
-            }
+            {tab === 'costi' && <button className="btn btn-primary" onClick={() => { const oggi = new Date().toISOString().split('T')[0]; setDataBase(oggi); setRighe([nuovaRiga(oggi)]); setModalCosto(true) }}>+ Inserisci costi</button>}
+            {tab === 'ddt' && <button className="btn btn-primary" onClick={() => setModalDdt(true)}>+ Inserisci DDT</button>}
+            {tab === 'sal' && <button className="btn btn-primary" onClick={apriModalSal}>+ Inserisci SAL</button>}
+            {tab === 'fatture' && <button className="btn btn-primary" onClick={apriModalFde}>+ Richiedi fattura</button>}
           </div>
         </div>
 
@@ -374,33 +557,59 @@ export default function CostiCantiere() {
 
         {progetto && (
           <>
-            <div className="grid grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-4 gap-3 mb-3">
+              <div className="bg-teal-50 rounded-xl p-4 border border-teal-100">
+                <p className="text-xs text-teal-600 mb-1">Ricavi (SAL maturati)</p>
+                <p className="text-xl font-semibold text-teal-800">{euro(totaleSal)}</p>
+                <p className="text-xs text-teal-500 mt-1">{salList.length} SAL inseriti</p>
+              </div>
               <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
                 <p className="text-xs text-blue-600 mb-1">Totale costi inseriti</p>
                 <p className="text-xl font-semibold text-blue-800">{euro(totaleTutti)}</p>
                 {filtroMese && tab === 'costi' && <p className="text-xs text-blue-500 mt-1">Mese: {euro(totale)}</p>}
               </div>
-              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                <p className="text-xs text-gray-500 mb-1">Budget costi</p>
-                <p className="text-xl font-semibold text-gray-800">{euro(progetto.budget_costi)}</p>
+              <div className={`rounded-xl p-4 border ${margineSal >= 0 ? 'bg-purple-50 border-purple-100' : 'bg-red-50 border-red-200'}`}>
+                <p className={`text-xs mb-1 ${margineSal >= 0 ? 'text-purple-600' : 'text-red-600'}`}>Margine (su SAL)</p>
+                <p className={`text-xl font-semibold ${margineSal >= 0 ? 'text-purple-800' : 'text-red-700'}`}>{euro(margineSal)} {totaleSal > 0 && <span className="text-sm font-normal">({margineSalPerc}%)</span>}</p>
               </div>
               <div className={`rounded-xl p-4 border ${budgetPerc >= 100 ? 'bg-red-50 border-red-200' : budgetPerc >= 80 ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'}`}>
                 <p className={`text-xs mb-1 ${budgetPerc >= 100 ? 'text-red-600' : budgetPerc >= 80 ? 'text-amber-600' : 'text-green-600'}`}>Budget utilizzato</p>
                 <p className={`text-xl font-semibold ${budgetPerc >= 100 ? 'text-red-700' : budgetPerc >= 80 ? 'text-amber-700' : 'text-green-700'}`}>{budgetPerc}%</p>
               </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 mb-4">
               <div className="bg-purple-50 rounded-xl p-4 border border-purple-100">
                 <p className="text-xs text-purple-600 mb-1">Totale DDT cantiere</p>
                 <p className="text-xl font-semibold text-purple-800">{euro(totaleDdt)}</p>
                 <p className="text-xs text-purple-500 mt-1">{ddts.length} DDT inseriti</p>
               </div>
+              <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
+                <p className="text-xs text-emerald-600 mb-1">Fatturato (emesso)</p>
+                <p className="text-xl font-semibold text-emerald-800">{euro(totaleFatturatoEmesso)}</p>
+                {totaleFattureDaEmettere > 0 && <p className="text-xs text-emerald-500 mt-1">Da emettere: {euro(totaleFattureDaEmettere)}</p>}
+              </div>
+              <div className={`rounded-xl p-4 border ${Math.abs(scostamentoSalFatturato) < 0.02 ? 'bg-green-50 border-green-200' : scostamentoSalFatturato > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+                <p className={`text-xs mb-1 ${scostamentoSalFatturato > 0 ? 'text-amber-600' : 'text-gray-600'}`}>SAL vs Fatturato</p>
+                <p className={`text-xl font-semibold ${scostamentoSalFatturato > 0 ? 'text-amber-700' : 'text-gray-700'}`}>
+                  {scostamentoSalFatturato > 0 ? `${euro(scostamentoSalFatturato)} da fatturare` : Math.abs(scostamentoSalFatturato) < 0.02 ? 'In pari' : `${euro(Math.abs(scostamentoSalFatturato))} oltre SAL`}
+                </p>
+                {scostamentoSalFatturato > 0 && <p className="text-xs text-amber-500 mt-1">🟡 Sei a rilento con la fatturazione</p>}
+              </div>
             </div>
 
-            <div className="flex gap-1 mb-4 border-b border-gray-200">
+            <div className="flex gap-1 mb-4 border-b border-gray-200 flex-wrap">
               <button onClick={() => setTab('costi')} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'costi' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                 💰 Costi giornalieri ({costi.length})
               </button>
               <button onClick={() => setTab('ddt')} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'ddt' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                 📋 DDT / Bolle ({ddts.length})
+              </button>
+              <button onClick={() => setTab('sal')} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'sal' ? 'border-teal-600 text-teal-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                📈 SAL ({salList.length})
+              </button>
+              <button onClick={() => setTab('fatture')} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'fatture' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+                🧾 Fatture da Emettere ({fattureDaEmettere.length})
               </button>
             </div>
 
@@ -481,6 +690,115 @@ export default function CostiCantiere() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {tab === 'sal' && (
+              <div className="card overflow-x-auto">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-gray-600">SAL inseriti per questo cantiere ({salList.length})</h3>
+                  <span className="text-sm font-semibold text-teal-700">Totale: {euro(totaleSal)}</span>
+                </div>
+                <table className="table-base">
+                  <thead><tr><th>Data</th><th>N° SAL</th><th>Descrizione</th><th>Importo lavori</th><th>Note</th><th></th></tr></thead>
+                  <tbody>
+                    {salList.length === 0 ? (
+                      <tr><td colSpan={6} className="text-center text-gray-400 py-8">Nessun SAL inserito per questo cantiere.</td></tr>
+                    ) : salList.map(s => (
+                      <tr key={s.id}>
+                        <td className="text-xs">{s.data ? new Date(s.data).toLocaleDateString('it-IT') : '—'}</td>
+                        <td className="font-medium text-sm">{s.numero_sal || '—'}</td>
+                        <td className="text-sm text-gray-600">{s.descrizione || '—'}</td>
+                        <td className="font-semibold text-sm text-teal-800">{euro(s.importo_lavori)}</td>
+                        <td className="text-xs text-gray-400">{s.note || '—'}</td>
+                        <td>
+                          <div className="flex gap-1">
+                            <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50"
+                              onClick={() => setModalModificaSal({ ...s, importo_lavori: String(s.importo_lavori) })}>✏️</button>
+                            <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaSal(s.id)}>✕</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {tab === 'fatture' && (
+              <div className="card overflow-x-auto">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-gray-600">Fatture da emettere per questo cantiere ({fattureDaEmettere.length})</h3>
+                  <div className="flex gap-3 text-sm">
+                    <span className="text-amber-700 font-medium">Da emettere: {euro(totaleFattureDaEmettere)}</span>
+                    <span className="text-emerald-700 font-medium">Emesso: {euro(totaleFatturatoEmesso)}</span>
+                  </div>
+                </div>
+                {fattureDaEmettere.length === 0 ? (
+                  <div className="text-center text-gray-400 py-8">Nessuna richiesta di fattura per questo cantiere.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {fattureDaEmettere.map(f => {
+                      const imponibile = (f.fatture_da_emettere_righe || []).reduce((s: number, r: any) => s + (r.importo || 0), 0)
+                      const iva = imponibile * (f.aliquota_iva || 22) / 100
+                      return (
+                        <div key={f.id} className="border border-gray-200 rounded-lg overflow-hidden">
+                          <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
+                            onClick={() => setEspansaFde(espansaFde === f.id ? null : f.id)}>
+                            <div className="flex-1">
+                              <span className="font-medium text-sm">{f.cliente_nome}</span>
+                              {f.stato === 'Emessa' && <span className="text-gray-400 text-xs ml-2">{f.numero_fattura_emessa}</span>}
+                            </div>
+                            <span className="text-sm font-semibold">{euro(imponibile)}</span>
+                            <span className="text-xs text-gray-400">+IVA {f.aliquota_iva}%: {euro(iva)}</span>
+                            {f.stato === 'Emessa'
+                              ? <span className="badge badge-green">Emessa</span>
+                              : <span className="badge badge-amber">Da Emettere</span>}
+                            <span className="text-gray-400 text-sm">{espansaFde === f.id ? '▲' : '▼'}</span>
+                          </div>
+                          {espansaFde === f.id && (
+                            <div className="border-t border-gray-100 bg-gray-50 p-4">
+                              <table className="table-base mb-3">
+                                <thead><tr><th>Descrizione</th><th>Importo</th></tr></thead>
+                                <tbody>
+                                  {(f.fatture_da_emettere_righe || []).map((r: any) => (
+                                    <tr key={r.id}>
+                                      <td className="text-sm">{r.descrizione}</td>
+                                      <td className="font-medium text-sm">{euro(r.importo)}</td>
+                                    </tr>
+                                  ))}
+                                  <tr className="bg-gray-100">
+                                    <td className="text-xs font-medium text-right text-gray-600">Imponibile</td>
+                                    <td className="font-bold text-sm">{euro(imponibile)}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                              <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
+                                <span>Scadenza prevista: {f.scadenza_prevista ? new Date(f.scadenza_prevista).toLocaleDateString('it-IT') : '—'}</span>
+                                {f.note && <span>Note: {f.note}</span>}
+                              </div>
+                              {f.stato === 'Emessa' ? (
+                                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center justify-between">
+                                  <div className="text-sm text-emerald-800">
+                                    <strong>Fattura {f.numero_fattura_emessa}</strong> · {euro(f.importo_emesso)} · Scadenza: {f.scadenza_emessa ? new Date(f.scadenza_emessa).toLocaleDateString('it-IT') : '—'}
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button className="btn btn-sm" onClick={() => riapriFde(f.id)}>↺ Riapri</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex justify-end gap-2">
+                                  <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaFde(f.id)}>✕ Elimina</button>
+                                  <button className="btn btn-success btn-sm" onClick={() => apriModalEmissione(f)}>✓ Segna come emessa</button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -576,6 +894,148 @@ export default function CostiCantiere() {
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalDdt(false)}>Annulla</button>
               <button className="btn btn-primary" onClick={salvaDdt} disabled={loadingDdt}>{loadingDdt ? 'Salvataggio...' : 'Salva DDT'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL INSERISCI SAL ── */}
+      {modalSal && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-base font-semibold">Inserisci SAL</h2>
+                <p className="text-xs text-gray-500 mt-0.5">{progetto?.codice} — {progetto?.nome}</p>
+              </div>
+              <button onClick={() => setModalSal(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="label">Data</label><input className="input" type="date" value={formSal.data} onChange={e => setFormSal({...formSal, data: e.target.value})} /></div>
+              <div><label className="label">N° SAL</label><input className="input" placeholder="es. SAL 3" value={formSal.numero_sal} onChange={e => setFormSal({...formSal, numero_sal: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Importo lavori eseguiti (€) *</label>
+                <input className="input font-semibold text-teal-800" type="number" step="0.01" placeholder="0.00" value={formSal.importo_lavori} onChange={e => setFormSal({...formSal, importo_lavori: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Descrizione</label><input className="input" placeholder="Lavorazioni svolte..." value={formSal.descrizione} onChange={e => setFormSal({...formSal, descrizione: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Note</label><input className="input" value={formSal.note} onChange={e => setFormSal({...formSal, note: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalSal(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaSal} disabled={loadingSal}>{loadingSal ? 'Salvataggio...' : 'Salva SAL'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL MODIFICA SAL ── */}
+      {modalModificaSal && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">Modifica SAL</h2>
+              <button onClick={() => setModalModificaSal(null)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="label">Data</label><input className="input" type="date" value={modalModificaSal.data || ''}
+                onChange={e => setModalModificaSal({...modalModificaSal, data: e.target.value})} /></div>
+              <div><label className="label">N° SAL</label><input className="input" value={modalModificaSal.numero_sal || ''}
+                onChange={e => setModalModificaSal({...modalModificaSal, numero_sal: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Importo lavori (€) *</label>
+                <input className="input font-semibold text-teal-800" type="number" step="0.01" value={modalModificaSal.importo_lavori || ''}
+                  onChange={e => setModalModificaSal({...modalModificaSal, importo_lavori: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Descrizione</label><input className="input" value={modalModificaSal.descrizione || ''}
+                onChange={e => setModalModificaSal({...modalModificaSal, descrizione: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Note</label><input className="input" value={modalModificaSal.note || ''}
+                onChange={e => setModalModificaSal({...modalModificaSal, note: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalModificaSal(null)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaModificaSal}>Salva modifiche</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL RICHIEDI FATTURA (Fatture da Emettere) ── */}
+      {modalFde && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-base font-semibold">Richiedi emissione fattura</h2>
+                <p className="text-xs text-gray-500 mt-0.5">{progetto?.codice} — {progetto?.nome}</p>
+              </div>
+              <button onClick={() => setModalFde(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="col-span-2"><label className="label">Cliente *</label>
+                <select className="input" value={formFde.cliente_id} onChange={e => setFormFde({...formFde, cliente_id: e.target.value})}>
+                  <option value="">-- seleziona --</option>
+                  {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
+                </select>
+              </div>
+              <div><label className="label">Aliquota IVA (%)</label>
+                <input className="input" type="number" step="0.01" value={formFde.aliquota_iva} onChange={e => setFormFde({...formFde, aliquota_iva: e.target.value})} /></div>
+              <div><label className="label">Scadenza prevista</label>
+                <input className="input" type="date" value={formFde.scadenza_prevista} onChange={e => setFormFde({...formFde, scadenza_prevista: e.target.value})} /></div>
+              <div className="col-span-2"><label className="label">Note</label>
+                <input className="input" placeholder="Note opzionali" value={formFde.note} onChange={e => setFormFde({...formFde, note: e.target.value})} /></div>
+            </div>
+
+            <div className="mb-4">
+              <p className="text-xs font-medium text-gray-600 mb-2">Righe descrizione (si sommano per l'imponibile):</p>
+              <div className="space-y-2">
+                {formFde.righe.map((r, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <input className="input flex-1 text-sm" placeholder="es. Lavori di fondazione" value={r.descrizione}
+                      onChange={e => aggiornaRigaFde(idx, 'descrizione', e.target.value)} />
+                    <input className="input w-32 text-sm text-right" type="number" step="0.01" placeholder="0.00" value={r.importo}
+                      onChange={e => aggiornaRigaFde(idx, 'importo', e.target.value)} />
+                    <button onClick={() => rimuoviRigaFde(idx)} disabled={formFde.righe.length === 1}
+                      className="text-gray-300 hover:text-red-500 text-sm disabled:opacity-30">✕</button>
+                  </div>
+                ))}
+              </div>
+              <button className="btn btn-sm mt-2" onClick={aggiungiRigaFde}>+ Aggiungi riga</button>
+            </div>
+
+            <div className="bg-gray-50 rounded-lg p-3 mb-4 flex items-center justify-between">
+              <span className="text-sm font-medium text-gray-600">Imponibile totale</span>
+              <span className="text-lg font-bold text-gray-800">{euro(totaleImponibileFde)}</span>
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <button className="btn" onClick={() => setModalFde(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaFde} disabled={loadingFde}>{loadingFde ? 'Salvataggio...' : 'Salva richiesta'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL CONFERMA EMISSIONE FATTURA ── */}
+      {modalEmissione && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-base font-semibold">Segna come emessa</h2>
+                <p className="text-xs text-gray-500 mt-0.5">{modalEmissione.cliente_nome}</p>
+              </div>
+              <button onClick={() => setModalEmissione(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+            </div>
+            <div className="space-y-3">
+              <div><label className="label">N° Fattura emessa *</label>
+                <input className="input" placeholder="es. FE/2026/012" value={formEmissione.numero_fattura_emessa}
+                  onChange={e => setFormEmissione({...formEmissione, numero_fattura_emessa: e.target.value})} /></div>
+              <div><label className="label">Importo imponibile (€) *</label>
+                <input className="input" type="number" step="0.01" value={formEmissione.importo_emesso}
+                  onChange={e => setFormEmissione({...formEmissione, importo_emesso: e.target.value})} /></div>
+              <div><label className="label">Scadenza pagamento</label>
+                <input className="input" type="date" value={formEmissione.scadenza_emessa}
+                  onChange={e => setFormEmissione({...formEmissione, scadenza_emessa: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalEmissione(null)}>Annulla</button>
+              <button className="btn btn-success" onClick={confermaEmissione}>Confirma emissione</button>
             </div>
           </div>
         </div>
