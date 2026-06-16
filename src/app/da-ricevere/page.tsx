@@ -24,11 +24,18 @@ function generaAutorizzazionePDF(opts: {
   const corrispondente = Math.abs(scostamento) < 0.02
 
   const doc = new jsPDF()
+  const PAGE_H = 297
+  const MARGIN_BOTTOM = 60 // spazio riservato alle firme
   let y = 20
 
-  try {
-    doc.addImage('/logo.png', 'PNG', 14, 10, 18, 18)
-  } catch (e) {}
+  const checkPage = (needed: number) => {
+    if (y + needed > PAGE_H - MARGIN_BOTTOM) {
+      doc.addPage()
+      y = 20
+    }
+  }
+
+  try { doc.addImage('/logo.png', 'PNG', 14, 10, 18, 18) } catch (e) {}
 
   doc.setFontSize(16)
   doc.setFont('helvetica', 'bold')
@@ -39,30 +46,25 @@ function generaAutorizzazionePDF(opts: {
 
   doc.setFontSize(10)
   doc.setFont('helvetica', 'normal')
-  doc.text(`Data: ${new Date().toLocaleDateString('it-IT')}`, 14, y)
-  y += 7
-  doc.text(`Fornitore: ${fornitore}`, 14, y)
-  y += 7
-  doc.text(`Fattura n°: ${numeroFattura}`, 14, y)
-  y += 10
+  doc.text(`Data: ${new Date().toLocaleDateString('it-IT')}`, 14, y); y += 7
+  doc.text(`Fornitore: ${fornitore}`, 14, y); y += 7
+  doc.text(`Fattura n°: ${numeroFattura}`, 14, y); y += 10
 
-  // Tabella DDT
+  // ── Tabella DDT ──
+  checkPage(20)
   doc.setFont('helvetica', 'bold')
-  doc.text('DDT abbinati', 14, y)
-  y += 6
+  doc.setFontSize(10)
+  doc.text('DDT abbinati', 14, y); y += 6
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(9)
-
   doc.text('Data', 14, y)
   doc.text('N° DDT', 45, y)
   doc.text('Cantiere', 85, y)
-  doc.text('Importo', 180, y, { align: 'right' })
-  y += 2
-  doc.line(14, y, 196, y)
-  y += 5
+  doc.text('Importo', 196, y, { align: 'right' })
+  y += 2; doc.line(14, y, 196, y); y += 5
 
   ddtList.forEach(d => {
-    if (y > 260) { doc.addPage(); y = 20 }
+    checkPage(8)
     doc.text(d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—', 14, y)
     doc.text(String(d.numero || ''), 45, y)
     doc.text((d.progetto_nome || '—').substring(0, 40), 85, y)
@@ -70,96 +72,90 @@ function generaAutorizzazionePDF(opts: {
     y += 6
   })
 
-  y += 2
-  doc.line(14, y, 196, y)
-  y += 6
-
+  checkPage(14)
+  y += 2; doc.line(14, y, 196, y); y += 6
   doc.setFont('helvetica', 'bold')
   doc.text('Totale DDT:', 140, y)
   doc.text(euro(totDdt), 196, y, { align: 'right' })
   y += 8
 
-  // Costi extra
+  // ── Costi extra ──
   if (costiExtra.length > 0) {
-    doc.setFont('helvetica', 'bold')
+    checkPage(20)
     doc.setFontSize(10)
-    doc.text('Costi extra', 14, y)
-    y += 6
+    doc.text('Costi extra', 14, y); y += 6
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(9)
-
     doc.text('Descrizione', 14, y)
-    doc.text('Importo', 180, y, { align: 'right' })
-    y += 2
-    doc.line(14, y, 196, y)
-    y += 5
+    doc.text('Importo', 196, y, { align: 'right' })
+    y += 2; doc.line(14, y, 196, y); y += 5
 
     costiExtra.forEach(c => {
-      if (y > 260) { doc.addPage(); y = 20 }
+      checkPage(8)
       doc.text(c.descrizione, 14, y)
       doc.text(euro(c.importo), 196, y, { align: 'right' })
       y += 6
     })
 
-    y += 2
-    doc.line(14, y, 196, y)
-    y += 6
-
+    checkPage(14)
+    y += 2; doc.line(14, y, 196, y); y += 6
     doc.setFont('helvetica', 'bold')
     doc.text('Totale costi extra:', 140, y)
     doc.text(euro(totExtra), 196, y, { align: 'right' })
     y += 8
   }
 
-  // Totale complessivo
+  // ── Totali e stato ──
+  checkPage(40)
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
   doc.text('Totale DDT + extra:', 140, y)
-  doc.text(euro(totale), 196, y, { align: 'right' })
-  y += 7
+  doc.text(euro(totale), 196, y, { align: 'right' }); y += 7
   doc.text('Imponibile fattura:', 140, y)
-  doc.text(euro(impFattura), 196, y, { align: 'right' })
-  y += 10
+  doc.text(euro(impFattura), 196, y, { align: 'right' }); y += 10
 
-  // Stato
   if (corrispondente) {
-    doc.setFillColor(220, 252, 231)
-    doc.setTextColor(22, 101, 52)
+    doc.setFillColor(220, 252, 231); doc.setTextColor(22, 101, 52)
     doc.rect(14, y - 5, 182, 10, 'F')
     doc.text('✅ IMPORTI CORRISPONDENTI', 105, y + 1, { align: 'center' })
   } else {
-    doc.setFillColor(254, 226, 226)
-    doc.setTextColor(153, 27, 27)
+    doc.setFillColor(254, 226, 226); doc.setTextColor(153, 27, 27)
     doc.rect(14, y - 5, 182, 10, 'F')
     doc.text(`⚠️ SCOSTAMENTO: ${euro(scostamento)}`, 105, y + 1, { align: 'center' })
   }
-  doc.setTextColor(0, 0, 0)
-  y += 16
+  doc.setTextColor(0, 0, 0); y += 16
 
-  // Note
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(10)
-  doc.text('Note:', 14, y)
-  y += 6
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(9)
+  // ── Note ──
+  checkPage(30)
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10)
+  doc.text('Note:', 14, y); y += 6
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9)
   if (note) {
     const lines = doc.splitTextToSize(note, 182)
+    checkPage(lines.length * 5 + 10)
     doc.text(lines, 14, y)
     y += lines.length * 5 + 4
   } else {
+    checkPage(28)
     doc.rect(14, y, 182, 18)
     y += 24
   }
 
-  y = Math.max(y, 230)
+  // ── Firme — sempre su spazio libero, mai oltre 265 ──
+  // Se c'è poco spazio in fondo alla pagina corrente, va a pagina nuova
+  if (y > PAGE_H - MARGIN_BOTTOM) {
+    doc.addPage()
+    y = 20
+  }
+  // Lascia almeno 20mm di respiro sopra le firme
+  y += 12
 
-  doc.setFont('helvetica', 'bold')
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10)
   doc.text('Firma Tecnico', 45, y, { align: 'center' })
-  doc.text('Firma Titolare', 150, y, { align: 'center' })
-  y += 2
-  doc.line(20, y, 90, y)
-  doc.line(120, y, 190, y)
+  doc.text('Firma Titolare', 155, y, { align: 'center' })
+  y += 4
+  doc.line(14, y, 88, y)
+  doc.line(118, y, 192, y)
 
   doc.save(`Autorizzazione_${numeroFattura.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`)
 }
@@ -180,10 +176,7 @@ export default function DaRiceverePage() {
   const [selezionati, setSelezionati] = useState<Set<string>>(new Set())
   const [filtroCantiere, setFiltroCantiere] = useState('')
   const [loading, setLoading] = useState(false)
-
-  // Costi extra nel modal
   const [costiExtra, setCostiExtra] = useState<CostoExtra[]>([])
-
   const [cercaFornitoreAperte, setCercaFornitoreAperte] = useState('')
   const [cercaFornitoreStorico, setCercaFornitoreStorico] = useState('')
   const [filtroStatoStorico, setFiltroStatoStorico] = useState('tutti')
@@ -232,27 +225,16 @@ export default function DaRiceverePage() {
   }
 
   function toggleSel(id: string) {
-    setSelezionati(prev => {
-      const n = new Set(prev)
-      if (n.has(id)) n.delete(id); else n.add(id)
-      return n
-    })
+    setSelezionati(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
   }
 
-  function aggiungiCostoExtra() {
-    setCostiExtra(prev => [...prev, { descrizione: '', importo: 0 }])
-  }
+  function aggiungiCostoExtra() { setCostiExtra(prev => [...prev, { descrizione: '', importo: 0 }]) }
 
   function aggiornaCostoExtra(idx: number, field: keyof CostoExtra, value: string) {
-    setCostiExtra(prev => prev.map((c, i) => i === idx ? {
-      ...c,
-      [field]: field === 'importo' ? parseFloat(value) || 0 : value
-    } : c))
+    setCostiExtra(prev => prev.map((c, i) => i === idx ? { ...c, [field]: field === 'importo' ? parseFloat(value) || 0 : value } : c))
   }
 
-  function rimuoviCostoExtra(idx: number) {
-    setCostiExtra(prev => prev.filter((_, i) => i !== idx))
-  }
+  function rimuoviCostoExtra(idx: number) { setCostiExtra(prev => prev.filter((_, i) => i !== idx)) }
 
   const cantieriFornitore = [...new Set(ddtFornitore.map(d => d.progetto_nome || '—'))].sort()
   const ddtFiltrati = filtroCantiere ? ddtFornitore.filter(d => (d.progetto_nome || '—') === filtroCantiere) : ddtFornitore
@@ -298,11 +280,9 @@ export default function DaRiceverePage() {
     if (selezionati.size === 0 && costiExtra.length === 0) { alert('Seleziona almeno un DDT o aggiungi un costo extra'); return }
     setLoading(true)
     const ddtSelezionati = ddtFornitore.filter(d => selezionati.has(d.id))
-
     if (selezionati.size > 0) {
       await supabase.from('ddt').update({ stato: 'Fatturato', fattura_abbinata: nFattura }).in('id', Array.from(selezionati))
     }
-
     const { data: inserted } = await supabase.from('fatture_fornitori').insert({
       data: new Date().toISOString().split('T')[0],
       numero: nFattura,
@@ -324,29 +304,19 @@ export default function DaRiceverePage() {
         )
       }
     }
-
     await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `Abbinamento ${selezionati.size} DDT + ${costiExtra.length} extra → Fattura ${nFattura} · ${fornSel} · € ${impFattura}`)
-
     generaAutorizzazionePDF({
-      fornitore: fornSel,
-      numeroFattura: nFattura,
-      impFattura: parseFloat(impFattura),
-      ddtList: ddtSelezionati,
-      note: noteAbbinamento,
+      fornitore: fornSel, numeroFattura: nFattura, impFattura: parseFloat(impFattura),
+      ddtList: ddtSelezionati, note: noteAbbinamento,
       costiExtra: costiExtra.filter(c => c.descrizione && c.importo > 0),
     })
-
-    setModal(false); load()
-    setLoading(false)
+    setModal(false); load(); setLoading(false)
   }
 
   function generaPdfStorico(f: any) {
     generaAutorizzazionePDF({
-      fornitore: f.fornitore_nome,
-      numeroFattura: f.numero,
-      impFattura: f.imponibile,
-      ddtList: f.ddt_abbinati,
-      note: noteStorico[f.id] ?? (f.note || ''),
+      fornitore: f.fornitore_nome, numeroFattura: f.numero, impFattura: f.imponibile,
+      ddtList: f.ddt_abbinati, note: noteStorico[f.id] ?? (f.note || ''),
       costiExtra: f.costi_extra || [],
     })
   }
@@ -377,7 +347,6 @@ export default function DaRiceverePage() {
           </button>
         </div>
 
-        {/* ── TAB APERTE ── */}
         {tab === 'aperte' && (
           <>
             <div className="card mb-4">
@@ -387,9 +356,7 @@ export default function DaRiceverePage() {
                   <input className="input" placeholder="Nome fornitore..." value={cercaFornitoreAperte}
                     onChange={e => setCercaFornitoreAperte(e.target.value)} />
                 </div>
-                {cercaFornitoreAperte && (
-                  <button className="btn btn-sm" onClick={() => setCercaFornitoreAperte('')}>× Reset</button>
-                )}
+                {cercaFornitoreAperte && <button className="btn btn-sm" onClick={() => setCercaFornitoreAperte('')}>× Reset</button>}
               </div>
               {cercaFornitoreAperte && (
                 <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
@@ -447,7 +414,6 @@ export default function DaRiceverePage() {
           </>
         )}
 
-        {/* ── TAB STORICO ── */}
         {tab === 'fatturate' && (
           <>
             <div className="card mb-4">
@@ -497,97 +463,94 @@ export default function DaRiceverePage() {
                   const scostF = f.imponibile - totaleF
                   const corrispF = Math.abs(scostF) < 0.02
                   return (
-                  <div key={f.id} className="card p-0 overflow-hidden">
-                    <div className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-gray-50"
-                      onClick={() => setEspansoFatt(espansoFatt === f.id ? null : f.id)}>
-                      <div className="flex-1">
-                        <span className="font-medium text-sm">{f.fornitore_nome}</span>
-                        <span className="text-gray-400 text-xs ml-2">{f.numero}</span>
-                      </div>
-                      <span className="text-xs text-gray-500">{f.data ? new Date(f.data).toLocaleDateString('it-IT') : '—'}</span>
-                      <span className="font-semibold text-sm">{euro(f.imponibile)}</span>
-                      <span className="text-xs text-gray-400">(+IVA: {euro(f.totale)})</span>
-                      {statoRataBadge(f)}
-                      <span className="text-gray-400 text-sm ml-2">{espansoFatt === f.id ? '▲' : '▼'}</span>
-                    </div>
-                    {espansoFatt === f.id && (
-                      <div className="border-t border-gray-100 bg-blue-50">
-                        <div className="px-4 py-2 text-xs font-medium text-blue-700">DDT abbinati ({f.ddt_abbinati.length})</div>
-                        <table className="table-base">
-                          <thead><tr><th>Data</th><th>N° DDT</th><th>Cantiere</th><th>Descrizione</th><th>Importo</th></tr></thead>
-                          <tbody>
-                            {f.ddt_abbinati.map((d: any) => (
-                              <tr key={d.id}>
-                                <td className="text-xs">{new Date(d.data).toLocaleDateString('it-IT')}</td>
-                                <td className="font-medium text-xs">{d.numero}</td>
-                                <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
-                                <td className="text-xs text-gray-500">{d.descrizione || '—'}</td>
-                                <td className="font-medium text-sm">{euro(d.importo)}</td>
-                              </tr>
-                            ))}
-                            <tr className="bg-blue-100">
-                              <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Totale DDT</td>
-                              <td className="font-bold text-sm text-blue-700">{euro(totDdtF)}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-
-                        {/* Costi extra storico */}
-                        {(f.costi_extra || []).length > 0 && (
-                          <>
-                            <div className="px-4 py-2 text-xs font-medium text-orange-700 bg-orange-50 border-t border-orange-100">
-                              Costi extra ({f.costi_extra.length})
-                            </div>
-                            <table className="table-base">
-                              <thead><tr><th>Descrizione</th><th>Importo</th></tr></thead>
-                              <tbody>
-                                {f.costi_extra.map((c: any) => (
-                                  <tr key={c.id}>
-                                    <td className="text-xs text-gray-700">{c.descrizione}</td>
-                                    <td className="font-medium text-sm text-orange-700">{euro(c.importo)}</td>
-                                  </tr>
-                                ))}
-                                <tr className="bg-orange-50">
-                                  <td className="text-xs font-medium text-right text-orange-700">Totale extra</td>
-                                  <td className="font-bold text-sm text-orange-700">{euro(totExtraF)}</td>
-                                </tr>
-                              </tbody>
-                            </table>
-                          </>
-                        )}
-
-                        <table className="table-base">
-                          <tbody>
-                            <tr className="bg-blue-100">
-                              <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Totale DDT + extra</td>
-                              <td className="font-bold text-sm text-blue-700">{euro(totaleF)}</td>
-                            </tr>
-                            <tr className="bg-blue-100">
-                              <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Imponibile fattura</td>
-                              <td className="font-bold text-sm text-blue-700">{euro(f.imponibile)}</td>
-                            </tr>
-                            <tr className={corrispF ? 'bg-green-50' : 'bg-red-50'}>
-                              <td colSpan={4} className="text-xs font-medium text-right">Scostamento</td>
-                              <td className={`font-bold text-sm ${corrispF ? 'text-green-700' : 'text-red-700'}`}>
-                                {euro(scostF)}
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                        <div className="px-4 py-3 flex items-end gap-3">
-                          <div className="flex-1">
-                            <label className="label">Note per autorizzazione</label>
-                            <input className="input" placeholder="Note (opzionale)"
-                              value={noteStorico[f.id] ?? (f.note || '')}
-                              onChange={e => setNoteStorico(prev => ({ ...prev, [f.id]: e.target.value }))} />
-                          </div>
-                          <button className="btn btn-primary text-sm" onClick={() => generaPdfStorico(f)}>
-                            🖨️ Genera autorizzazione PDF
-                          </button>
+                    <div key={f.id} className="card p-0 overflow-hidden">
+                      <div className="flex items-center gap-4 px-4 py-3 cursor-pointer hover:bg-gray-50"
+                        onClick={() => setEspansoFatt(espansoFatt === f.id ? null : f.id)}>
+                        <div className="flex-1">
+                          <span className="font-medium text-sm">{f.fornitore_nome}</span>
+                          <span className="text-gray-400 text-xs ml-2">{f.numero}</span>
                         </div>
+                        <span className="text-xs text-gray-500">{f.data ? new Date(f.data).toLocaleDateString('it-IT') : '—'}</span>
+                        <span className="font-semibold text-sm">{euro(f.imponibile)}</span>
+                        <span className="text-xs text-gray-400">(+IVA: {euro(f.totale)})</span>
+                        {statoRataBadge(f)}
+                        <span className="text-gray-400 text-sm ml-2">{espansoFatt === f.id ? '▲' : '▼'}</span>
                       </div>
-                    )}
-                  </div>
+                      {espansoFatt === f.id && (
+                        <div className="border-t border-gray-100 bg-blue-50">
+                          <div className="px-4 py-2 text-xs font-medium text-blue-700">DDT abbinati ({f.ddt_abbinati.length})</div>
+                          <table className="table-base">
+                            <thead><tr><th>Data</th><th>N° DDT</th><th>Cantiere</th><th>Descrizione</th><th>Importo</th></tr></thead>
+                            <tbody>
+                              {f.ddt_abbinati.map((d: any) => (
+                                <tr key={d.id}>
+                                  <td className="text-xs">{new Date(d.data).toLocaleDateString('it-IT')}</td>
+                                  <td className="font-medium text-xs">{d.numero}</td>
+                                  <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
+                                  <td className="text-xs text-gray-500">{d.descrizione || '—'}</td>
+                                  <td className="font-medium text-sm">{euro(d.importo)}</td>
+                                </tr>
+                              ))}
+                              <tr className="bg-blue-100">
+                                <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Totale DDT</td>
+                                <td className="font-bold text-sm text-blue-700">{euro(totDdtF)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+
+                          {(f.costi_extra || []).length > 0 && (
+                            <>
+                              <div className="px-4 py-2 text-xs font-medium text-orange-700 bg-orange-50 border-t border-orange-100">
+                                Costi extra ({f.costi_extra.length})
+                              </div>
+                              <table className="table-base">
+                                <thead><tr><th>Descrizione</th><th>Importo</th></tr></thead>
+                                <tbody>
+                                  {f.costi_extra.map((c: any) => (
+                                    <tr key={c.id}>
+                                      <td className="text-xs text-gray-700">{c.descrizione}</td>
+                                      <td className="font-medium text-sm text-orange-700">{euro(c.importo)}</td>
+                                    </tr>
+                                  ))}
+                                  <tr className="bg-orange-50">
+                                    <td className="text-xs font-medium text-right text-orange-700">Totale extra</td>
+                                    <td className="font-bold text-sm text-orange-700">{euro(totExtraF)}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </>
+                          )}
+
+                          <table className="table-base">
+                            <tbody>
+                              <tr className="bg-blue-100">
+                                <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Totale DDT + extra</td>
+                                <td className="font-bold text-sm text-blue-700">{euro(totaleF)}</td>
+                              </tr>
+                              <tr className="bg-blue-100">
+                                <td colSpan={4} className="text-xs font-medium text-right text-blue-700">Imponibile fattura</td>
+                                <td className="font-bold text-sm text-blue-700">{euro(f.imponibile)}</td>
+                              </tr>
+                              <tr className={corrispF ? 'bg-green-50' : 'bg-red-50'}>
+                                <td colSpan={4} className="text-xs font-medium text-right">Scostamento</td>
+                                <td className={`font-bold text-sm ${corrispF ? 'text-green-700' : 'text-red-700'}`}>{euro(scostF)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <div className="px-4 py-3 flex items-end gap-3">
+                            <div className="flex-1">
+                              <label className="label">Note per autorizzazione</label>
+                              <input className="input" placeholder="Note (opzionale)"
+                                value={noteStorico[f.id] ?? (f.note || '')}
+                                onChange={e => setNoteStorico(prev => ({ ...prev, [f.id]: e.target.value }))} />
+                            </div>
+                            <button className="btn btn-primary text-sm" onClick={() => generaPdfStorico(f)}>
+                              🖨️ Genera autorizzazione PDF
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )
                 })}
               </div>
@@ -596,7 +559,6 @@ export default function DaRiceverePage() {
         )}
       </main>
 
-      {/* Modal abbinamento */}
       {modal && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -629,7 +591,6 @@ export default function DaRiceverePage() {
                 <input className="input" placeholder="Note opzionali" value={noteAbbinamento} onChange={e => setNoteAbbinamento(e.target.value)} /></div>
             </div>
 
-            {/* Selezione DDT */}
             <div className="mb-4 space-y-3">
               <p className="text-xs font-medium text-gray-600">Spunta i DDT coperti da questa fattura:</p>
               {Object.entries(ddtPerCantiere).map(([cantiere, ddt]) => (
@@ -671,7 +632,6 @@ export default function DaRiceverePage() {
               ))}
             </div>
 
-            {/* ── Costi extra ── */}
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-medium text-gray-600">Costi extra (spese non in bolla)</p>
@@ -688,23 +648,12 @@ export default function DaRiceverePage() {
                   <div className="divide-y divide-gray-100">
                     {costiExtra.map((c, idx) => (
                       <div key={idx} className="flex items-center gap-2 px-3 py-2">
-                        <input
-                          className="input flex-1 text-xs"
-                          placeholder="es. Spese di incasso"
-                          value={c.descrizione}
-                          onChange={e => aggiornaCostoExtra(idx, 'descrizione', e.target.value)}
-                        />
-                        <input
-                          className="input w-28 text-xs text-right"
-                          type="number"
-                          step="0.01"
-                          placeholder="0.00"
-                          value={c.importo || ''}
-                          onChange={e => aggiornaCostoExtra(idx, 'importo', e.target.value)}
-                        />
+                        <input className="input flex-1 text-xs" placeholder="es. Spese di incasso"
+                          value={c.descrizione} onChange={e => aggiornaCostoExtra(idx, 'descrizione', e.target.value)} />
+                        <input className="input w-28 text-xs text-right" type="number" step="0.01" placeholder="0.00"
+                          value={c.importo || ''} onChange={e => aggiornaCostoExtra(idx, 'importo', e.target.value)} />
                         <span className="text-xs text-gray-400">€</span>
-                        <button onClick={() => rimuoviCostoExtra(idx)}
-                          className="text-red-400 hover:text-red-600 text-lg leading-none px-1">×</button>
+                        <button onClick={() => rimuoviCostoExtra(idx)} className="text-red-400 hover:text-red-600 text-lg leading-none px-1">×</button>
                       </div>
                     ))}
                     <div className="flex items-center justify-between px-3 py-2 bg-orange-50">
@@ -716,7 +665,6 @@ export default function DaRiceverePage() {
               )}
             </div>
 
-            {/* Riepilogo scostamento */}
             <div className={`rounded-lg p-3 mb-4 text-sm font-medium ${
               (selezionati.size === 0 && costiExtra.length === 0) ? 'bg-gray-50 text-gray-500' :
               scostOk ? 'bg-green-50 text-green-800 border border-green-200' :
@@ -737,7 +685,7 @@ export default function DaRiceverePage() {
               <div className="flex gap-2">
                 <button className="btn" onClick={() => setModal(false)}>Annulla</button>
                 <button className="btn btn-success" onClick={eseguiAbbinamento} disabled={loading}>
-                  {loading ? 'Elaborazione...' : `Abbina e genera PDF`}
+                  {loading ? 'Elaborazione...' : 'Abbina e genera PDF'}
                 </button>
               </div>
             </div>
