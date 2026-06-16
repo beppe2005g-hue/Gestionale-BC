@@ -26,6 +26,9 @@ const statoBadge = (s: string) => {
   return <span className="badge badge-amber">Da Fatturare</span>
 }
 
+// Quale report stampare
+type PrintMode = 'interna' | 'esterna' | null
+
 export default function CostiCantiere() {
   const [tab, setTab] = useState<'costi' | 'ddt'>('costi')
   const [progetti, setProgetti] = useState<any[]>([])
@@ -57,6 +60,9 @@ export default function CostiCantiere() {
   const [prezziCliente, setPrezziCliente] = useState<Record<string, string>>({})
   const [loadingEsterna, setLoadingEsterna] = useState(false)
   const [noteEsterna, setNoteEsterna] = useState('')
+
+  // Quale report è aperto per la stampa
+  const [printMode, setPrintMode] = useState<PrintMode>(null)
 
   useEffect(() => { loadAll() }, [])
   useEffect(() => { if (progettoSel) { loadCosti(); loadDdt() } }, [progettoSel])
@@ -171,8 +177,7 @@ export default function CostiCantiere() {
     }).eq('id', modalModificaCosto.id)
     if (error) { alert('Errore: ' + error.message); return }
     await logActivity('modifica', 'costi_cantiere', modalModificaCosto.id, `${modalModificaCosto.categoria} · € ${modalModificaCosto.importo}`)
-    setModalModificaCosto(null)
-    loadCosti()
+    setModalModificaCosto(null); loadCosti()
   }
 
   async function eliminaDdt(id: string) {
@@ -222,9 +227,8 @@ export default function CostiCantiere() {
 
   function apriInterna() {
     setMeseInterna(filtroMese || mesiDisponibili[0] || '')
-    setRicaviPerCat({})
-    setRicaviACorpo('')
-    setUsaACorpo(false)
+    setRicaviPerCat({}); setRicaviACorpo(''); setUsaACorpo(false)
+    setPrintMode('interna')
     setModalInterna(true)
   }
 
@@ -236,11 +240,7 @@ export default function CostiCantiere() {
   // ── CONTABILITÀ ESTERNA ──
   async function apriEsterna() {
     const m = filtroMese || mesiDisponibili[0] || ''
-    setMeseEsterna(m)
-    setNoteEsterna('')
-    setLoadingEsterna(true)
-
-    // Carica prezzi salvati per questo cliente
+    setMeseEsterna(m); setNoteEsterna(''); setLoadingEsterna(true)
     const clienteId = progetto?.cliente_id
     let prezziSalvati: Record<string, string> = {}
     if (clienteId) {
@@ -248,23 +248,16 @@ export default function CostiCantiere() {
       if (pv) pv.forEach((r: any) => { prezziSalvati[r.categoria] = String(r.prezzo_vendita) })
     }
     setPrezziCliente(prezziSalvati)
-
-    // Costruisce voci dai costi
     const costiPer = m ? costi.filter(c => c.data?.startsWith(m)) : costi
     const voci: VoceEsterna[] = costiPer.map(c => ({
-      id: c.id,
-      visibile: true,
-      data: c.data,
-      categoria: c.categoria,
-      descrizione: c.descrizione || c.categoria,
-      quantita: c.quantita || 1,
-      quantita_mod: String(c.quantita || 1),
-      prezzo_vendita: prezziSalvati[c.categoria] || '',
-      importo_calcolato: 0,
-      libera: false,
+      id: c.id, visibile: true, data: c.data, categoria: c.categoria,
+      descrizione: c.descrizione || c.categoria, quantita: c.quantita || 1,
+      quantita_mod: String(c.quantita || 1), prezzo_vendita: prezziSalvati[c.categoria] || '',
+      importo_calcolato: 0, libera: false,
     }))
     setVociEsterne(voci)
     setLoadingEsterna(false)
+    setPrintMode('esterna')
     setModalEsterna(true)
   }
 
@@ -283,12 +276,10 @@ export default function CostiCantiere() {
   async function salvaePrezziEsterna() {
     const clienteId = progetto?.cliente_id
     if (!clienteId) return
-    // Raccoglie prezzi usati per categoria
     const prezziUsati: Record<string, number> = {}
     vociEsterne.filter(v => v.visibile && v.prezzo_vendita).forEach(v => {
       if (!prezziUsati[v.categoria]) prezziUsati[v.categoria] = parseFloat(v.prezzo_vendita) || 0
     })
-    // Upsert — sovrascrive sempre l'ultimo
     for (const [cat, prezzo] of Object.entries(prezziUsati)) {
       await supabase.from('prezzi_vendita_cliente').upsert({
         cliente_id: clienteId, categoria: cat, prezzo_vendita: prezzo, updated_at: new Date().toISOString()
@@ -303,7 +294,6 @@ export default function CostiCantiere() {
     return s + q * p
   }, 0)
 
-  // Per riepilogo esterno per categoria
   const riepilogoEsterno = useMemo(() => {
     const m: Record<string, number> = {}
     vociVisibili.forEach(v => {
@@ -314,7 +304,6 @@ export default function CostiCantiere() {
     return m
   }, [vociEsterne])
 
-  // Giorni per esterna
   const giorniEsterni = useMemo(() => {
     const s = new Set(vociVisibili.map(v => v.data).filter(Boolean))
     return Array.from(s).sort()
@@ -575,7 +564,7 @@ export default function CostiCantiere() {
       {modalInterna && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2">
           <div className="bg-white rounded-xl w-full max-w-7xl max-h-[95vh] flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 print:hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 no-print">
               <div>
                 <h2 className="text-base font-semibold">📊 Contabilità Interna</h2>
                 <p className="text-xs text-gray-500">{progetto?.codice} — {progetto?.nome}</p>
@@ -586,11 +575,10 @@ export default function CostiCantiere() {
                   {mesiDisponibili.map(m => <option key={m} value={m}>{new Date(m + '-01').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })}</option>)}
                 </select>
                 <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Stampa</button>
-                <button onClick={() => setModalInterna(false)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+                <button onClick={() => { setModalInterna(false); setPrintMode(null) }} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
               </div>
             </div>
             <div className="flex-1 overflow-auto p-6" id="report-interna">
-              {/* Header */}
               <div className="flex items-start justify-between mb-6 pb-4 border-b-2 border-gray-800">
                 <div className="flex items-center gap-4">
                   <img src="/logo.png" alt="BC General Service" style={{ height: 50, objectFit: 'contain' }} />
@@ -603,13 +591,11 @@ export default function CostiCantiere() {
                 <div className="text-right">
                   <p style={{ fontSize: 13, fontWeight: 700, color: '#111827' }}>CONTABILITÀ INTERNA</p>
                   <p style={{ fontSize: 11, color: '#6b7280' }}>Cantiere: <strong>{progetto?.codice} — {progetto?.nome}</strong></p>
-                  {progetto?.localita && <p style={{ fontSize: 11, color: '#6b7280' }}>📍 {progetto.localita}</p>}
                   <p style={{ fontSize: 11, color: '#6b7280' }}>Periodo: <strong>{meseInterna ? new Date(meseInterna + '-01').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }) : 'Tutti i mesi'}</strong></p>
                   <p style={{ fontSize: 11, color: '#6b7280' }}>Data: <strong>{new Date().toLocaleDateString('it-IT')}</strong></p>
                 </div>
               </div>
 
-              {/* Tabella costi per giorno */}
               <div className="overflow-x-auto mb-6">
                 <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
                   <thead>
@@ -639,12 +625,12 @@ export default function CostiCantiere() {
                           <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: '#1e3a8a', background: '#eff6ff' }}>{euroShort(totCostiCat)}</td>
                           <td style={{ padding: '4px 8px', textAlign: 'right' }}>
                             {!usaACorpo && (
-                              <input className="print:hidden" type="number" step="0.01" placeholder="—"
+                              <input className="no-print" type="number" step="0.01" placeholder="—"
                                 style={{ width: 80, textAlign: 'right', border: '1px solid #d1d5db', borderRadius: 4, padding: '2px 6px', fontSize: 11 }}
                                 value={ricaviPerCat[cat] || ''}
                                 onChange={e => setRicaviPerCat(prev => ({ ...prev, [cat]: e.target.value }))} />
                             )}
-                            <span className="hidden print:inline">{ricavoCat > 0 ? euroShort(ricavoCat) : '—'}</span>
+                            <span className="only-print">{ricavoCat > 0 ? euroShort(ricavoCat) : '—'}</span>
                           </td>
                           <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: !usaACorpo && margineCat >= 0 ? '#065f46' : '#991b1b', background: '#f5f3ff' }}>
                             {!usaACorpo && ricavoCat > 0 ? euroShort(margineCat) : '—'}
@@ -652,7 +638,6 @@ export default function CostiCantiere() {
                         </tr>
                       )
                     })}
-                    {/* Totali */}
                     <tr style={{ background: '#1e3a8a' }}>
                       <td style={{ padding: '10px 12px', fontWeight: 700, color: 'white' }}>TOTALE GIORNALIERO</td>
                       {datiInterna.giorni.map(g => (
@@ -670,8 +655,7 @@ export default function CostiCantiere() {
                 </table>
               </div>
 
-              {/* Ricavi a corpo */}
-              <div className="print:hidden card mb-4 border-green-200 bg-green-50">
+              <div className="no-print card mb-4 border-green-200 bg-green-50">
                 <div className="flex items-center gap-3 mb-2">
                   <input type="checkbox" id="acorpo" checked={usaACorpo} onChange={e => setUsaACorpo(e.target.checked)} className="rounded" />
                   <label htmlFor="acorpo" className="text-sm font-medium text-green-800 cursor-pointer">Ricavi a corpo (inserisci totale senza dettaglio per categoria)</label>
@@ -685,7 +669,6 @@ export default function CostiCantiere() {
                 )}
               </div>
 
-              {/* Riepilogo finale */}
               <div className="grid grid-cols-3 gap-4 mb-6">
                 <div style={{ border: '2px solid #1e40af', borderRadius: 8, padding: 16, background: '#eff6ff' }}>
                   <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 4 }}>TOTALE COSTI</p>
@@ -704,7 +687,6 @@ export default function CostiCantiere() {
                 </div>
               </div>
 
-              {/* Firme */}
               <div className="grid grid-cols-2 gap-8 mt-8 pt-4 border-t border-gray-200">
                 <div>
                   <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 32 }}>Firma geometra</p>
@@ -726,7 +708,7 @@ export default function CostiCantiere() {
       {modalEsterna && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2">
           <div className="bg-white rounded-xl w-full max-w-7xl max-h-[95vh] flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 print:hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 no-print">
               <div>
                 <h2 className="text-base font-semibold">📋 Contabilità Cliente</h2>
                 <p className="text-xs text-gray-500">{progetto?.codice} — {progetto?.nome} | Cliente: <strong>{progetto?.cliente_nome || '—'}</strong></p>
@@ -745,8 +727,8 @@ export default function CostiCantiere() {
                   <option value="">Tutti i mesi</option>
                   {mesiDisponibili.map(m => <option key={m} value={m}>{new Date(m + '-01').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })}</option>)}
                 </select>
-                <button className="btn btn-primary print:hidden" onClick={async () => { await salvaePrezziEsterna(); window.print() }}>🖨️ Salva prezzi e stampa</button>
-                <button onClick={() => setModalEsterna(false)} className="text-gray-400 hover:text-gray-600 text-2xl print:hidden">×</button>
+                <button className="btn btn-primary no-print" onClick={async () => { await salvaePrezziEsterna(); window.print() }}>🖨️ Salva prezzi e stampa</button>
+                <button onClick={() => { setModalEsterna(false); setPrintMode(null) }} className="text-gray-400 hover:text-gray-600 text-2xl no-print">×</button>
               </div>
             </div>
 
@@ -754,8 +736,7 @@ export default function CostiCantiere() {
               <div className="flex-1 flex items-center justify-center"><div className="text-gray-400">Caricamento...</div></div>
             ) : (
               <div className="flex flex-col flex-1 overflow-hidden">
-                {/* Pannello selezione voci (non stampato) */}
-                <div className="print:hidden px-6 py-3 bg-gray-50 border-b border-gray-200">
+                <div className="no-print px-6 py-3 bg-gray-50 border-b border-gray-200">
                   <p className="text-xs font-medium text-gray-600 mb-2">Seleziona le voci da mostrare al cliente e imposta i prezzi di vendita:</p>
                   <div className="overflow-x-auto">
                     <table className="table-base" style={{ minWidth: 800 }}>
@@ -781,11 +762,8 @@ export default function CostiCantiere() {
                               <td className="text-xs text-gray-400 text-center">{v.libera ? '—' : v.quantita}</td>
                               <td><input className="input text-xs py-1" type="number" step="0.01" value={v.quantita_mod} onChange={e => aggiornaVoceEsterna(v.id, 'quantita_mod', e.target.value)} /></td>
                               <td>
-                                <div className="flex items-center gap-1">
-                                  <input className="input text-xs py-1" type="number" step="0.01" placeholder="€ vendita"
-                                    value={v.prezzo_vendita}
-                                    onChange={e => aggiornaVoceEsterna(v.id, 'prezzo_vendita', e.target.value)} />
-                                </div>
+                                <input className="input text-xs py-1" type="number" step="0.01" placeholder="€ vendita"
+                                  value={v.prezzo_vendita} onChange={e => aggiornaVoceEsterna(v.id, 'prezzo_vendita', e.target.value)} />
                               </td>
                               <td className="font-semibold text-sm text-right">{p > 0 ? euro(tot) : '—'}</td>
                             </tr>
@@ -804,9 +782,7 @@ export default function CostiCantiere() {
                   </div>
                 </div>
 
-                {/* DOCUMENTO STAMPABILE */}
                 <div className="flex-1 overflow-auto p-6" id="report-esterno">
-                  {/* Header documento */}
                   <div className="flex items-start justify-between mb-6 pb-4" style={{ borderBottom: '3px solid #1e3a8a' }}>
                     <div className="flex items-center gap-4">
                       <img src="/logo.png" alt="BC General Service" style={{ height: 55, objectFit: 'contain' }} />
@@ -824,7 +800,6 @@ export default function CostiCantiere() {
                         <p style={{ fontSize: 12, fontWeight: 700, color: '#111827' }}>{progetto?.cliente_nome || '—'}</p>
                         <p style={{ fontSize: 10, color: '#9ca3af', marginTop: 6, marginBottom: 2 }}>CANTIERE</p>
                         <p style={{ fontSize: 11, fontWeight: 600, color: '#1e40af' }}>{progetto?.codice} — {progetto?.nome}</p>
-                        {progetto?.localita && <p style={{ fontSize: 10, color: '#6b7280' }}>📍 {progetto.localita}</p>}
                         <p style={{ fontSize: 10, color: '#9ca3af', marginTop: 6, marginBottom: 2 }}>PERIODO</p>
                         <p style={{ fontSize: 10, color: '#374151' }}>{meseEsterna ? new Date(meseEsterna + '-01').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' }) : 'Tutti i mesi'}</p>
                         <p style={{ fontSize: 10, color: '#9ca3af', marginTop: 4 }}>Data emissione: <strong>{new Date().toLocaleDateString('it-IT')}</strong></p>
@@ -832,7 +807,6 @@ export default function CostiCantiere() {
                     </div>
                   </div>
 
-                  {/* Tabella per giorni */}
                   {giorniEsterni.length > 0 && (
                     <div className="mb-6">
                       <p style={{ fontSize: 12, fontWeight: 700, color: '#1e3a8a', marginBottom: 8, borderLeft: '4px solid #1e3a8a', paddingLeft: 8 }}>DETTAGLIO LAVORAZIONI PER GIORNATA</p>
@@ -879,7 +853,6 @@ export default function CostiCantiere() {
                     </div>
                   )}
 
-                  {/* Riepilogo per categoria */}
                   <div style={{ marginBottom: 24 }}>
                     <p style={{ fontSize: 12, fontWeight: 700, color: '#1e3a8a', marginBottom: 8, borderLeft: '4px solid #1e3a8a', paddingLeft: 8 }}>RIEPILOGO PER CATEGORIA</p>
                     <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
@@ -907,7 +880,6 @@ export default function CostiCantiere() {
                     </table>
                   </div>
 
-                  {/* Note */}
                   {noteEsterna && (
                     <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '10px 14px', marginBottom: 20, background: '#fffbeb' }}>
                       <p style={{ fontSize: 10, fontWeight: 700, color: '#92400e', marginBottom: 4 }}>NOTE</p>
@@ -915,7 +887,6 @@ export default function CostiCantiere() {
                     </div>
                   )}
 
-                  {/* Firme */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 40, marginTop: 40, paddingTop: 16, borderTop: '1px solid #e5e7eb' }}>
                     <div>
                       <p style={{ fontSize: 10, color: '#6b7280', marginBottom: 28 }}>Per accettazione — Il Committente</p>
@@ -1006,11 +977,41 @@ export default function CostiCantiere() {
 
       <style>{`
         @media print {
-          body * { visibility: hidden; }
-          #report-interna, #report-interna *, #report-esterno, #report-esterno * { visibility: visible; }
-          #report-interna, #report-esterno { position: fixed; top: 0; left: 0; width: 100%; padding: 16px; font-size: 10px; }
-          .print\\:hidden { display: none !important; }
+          body * { visibility: hidden !important; }
+
+          /* Stampa solo il report attivo */
+          ${printMode === 'interna' ? `
+            #report-interna,
+            #report-interna * { visibility: visible !important; }
+            #report-interna {
+              position: absolute !important;
+              top: 0 !important;
+              left: 0 !important;
+              width: 100% !important;
+              padding: 16px !important;
+              font-size: 10px !important;
+              overflow: visible !important;
+            }
+          ` : ''}
+
+          ${printMode === 'esterna' ? `
+            #report-esterno,
+            #report-esterno * { visibility: visible !important; }
+            #report-esterno {
+              position: absolute !important;
+              top: 0 !important;
+              left: 0 !important;
+              width: 100% !important;
+              padding: 16px !important;
+              font-size: 10px !important;
+              overflow: visible !important;
+            }
+          ` : ''}
+
+          .no-print { display: none !important; }
+          .only-print { display: inline !important; }
         }
+        .only-print { display: none; }
       `}</style>
     </div>
   )
