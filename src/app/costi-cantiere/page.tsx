@@ -9,6 +9,7 @@ const euroShort = (n: number) => (n || 0).toLocaleString('it-IT', { minimumFract
 const fmt = (d: string) => d ? new Date(d).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' }) : ''
 
 const CATEGORIE = ['Ore Operai', 'Materiali', 'Noli mezzi', 'Manodopera esterna', 'Subappalto', 'Trasporti', 'Attrezzatura', 'Smaltimento', 'Altro', 'Personalizzato']
+const MACRO_CATEGORIE_DDT = ['Cementi','Laterizi','Ferro e Acciaio','Legno','Isolanti','Impermeabilizzanti','Inerti e Calcestruzzo','Impianti','Attrezzatura','Noli','Trasporti','Altro']
 const CAT_COLORS: Record<string, string> = {
   'Ore Operai': '#0f766e', 'Materiali': '#1d4ed8', 'Noli mezzi': '#7c3aed',
   'Manodopera esterna': '#0891b2', 'Subappalto': '#b45309', 'Trasporti': '#059669',
@@ -59,6 +60,9 @@ export default function CostiCantiere() {
   const [modalModificaCosto, setModalModificaCosto] = useState<any>(null)
   const [modalDettaglioDdt, setModalDettaglioDdt] = useState<any>(null)
   const [vociDettaglioDdt, setVociDettaglioDdt] = useState<any[]>([])
+  const [editandoDdt, setEditandoDdt] = useState(false)
+  const [formEditDdt, setFormEditDdt] = useState({ data: '', numero: '', fornitore_id: '', descrizione: '', note: '', mese_fattura_previsto: '' })
+  const [loadingEditDdt, setLoadingEditDdt] = useState(false)
 
   // SAL (Stato Avanzamento Lavori)
   const [salList, setSalList] = useState<any[]>([])
@@ -125,6 +129,73 @@ export default function CostiCantiere() {
   async function apriDettaglioDdt(d: any) {
     setModalDettaglioDdt(d)
     setVociDettaglioDdt(d.ddt_voci || [])
+    setEditandoDdt(false)
+  }
+
+  function entraEditDdt() {
+    setFormEditDdt({
+      data: modalDettaglioDdt.data || '', numero: modalDettaglioDdt.numero || '',
+      fornitore_id: modalDettaglioDdt.fornitore_id || '', descrizione: modalDettaglioDdt.descrizione || '',
+      note: modalDettaglioDdt.note || '', mese_fattura_previsto: modalDettaglioDdt.mese_fattura_previsto || '',
+    })
+    setVociDettaglioDdt((modalDettaglioDdt.ddt_voci || []).map((v: any) => ({ ...v })))
+    setEditandoDdt(true)
+  }
+
+  function aggiornaVoceDdtEdit(idx: number, campo: string, valore: any) {
+    setVociDettaglioDdt(prev => {
+      const n = [...prev]
+      n[idx] = { ...n[idx], [campo]: valore }
+      if (campo === 'quantita' || campo === 'prezzo_unitario') {
+        const q = campo === 'quantita' ? parseFloat(valore) || 0 : n[idx].quantita
+        const p = campo === 'prezzo_unitario' ? parseFloat(valore) || 0 : n[idx].prezzo_unitario
+        n[idx].importo_totale = Math.round(q * p * 100) / 100
+      }
+      return n
+    })
+  }
+
+  function aggiungiVoceDdtEdit() {
+    setVociDettaglioDdt(prev => [...prev, { descrizione: '', macro_categoria: 'Altro', categoria: '', unita_misura: '', quantita: 0, prezzo_unitario: 0, importo_totale: 0 }])
+  }
+
+  function rimuoviVoceDdtEdit(idx: number) {
+    setVociDettaglioDdt(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  async function salvaEditDdt() {
+    if (!modalDettaglioDdt) return
+    if (!formEditDdt.numero || !formEditDdt.fornitore_id) { alert('Compilare N° DDT e fornitore'); return }
+    setLoadingEditDdt(true)
+    const for_ = fornitori.find(f => f.id === formEditDdt.fornitore_id)
+    const vociValide = vociDettaglioDdt.filter(v => v.descrizione)
+    const importoTotale = vociValide.reduce((s, v) => s + (v.importo_totale || 0), 0)
+
+    const { error } = await supabase.from('ddt').update({
+      data: formEditDdt.data, numero: formEditDdt.numero,
+      fornitore_id: formEditDdt.fornitore_id, fornitore_nome: for_?.ragione_sociale || '',
+      descrizione: formEditDdt.descrizione || `DDT con ${vociValide.length} voci`,
+      importo: importoTotale, mese_fattura_previsto: formEditDdt.mese_fattura_previsto, note: formEditDdt.note,
+    }).eq('id', modalDettaglioDdt.id)
+    if (error) { alert('Errore: ' + error.message); setLoadingEditDdt(false); return }
+
+    // Rimuove le voci esistenti e reinserisce (stesso pattern usato in ddt/page.tsx)
+    await supabase.from('ddt_voci').delete().eq('ddt_id', modalDettaglioDdt.id)
+    for (const v of vociValide) {
+      await supabase.from('ddt_voci').insert({
+        ddt_id: modalDettaglioDdt.id, descrizione: v.descrizione, categoria: v.categoria,
+        macro_categoria: v.macro_categoria, unita_misura: v.unita_misura,
+        quantita: v.quantita, prezzo_unitario: v.prezzo_unitario, importo_totale: v.importo_totale,
+        fornitore_id: formEditDdt.fornitore_id, fornitore_nome: for_?.ragione_sociale || '', data_ddt: formEditDdt.data
+      })
+    }
+
+    await logActivity('modifica', 'ddt', modalDettaglioDdt.id, `DDT ${formEditDdt.numero} — ${for_?.ragione_sociale} · € ${importoTotale} (da Costi Cantiere)`)
+    setEditandoDdt(false)
+    setModalDettaglioDdt(null)
+    setVociDettaglioDdt([])
+    setLoadingEditDdt(false)
+    loadDdt()
   }
 
   async function loadSal() {
@@ -281,6 +352,19 @@ export default function CostiCantiere() {
 
   const progetto = progetti.find(p => p.id === progettoSel)
 
+  // Una voce è "incompleta" se manca il prezzo unitario (o è zero) mentre ha una quantità,
+  // oppure se l'importo totale è zero/nullo: segnale che il prezzo non è ancora arrivato dal fornitore.
+  function voceDdtIncompleta(v: any): boolean {
+    const importoMancante = !v.importo_totale || v.importo_totale === 0
+    const prezzoMancante = !v.prezzo_unitario || v.prezzo_unitario === 0
+    return importoMancante || prezzoMancante
+  }
+  function ddtHaVociIncomplete(d: any): boolean {
+    const voci = d.ddt_voci || []
+    if (voci.length === 0) return !d.importo || d.importo === 0
+    return voci.some((v: any) => voceDdtIncompleta(v))
+  }
+
   // ── Righe DDT espanse: una riga "virtuale" per ogni voce DDT, con categoria mappata.
   //    Se un DDT non ha voci (es. inserito senza dettaglio), genera una riga unica con categoria 'Altro'. ──
   const righeDdtEspanse = useMemo(() => {
@@ -293,6 +377,7 @@ export default function CostiCantiere() {
           data: d.data, categoria: 'Altro', descrizione: d.descrizione || `DDT ${d.numero}`,
           quantita: null, prezzo_unitario: null, importo: d.importo || 0,
           inserito_da_nome: d.fornitore_nome, note: d.note,
+          incompleta: !d.importo || d.importo === 0,
         })
       } else {
         voci.forEach((v: any) => {
@@ -301,6 +386,7 @@ export default function CostiCantiere() {
             data: d.data, categoria: mappaCategoriaDdt(v.macro_categoria), descrizione: v.descrizione || d.numero,
             quantita: v.quantita, prezzo_unitario: v.prezzo_unitario, importo: v.importo_totale || 0,
             inserito_da_nome: d.fornitore_nome, note: null,
+            incompleta: voceDdtIncompleta(v),
           })
         })
       }
@@ -311,7 +397,7 @@ export default function CostiCantiere() {
   // ── Registro unificato: costi manuali + righe DDT, ordinati per data ──
   const registroUnificato = useMemo(() => {
     const righeManuali = costi.map(c => ({ ...c, tipo: 'manuale' }))
-    return [...righeManuali, ...righeDdtEspanse].sort((a, b) => (a.data || '').localeCompare(b.data || ''))
+    return [...righeManuali, ...righeDdtEspanse].sort((a, b) => (b.data || '').localeCompare(a.data || ''))
   }, [costi, righeDdtEspanse])
 
   const costiFiltrati = useMemo(() => filtroMese ? registroUnificato.filter(c => c.data?.startsWith(filtroMese)) : registroUnificato, [registroUnificato, filtroMese])
@@ -603,7 +689,13 @@ export default function CostiCantiere() {
                       ) : costiFiltrati.map(c => (
                         <tr key={c.id} className={c.tipo === 'ddt' ? 'cursor-pointer hover:bg-purple-50' : ''}
                           onClick={() => { if (c.tipo === 'ddt') apriDettaglioDdt(c.ddtRiferimento) }}>
-                          <td>{c.tipo === 'ddt' && <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">DDT</span>}</td>
+                          <td>
+                            {c.tipo === 'ddt' && (
+                              <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 inline-flex items-center gap-1">
+                                DDT {c.incompleta && <span title="Manca il prezzo: da completare">⚠️</span>}
+                              </span>
+                            )}
+                          </td>
                           <td className="text-xs">{new Date(c.data).toLocaleDateString('it-IT')}</td>
                           <td><span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ background: CAT_COLORS[c.categoria] || '#6b7280' }}>{c.categoria}</span></td>
                           <td className="text-sm">{c.descrizione || '—'}</td>
@@ -634,12 +726,13 @@ export default function CostiCantiere() {
               <div className="card overflow-x-auto">
                 <h3 className="text-sm font-medium text-gray-600 mb-3">DDT inseriti per questo cantiere ({ddts.length})</h3>
                 <table className="table-base">
-                  <thead><tr><th>Data</th><th>N° DDT</th><th>Fornitore</th><th>Descrizione</th><th>Importo</th><th>Stato</th><th>Mese prev.</th><th></th></tr></thead>
+                  <thead><tr><th></th><th>Data</th><th>N° DDT</th><th>Fornitore</th><th>Descrizione</th><th>Importo</th><th>Stato</th><th>Mese prev.</th><th></th></tr></thead>
                   <tbody>
                     {ddts.length === 0 ? (
-                      <tr><td colSpan={8} className="text-center text-gray-400 py-8">Nessun DDT inserito per questo cantiere.</td></tr>
+                      <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessun DDT inserito per questo cantiere.</td></tr>
                     ) : ddts.map(d => (
-                      <tr key={d.id}>
+                      <tr key={d.id} className="cursor-pointer hover:bg-gray-50" onClick={() => apriDettaglioDdt(d)}>
+                        <td>{ddtHaVociIncomplete(d) && <span title="Manca il prezzo: da completare">⚠️</span>}</td>
                         <td className="text-xs">{d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—'}</td>
                         <td className="font-medium text-sm">{d.numero}</td>
                         <td className="text-sm">{d.fornitore_nome}</td>
@@ -647,7 +740,7 @@ export default function CostiCantiere() {
                         <td className="font-semibold text-sm text-purple-800">{euro(d.importo)}</td>
                         <td>{statoBadge(d.stato)}</td>
                         <td className="text-xs text-gray-500">{d.mese_fattura_previsto || '—'}</td>
-                        <td>{d.stato === 'Da Fatturare' && <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaDdt(d.id)}>✕</button>}</td>
+                        <td onClick={e => e.stopPropagation()}>{d.stato === 'Da Fatturare' && <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaDdt(d.id)}>✕</button>}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1225,53 +1318,119 @@ export default function CostiCantiere() {
         </div>
       )}
 
-      {/* ── MODAL DETTAGLIO DDT (sola lettura, dal registro costi unificato) ── */}
+      {/* ── MODAL DETTAGLIO / MODIFICA DDT (dal registro costi unificato — le modifiche si riflettono ovunque) ── */}
       {modalDettaglioDdt && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-xl p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold">📋 Dettaglio DDT — {modalDettaglioDdt.numero}</h2>
-              <button onClick={() => { setModalDettaglioDdt(null); setVociDettaglioDdt([]) }} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
-            </div>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-4 text-sm">
-              <div><span className="text-gray-400 text-xs block">Data</span>{modalDettaglioDdt.data ? new Date(modalDettaglioDdt.data).toLocaleDateString('it-IT') : '—'}</div>
-              <div><span className="text-gray-400 text-xs block">Fornitore</span>{modalDettaglioDdt.fornitore_nome}</div>
-              <div><span className="text-gray-400 text-xs block">Cantiere</span>{modalDettaglioDdt.progetto_nome || '—'}</div>
-              <div><span className="text-gray-400 text-xs block">Stato</span>{statoBadge(modalDettaglioDdt.stato)}</div>
-              <div className="col-span-2"><span className="text-gray-400 text-xs block">Note</span>{modalDettaglioDdt.note || '—'}</div>
-              <div><span className="text-gray-400 text-xs block">Fattura abbinata</span>{modalDettaglioDdt.fattura_abbinata || '—'}</div>
+              <h2 className="text-base font-semibold">{editandoDdt ? '✏️ Modifica DDT' : '📋 Dettaglio DDT'} — {modalDettaglioDdt.numero}</h2>
+              <button onClick={() => { setModalDettaglioDdt(null); setVociDettaglioDdt([]); setEditandoDdt(false) }} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
             </div>
 
-            <h3 className="text-sm font-medium text-gray-600 mb-2">📦 Voci ({vociDettaglioDdt.length})</h3>
-            {vociDettaglioDdt.length === 0 ? (
-              <p className="text-xs text-gray-400 py-3 text-center border border-dashed rounded-lg">Nessuna voce registrata per questo DDT.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="table-base">
-                  <thead><tr><th>Descrizione</th><th>Macro-categoria</th><th>Categoria costi</th><th>U.M.</th><th>Qtà</th><th>€/unit</th><th>Totale</th></tr></thead>
-                  <tbody>
-                    {vociDettaglioDdt.map((v: any) => (
-                      <tr key={v.id}>
-                        <td className="text-sm">{v.descrizione}</td>
-                        <td className="text-xs text-gray-500">{v.macro_categoria}</td>
-                        <td><span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ background: CAT_COLORS[mappaCategoriaDdt(v.macro_categoria)] || '#6b7280' }}>{mappaCategoriaDdt(v.macro_categoria)}</span></td>
-                        <td className="text-xs">{v.unita_misura}</td>
-                        <td className="text-xs">{v.quantita}</td>
-                        <td className="text-xs">{euro(v.prezzo_unitario)}</td>
-                        <td className="font-medium text-sm">{euro(v.importo_totale)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
-                  <span className="font-semibold text-sm">Totale: {euro(modalDettaglioDdt.importo)}</span>
+            {!editandoDdt ? (
+              <>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-4 text-sm">
+                  <div><span className="text-gray-400 text-xs block">Data</span>{modalDettaglioDdt.data ? new Date(modalDettaglioDdt.data).toLocaleDateString('it-IT') : '—'}</div>
+                  <div><span className="text-gray-400 text-xs block">Fornitore</span>{modalDettaglioDdt.fornitore_nome}</div>
+                  <div><span className="text-gray-400 text-xs block">Cantiere</span>{modalDettaglioDdt.progetto_nome || '—'}</div>
+                  <div><span className="text-gray-400 text-xs block">Stato</span>{statoBadge(modalDettaglioDdt.stato)}</div>
+                  <div className="col-span-2"><span className="text-gray-400 text-xs block">Note</span>{modalDettaglioDdt.note || '—'}</div>
+                  <div><span className="text-gray-400 text-xs block">Fattura abbinata</span>{modalDettaglioDdt.fattura_abbinata || '—'}</div>
                 </div>
-              </div>
+
+                <h3 className="text-sm font-medium text-gray-600 mb-2">📦 Voci ({vociDettaglioDdt.length})</h3>
+                {vociDettaglioDdt.length === 0 ? (
+                  <p className="text-xs text-gray-400 py-3 text-center border border-dashed rounded-lg">Nessuna voce registrata per questo DDT.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="table-base">
+                      <thead><tr><th></th><th>Descrizione</th><th>Macro-categoria</th><th>Categoria costi</th><th>U.M.</th><th>Qtà</th><th>€/unit</th><th>Totale</th></tr></thead>
+                      <tbody>
+                        {vociDettaglioDdt.map((v: any) => (
+                          <tr key={v.id} className={voceDdtIncompleta(v) ? 'bg-amber-50' : ''}>
+                            <td>{voceDdtIncompleta(v) && <span title="Manca il prezzo: da completare">⚠️</span>}</td>
+                            <td className="text-sm">{v.descrizione}</td>
+                            <td className="text-xs text-gray-500">{v.macro_categoria}</td>
+                            <td><span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ background: CAT_COLORS[mappaCategoriaDdt(v.macro_categoria)] || '#6b7280' }}>{mappaCategoriaDdt(v.macro_categoria)}</span></td>
+                            <td className="text-xs">{v.unita_misura}</td>
+                            <td className="text-xs">{v.quantita}</td>
+                            <td className="text-xs">{v.prezzo_unitario ? euro(v.prezzo_unitario) : <span className="text-amber-600 font-medium">manca</span>}</td>
+                            <td className="font-medium text-sm">{euro(v.importo_totale)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
+                      <span className="font-semibold text-sm">Totale: {euro(modalDettaglioDdt.importo)}</span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex gap-2 justify-end mt-4">
+                  <button className="btn" onClick={() => { setModalDettaglioDdt(null); setVociDettaglioDdt([]) }}>Chiudi</button>
+                  <button className="btn btn-primary" onClick={entraEditDdt}>✏️ Modifica</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-4">
+                  <div><label className="label">Data</label>
+                    <input className="input" type="date" value={formEditDdt.data} onChange={e => setFormEditDdt({...formEditDdt, data: e.target.value})} /></div>
+                  <div><label className="label">N° DDT *</label>
+                    <input className="input" value={formEditDdt.numero} onChange={e => setFormEditDdt({...formEditDdt, numero: e.target.value})} /></div>
+                  <div><label className="label">Fornitore *</label>
+                    <select className="input" value={formEditDdt.fornitore_id} onChange={e => setFormEditDdt({...formEditDdt, fornitore_id: e.target.value})}>
+                      <option value="">-- seleziona --</option>
+                      {fornitori.map(f => <option key={f.id} value={f.id}>{f.ragione_sociale}</option>)}
+                    </select></div>
+                  <div><label className="label">Mese fattura previsto</label>
+                    <input className="input" type="month" value={formEditDdt.mese_fattura_previsto} onChange={e => setFormEditDdt({...formEditDdt, mese_fattura_previsto: e.target.value})} /></div>
+                  <div className="col-span-2"><label className="label">Descrizione</label>
+                    <input className="input" value={formEditDdt.descrizione} onChange={e => setFormEditDdt({...formEditDdt, descrizione: e.target.value})} /></div>
+                  <div className="col-span-2"><label className="label">Note</label>
+                    <input className="input" value={formEditDdt.note} onChange={e => setFormEditDdt({...formEditDdt, note: e.target.value})} /></div>
+                </div>
+
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-medium text-gray-600">📦 Voci ({vociDettaglioDdt.length})</h3>
+                  <button className="btn btn-sm btn-primary" onClick={aggiungiVoceDdtEdit}>+ Voce</button>
+                </div>
+                {vociDettaglioDdt.length === 0 ? (
+                  <p className="text-xs text-gray-400 py-3 text-center border border-dashed rounded-lg">Nessuna voce. Clicca "+ Voce" per aggiungerne.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="table-base">
+                      <thead><tr><th></th><th>Descrizione</th><th>Macro-categoria</th><th>U.M.</th><th>Qtà</th><th>€/unit</th><th>Totale</th><th></th></tr></thead>
+                      <tbody>
+                        {vociDettaglioDdt.map((v: any, idx: number) => (
+                          <tr key={v.id || idx} className={voceDdtIncompleta(v) ? 'bg-amber-50' : ''}>
+                            <td>{voceDdtIncompleta(v) && <span title="Manca il prezzo: da completare">⚠️</span>}</td>
+                            <td><input className="input text-xs py-1" value={v.descrizione} onChange={e => aggiornaVoceDdtEdit(idx, 'descrizione', e.target.value)} /></td>
+                            <td><select className="input text-xs py-1" value={v.macro_categoria} onChange={e => aggiornaVoceDdtEdit(idx, 'macro_categoria', e.target.value)}>
+                              {MACRO_CATEGORIE_DDT.map(m => <option key={m}>{m}</option>)}
+                            </select></td>
+                            <td><input className="input text-xs py-1 w-14" value={v.unita_misura || ''} onChange={e => aggiornaVoceDdtEdit(idx, 'unita_misura', e.target.value)} /></td>
+                            <td><input className="input text-xs py-1 w-20" type="number" step="0.001" value={v.quantita || ''} onChange={e => aggiornaVoceDdtEdit(idx, 'quantita', e.target.value)} /></td>
+                            <td><input className="input text-xs py-1 w-24" type="number" step="0.0001" placeholder="manca" value={v.prezzo_unitario || ''} onChange={e => aggiornaVoceDdtEdit(idx, 'prezzo_unitario', e.target.value)} /></td>
+                            <td className="font-medium text-sm">{euro(v.importo_totale)}</td>
+                            <td><button className="text-gray-300 hover:text-red-500 text-sm" onClick={() => rimuoviVoceDdtEdit(idx)}>✕</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
+                      <span className="font-semibold text-sm">Totale: {euro(vociDettaglioDdt.reduce((s, v) => s + (v.importo_totale || 0), 0))}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2 justify-end mt-4">
+                  <button className="btn" onClick={() => setEditandoDdt(false)}>← Annulla</button>
+                  <button className="btn btn-primary" onClick={salvaEditDdt} disabled={loadingEditDdt}>
+                    {loadingEditDdt ? 'Salvataggio...' : 'Salva modifiche'}
+                  </button>
+                </div>
+              </>
             )}
-            <p className="text-xs text-gray-400 mt-3">Per modificare questo DDT, vai alla pagina DDT / Bolle.</p>
-            <div className="flex justify-end mt-4">
-              <button className="btn" onClick={() => { setModalDettaglioDdt(null); setVociDettaglioDdt([]) }}>Chiudi</button>
-            </div>
           </div>
         </div>
       )}
