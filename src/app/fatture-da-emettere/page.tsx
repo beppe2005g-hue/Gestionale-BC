@@ -33,12 +33,15 @@ export default function FattureDaEmetterePage() {
 
   const [modalFde, setModalFde] = useState(false)
   const [loadingFde, setLoadingFde] = useState(false)
+  const [fdeInModifica, setFdeInModifica] = useState<any>(null)
   const [formFde, setFormFde] = useState<{ progetto_id: string, cliente_id: string, aliquota_id: string, scadenza_prevista: string, note: string, righe: RigaFde[] }>({
     progetto_id: '', cliente_id: '', aliquota_id: '', scadenza_prevista: '', note: '', righe: [nuovaRigaFde()]
   })
 
   const [modalEmissione, setModalEmissione] = useState<any>(null)
   const [formEmissione, setFormEmissione] = useState({ numero_fattura_emessa: '', importo_emesso: '', scadenza_emessa: '' })
+  const [modalModificaEmessa, setModalModificaEmessa] = useState<any>(null)
+  const [formModificaEmessa, setFormModificaEmessa] = useState({ numero_fattura_emessa: '', importo_emesso: '', scadenza_emessa: '' })
 
   // Gestione aliquote
   const [modalAliquote, setModalAliquote] = useState(false)
@@ -64,7 +67,23 @@ export default function FattureDaEmetterePage() {
 
   function apriModalFde() {
     const aliquotaDefault = aliquote.find(a => a.percentuale === 22) || aliquote[0]
+    setFdeInModifica(null)
     setFormFde({ progetto_id: '', cliente_id: '', aliquota_id: aliquotaDefault?.id || '', scadenza_prevista: '', note: '', righe: [nuovaRigaFde()] })
+    setModalFde(true)
+  }
+
+  function apriModalModificaFde(f: any) {
+    setFdeInModifica(f)
+    const righeEsistenti = (f.fatture_da_emettere_righe || []).map((r: any) => ({
+      descrizione: r.descrizione || '', quantita: r.quantita != null ? String(r.quantita) : '',
+      unita_misura: r.unita_misura || '', prezzo_unitario: r.prezzo_unitario != null ? String(r.prezzo_unitario) : '',
+      importo: String(r.importo ?? ''), importoModificatoManualmente: true,
+    }))
+    setFormFde({
+      progetto_id: f.progetto_id || '', cliente_id: f.cliente_id || '', aliquota_id: f.aliquota_id || '',
+      scadenza_prevista: f.scadenza_prevista || '', note: f.note || '',
+      righe: righeEsistenti.length > 0 ? righeEsistenti : [nuovaRigaFde()],
+    })
     setModalFde(true)
   }
 
@@ -113,6 +132,37 @@ export default function FattureDaEmetterePage() {
     const prj = progetti.find(p => p.id === formFde.progetto_id)
     const cli = clienti.find(c => c.id === formFde.cliente_id)
     const aliq = aliquote.find(a => a.id === formFde.aliquota_id)
+
+    if (fdeInModifica) {
+      const { error } = await supabase.from('fatture_da_emettere').update({
+        progetto_id: formFde.progetto_id,
+        cliente_id: formFde.cliente_id,
+        cliente_nome: cli?.ragione_sociale || '',
+        aliquota_iva: aliq?.percentuale ?? 22,
+        aliquota_id: formFde.aliquota_id,
+        scadenza_prevista: formFde.scadenza_prevista || null,
+        note: formFde.note || null,
+      }).eq('id', fdeInModifica.id)
+      if (error) { alert('Errore: ' + error.message); setLoadingFde(false); return }
+      await supabase.from('fatture_da_emettere_righe').delete().eq('fattura_da_emettere_id', fdeInModifica.id)
+      await supabase.from('fatture_da_emettere_righe').insert(
+        righeValide.map(r => ({
+          fattura_da_emettere_id: fdeInModifica.id,
+          descrizione: r.descrizione,
+          importo: parseFloat(r.importo) || 0,
+          quantita: r.quantita ? parseFloat(r.quantita) : null,
+          unita_misura: r.unita_misura || null,
+          prezzo_unitario: r.prezzo_unitario ? parseFloat(r.prezzo_unitario) : null,
+        }))
+      )
+      await logActivity('modifica', 'fatture_da_emettere', fdeInModifica.id, `Richiesta fattura modificata — ${prj?.codice} ${prj?.nome} · ${cli?.ragione_sociale} · € ${totaleImponibileFde.toFixed(2)}`)
+      setModalFde(false)
+      setFdeInModifica(null)
+      loadAll()
+      setLoadingFde(false)
+      return
+    }
+
     const { data: inserted, error } = await supabase.from('fatture_da_emettere').insert({
       progetto_id: formFde.progetto_id,
       cliente_id: formFde.cliente_id,
@@ -172,9 +222,32 @@ export default function FattureDaEmetterePage() {
   }
 
   async function eliminaFde(id: string) {
-    if (!confirm('Eliminare questa richiesta di fattura?')) return
+    if (!confirm('Eliminare questa fattura? L\'operazione non è reversibile.')) return
     await supabase.from('fatture_da_emettere').delete().eq('id', id)
-    await logActivity('eliminazione', 'fatture_da_emettere', id, 'Richiesta fattura eliminata')
+    await logActivity('eliminazione', 'fatture_da_emettere', id, 'Fattura eliminata')
+    loadAll()
+  }
+
+  function apriModalModificaEmessa(f: any) {
+    setFormModificaEmessa({
+      numero_fattura_emessa: f.numero_fattura_emessa || '',
+      importo_emesso: String(f.importo_emesso ?? ''),
+      scadenza_emessa: f.scadenza_emessa || '',
+    })
+    setModalModificaEmessa(f)
+  }
+
+  async function salvaModificaEmessa() {
+    if (!modalModificaEmessa) return
+    if (!formModificaEmessa.numero_fattura_emessa || !formModificaEmessa.importo_emesso) { alert('Inserisci numero fattura e importo'); return }
+    const { error } = await supabase.from('fatture_da_emettere').update({
+      numero_fattura_emessa: formModificaEmessa.numero_fattura_emessa,
+      importo_emesso: parseFloat(formModificaEmessa.importo_emesso) || 0,
+      scadenza_emessa: formModificaEmessa.scadenza_emessa || null,
+    }).eq('id', modalModificaEmessa.id)
+    if (error) { alert('Errore: ' + error.message); return }
+    await logActivity('modifica', 'fatture_da_emettere', modalModificaEmessa.id, `Fattura emessa modificata: ${formModificaEmessa.numero_fattura_emessa} · € ${formModificaEmessa.importo_emesso}`)
+    setModalModificaEmessa(null)
     loadAll()
   }
 
@@ -202,7 +275,7 @@ export default function FattureDaEmetterePage() {
   }
 
   const fattureFiltrate = useMemo(() => {
-    return fatture.filter(f => {
+    const filtrate = fatture.filter(f => {
       if (tab === 'da_emettere' && f.stato !== 'Da Emettere') return false
       if (tab === 'emesse' && f.stato !== 'Emessa') return false
       if (cercaCliente && !f.cliente_nome?.toLowerCase().includes(cercaCliente.toLowerCase())) return false
@@ -211,6 +284,13 @@ export default function FattureDaEmetterePage() {
         if (!testo.includes(cercaCantiere.toLowerCase())) return false
       }
       return true
+    })
+    // Da Emettere: meno recente in alto, più recente in basso (crescente)
+    // Emesse: più recente in alto, meno recente in basso (decrescente)
+    return [...filtrate].sort((a, b) => {
+      const da = a.created_at || ''
+      const db = b.created_at || ''
+      return tab === 'da_emettere' ? da.localeCompare(db) : db.localeCompare(da)
     })
   }, [fatture, tab, cercaCliente, cercaCantiere])
 
@@ -329,12 +409,15 @@ export default function FattureDaEmetterePage() {
                             <strong>Fattura {f.numero_fattura_emessa}</strong> · {euro(f.importo_emesso)} · Scadenza: {f.scadenza_emessa ? new Date(f.scadenza_emessa).toLocaleDateString('it-IT') : '—'}
                           </div>
                           <div className="flex gap-2">
+                            <button className="btn btn-sm" onClick={() => apriModalModificaEmessa(f)}>✏️ Modifica</button>
                             <button className="btn btn-sm" onClick={() => riapriFde(f.id)}>↺ Riapri</button>
+                            <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaFde(f.id)}>✕ Elimina</button>
                           </div>
                         </div>
                       ) : (
                         <div className="flex justify-end gap-2">
                           <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaFde(f.id)}>✕ Elimina</button>
+                          <button className="btn btn-sm" onClick={() => apriModalModificaFde(f)}>✏️ Modifica</button>
                           <button className="btn btn-success btn-sm" onClick={() => apriModalEmissione(f)}>✓ Segna come emessa</button>
                         </div>
                       )}
@@ -352,8 +435,8 @@ export default function FattureDaEmetterePage() {
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold">Richiedi emissione fattura</h2>
-              <button onClick={() => setModalFde(false)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+              <h2 className="text-base font-semibold">{fdeInModifica ? '✏️ Modifica richiesta fattura' : 'Richiedi emissione fattura'}</h2>
+              <button onClick={() => { setModalFde(false); setFdeInModifica(null) }} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
             </div>
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="col-span-2"><label className="label">Cantiere *</label>
@@ -425,8 +508,10 @@ export default function FattureDaEmetterePage() {
             </div>
 
             <div className="flex gap-2 justify-end">
-              <button className="btn" onClick={() => setModalFde(false)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salvaFde} disabled={loadingFde}>{loadingFde ? 'Salvataggio...' : 'Salva richiesta'}</button>
+              <button className="btn" onClick={() => { setModalFde(false); setFdeInModifica(null) }}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaFde} disabled={loadingFde}>
+                {loadingFde ? 'Salvataggio...' : (fdeInModifica ? 'Salva modifiche' : 'Salva richiesta')}
+              </button>
             </div>
           </div>
         </div>
@@ -457,6 +542,36 @@ export default function FattureDaEmetterePage() {
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalEmissione(null)}>Annulla</button>
               <button className="btn btn-success" onClick={confermaEmissione}>Conferma emissione</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL MODIFICA FATTURA EMESSA ── */}
+      {modalModificaEmessa && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-base font-semibold">✏️ Modifica fattura emessa</h2>
+                <p className="text-xs text-gray-500 mt-0.5">{modalModificaEmessa.cliente_nome}</p>
+              </div>
+              <button onClick={() => setModalModificaEmessa(null)} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+            </div>
+            <div className="space-y-3">
+              <div><label className="label">N° Fattura emessa *</label>
+                <input className="input" value={formModificaEmessa.numero_fattura_emessa}
+                  onChange={e => setFormModificaEmessa({...formModificaEmessa, numero_fattura_emessa: e.target.value})} /></div>
+              <div><label className="label">Importo imponibile (€) *</label>
+                <input className="input" type="number" step="0.01" value={formModificaEmessa.importo_emesso}
+                  onChange={e => setFormModificaEmessa({...formModificaEmessa, importo_emesso: e.target.value})} /></div>
+              <div><label className="label">Scadenza pagamento</label>
+                <input className="input" type="date" value={formModificaEmessa.scadenza_emessa}
+                  onChange={e => setFormModificaEmessa({...formModificaEmessa, scadenza_emessa: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalModificaEmessa(null)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaModificaEmessa}>Salva modifiche</button>
             </div>
           </div>
         </div>
