@@ -15,6 +15,18 @@ const CAT_COLORS: Record<string, string> = {
   'Attrezzatura': '#dc2626', 'Smaltimento': '#9333ea', 'Altro': '#6b7280', 'Personalizzato': '#d97706',
 }
 
+// Mappa le macro_categoria merceologiche dei DDT (vedi ddt/page.tsx) sulle categorie di Costi Cantiere,
+// così i DDT confluiscono nei totali per categoria insieme ai costi manuali
+const MAPPA_CATEGORIA_DDT: Record<string, string> = {
+  'Cementi': 'Materiali', 'Laterizi': 'Materiali', 'Ferro e Acciaio': 'Materiali',
+  'Legno': 'Materiali', 'Isolanti': 'Materiali', 'Impermeabilizzanti': 'Materiali',
+  'Inerti e Calcestruzzo': 'Materiali', 'Impianti': 'Attrezzatura',
+  'Attrezzatura': 'Attrezzatura', 'Noli': 'Noli mezzi', 'Trasporti': 'Trasporti', 'Altro': 'Altro',
+}
+function mappaCategoriaDdt(macroCategoria: string): string {
+  return MAPPA_CATEGORIA_DDT[macroCategoria] || 'Materiali'
+}
+
 interface RigaCosto { id: string; data: string; categoria: string; categoria_personalizzata: string; descrizione: string; quantita: string; prezzo_unitario: string; importo: string; note: string }
 function nuovaRiga(data: string): RigaCosto { return { id: Math.random().toString(36).slice(2), data, categoria: 'Ore Operai', categoria_personalizzata: '', descrizione: '', quantita: '', prezzo_unitario: '', importo: '', note: '' } }
 
@@ -45,6 +57,8 @@ export default function CostiCantiere() {
   const [loadingDdt, setLoadingDdt] = useState(false)
   const [formDdt, setFormDdt] = useState({ data: '', numero: '', fornitore_id: '', descrizione: '', importo: '', mese_fattura_previsto: '', note: '' })
   const [modalModificaCosto, setModalModificaCosto] = useState<any>(null)
+  const [modalDettaglioDdt, setModalDettaglioDdt] = useState<any>(null)
+  const [vociDettaglioDdt, setVociDettaglioDdt] = useState<any[]>([])
 
   // SAL (Stato Avanzamento Lavori)
   const [salList, setSalList] = useState<any[]>([])
@@ -104,8 +118,13 @@ export default function CostiCantiere() {
 
   async function loadDdt() {
     if (!progettoSel) return
-    const { data } = await supabase.from('ddt').select('*').eq('progetto_id', progettoSel).order('data', { ascending: false })
+    const { data } = await supabase.from('ddt').select('*, ddt_voci(*)').eq('progetto_id', progettoSel).order('data', { ascending: false })
     setDdts(data || [])
+  }
+
+  async function apriDettaglioDdt(d: any) {
+    setModalDettaglioDdt(d)
+    setVociDettaglioDdt(d.ddt_voci || [])
   }
 
   async function loadSal() {
@@ -261,19 +280,53 @@ export default function CostiCantiere() {
   }
 
   const progetto = progetti.find(p => p.id === progettoSel)
-  const costiFiltrati = useMemo(() => filtroMese ? costi.filter(c => c.data?.startsWith(filtroMese)) : costi, [costi, filtroMese])
+
+  // ── Righe DDT espanse: una riga "virtuale" per ogni voce DDT, con categoria mappata.
+  //    Se un DDT non ha voci (es. inserito senza dettaglio), genera una riga unica con categoria 'Altro'. ──
+  const righeDdtEspanse = useMemo(() => {
+    const righe: any[] = []
+    ddts.forEach(d => {
+      const voci = d.ddt_voci || []
+      if (voci.length === 0) {
+        righe.push({
+          id: `ddt-${d.id}`, tipo: 'ddt', ddtId: d.id, ddtRiferimento: d,
+          data: d.data, categoria: 'Altro', descrizione: d.descrizione || `DDT ${d.numero}`,
+          quantita: null, prezzo_unitario: null, importo: d.importo || 0,
+          inserito_da_nome: d.fornitore_nome, note: d.note,
+        })
+      } else {
+        voci.forEach((v: any) => {
+          righe.push({
+            id: `ddt-voce-${v.id}`, tipo: 'ddt', ddtId: d.id, ddtRiferimento: d,
+            data: d.data, categoria: mappaCategoriaDdt(v.macro_categoria), descrizione: v.descrizione || d.numero,
+            quantita: v.quantita, prezzo_unitario: v.prezzo_unitario, importo: v.importo_totale || 0,
+            inserito_da_nome: d.fornitore_nome, note: null,
+          })
+        })
+      }
+    })
+    return righe
+  }, [ddts])
+
+  // ── Registro unificato: costi manuali + righe DDT, ordinati per data ──
+  const registroUnificato = useMemo(() => {
+    const righeManuali = costi.map(c => ({ ...c, tipo: 'manuale' }))
+    return [...righeManuali, ...righeDdtEspanse].sort((a, b) => (a.data || '').localeCompare(b.data || ''))
+  }, [costi, righeDdtEspanse])
+
+  const costiFiltrati = useMemo(() => filtroMese ? registroUnificato.filter(c => c.data?.startsWith(filtroMese)) : registroUnificato, [registroUnificato, filtroMese])
   const totalePerCategoria = useMemo(() => {
     const m: Record<string, number> = {}
     costiFiltrati.forEach(c => { m[c.categoria] = (m[c.categoria] || 0) + (c.importo || 0) })
     return m
   }, [costiFiltrati])
   const totale = costiFiltrati.reduce((s, c) => s + (c.importo || 0), 0)
-  const totaleTutti = costi.reduce((s, c) => s + (c.importo || 0), 0)
+  const totaleTutti = registroUnificato.reduce((s, c) => s + (c.importo || 0), 0)
   const budgetPerc = progetto?.budget_costi > 0 ? Math.round(totaleTutti / progetto.budget_costi * 100) : 0
   const mesiDisponibili = useMemo(() => {
-    const mesi = new Set(costi.map(c => c.data?.substring(0, 7)).filter(Boolean))
+    const mesi = new Set(registroUnificato.map(c => c.data?.substring(0, 7)).filter(Boolean))
     return Array.from(mesi).sort().reverse()
-  }, [costi])
+  }, [registroUnificato])
   const totaleDdt = ddts.reduce((s, d) => s + (d.importo || 0), 0)
   const totaleRighe = righe.reduce((s, r) => s + (parseFloat(r.importo) || 0), 0)
 
@@ -294,7 +347,7 @@ export default function CostiCantiere() {
 
   // ── CONTABILITÀ INTERNA ──
   const datiInterna = useMemo(() => {
-    const costiPer = meseInterna ? costi.filter(c => c.data?.startsWith(meseInterna)) : costi
+    const costiPer = meseInterna ? registroUnificato.filter(c => c.data?.startsWith(meseInterna)) : registroUnificato
 
     // Giorni ordinati (per il blocco "dettaglio per giornata")
     const giorniSet = new Set(costiPer.map(c => c.data).filter(Boolean))
@@ -316,10 +369,10 @@ export default function CostiCantiere() {
     const totaleGenerale = catPresenti.reduce((s, cat) => s + totaliCategoria[cat], 0)
 
     // Raggruppamento per mese → categoria (per il riepilogo mensile, sempre su TUTTI i costi, non solo il filtro)
-    const mesiSet = new Set(costi.map(c => c.data?.substring(0, 7)).filter(Boolean))
+    const mesiSet = new Set(registroUnificato.map(c => c.data?.substring(0, 7)).filter(Boolean))
     const mesiOrdinati = Array.from(mesiSet).sort()
     const riepilogoMensile = mesiOrdinati.map(mese => {
-      const costiMese = costi.filter(c => c.data?.startsWith(mese))
+      const costiMese = registroUnificato.filter(c => c.data?.startsWith(mese))
       const catMese = [...new Set(costiMese.map(c => c.categoria))].filter(Boolean)
       const perCategoria = catMese.map(cat => ({
         categoria: cat,
@@ -503,7 +556,7 @@ export default function CostiCantiere() {
 
             <div className="flex gap-1 mb-4 border-b border-gray-200 flex-wrap">
               <button onClick={() => setTab('costi')} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'costi' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
-                💰 Costi giornalieri ({costi.length})
+                💰 Costi giornalieri ({registroUnificato.length})
               </button>
               <button onClick={() => setTab('ddt')} className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'ddt' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
                 📋 DDT / Bolle ({ddts.length})
@@ -538,27 +591,36 @@ export default function CostiCantiere() {
                   </div>
                 )}
                 <div className="card overflow-x-auto">
-                  <h3 className="text-sm font-medium text-gray-600 mb-3">Registro costi ({costiFiltrati.length})</h3>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-medium text-gray-600">Registro costi ({costiFiltrati.length})</h3>
+                    <span className="text-xs text-gray-400">Includa costi manuali e DDT collegati a questo cantiere</span>
+                  </div>
                   <table className="table-base">
-                    <thead><tr><th>Data</th><th>Categoria</th><th>Descrizione</th><th>Qtà</th><th>Pr. Unit.</th><th>Importo</th><th>Inserito da</th><th>Note</th><th></th></tr></thead>
+                    <thead><tr><th></th><th>Data</th><th>Categoria</th><th>Descrizione</th><th>Qtà</th><th>Pr. Unit.</th><th>Importo</th><th>Origine</th><th>Note</th><th></th></tr></thead>
                     <tbody>
                       {costiFiltrati.length === 0 ? (
-                        <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessun costo registrato per questo cantiere.</td></tr>
+                        <tr><td colSpan={10} className="text-center text-gray-400 py-8">Nessun costo registrato per questo cantiere.</td></tr>
                       ) : costiFiltrati.map(c => (
-                        <tr key={c.id}>
+                        <tr key={c.id} className={c.tipo === 'ddt' ? 'cursor-pointer hover:bg-purple-50' : ''}
+                          onClick={() => { if (c.tipo === 'ddt') apriDettaglioDdt(c.ddtRiferimento) }}>
+                          <td>{c.tipo === 'ddt' && <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">DDT</span>}</td>
                           <td className="text-xs">{new Date(c.data).toLocaleDateString('it-IT')}</td>
                           <td><span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ background: CAT_COLORS[c.categoria] || '#6b7280' }}>{c.categoria}</span></td>
                           <td className="text-sm">{c.descrizione || '—'}</td>
                           <td className="text-xs text-gray-500">{c.quantita != null ? c.quantita : '—'}</td>
                           <td className="text-xs text-gray-500">{c.prezzo_unitario != null ? euro(c.prezzo_unitario) : '—'}</td>
-                          <td className="font-semibold text-sm text-blue-800">{euro(c.importo)}</td>
-                          <td className="text-xs text-gray-500">{c.inserito_da_nome || '—'}</td>
+                          <td className={`font-semibold text-sm ${c.tipo === 'ddt' ? 'text-purple-800' : 'text-blue-800'}`}>{euro(c.importo)}</td>
+                          <td className="text-xs text-gray-500">{c.tipo === 'ddt' ? `DDT ${c.ddtRiferimento?.numero || ''} — ${c.inserito_da_nome || ''}` : (c.inserito_da_nome || '—')}</td>
                           <td className="text-xs text-gray-400">{c.note || '—'}</td>
-                          <td>
-                            <div className="flex gap-1">
-                              <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => setModalModificaCosto({...c, importo: String(c.importo), quantita: c.quantita != null ? String(c.quantita) : '', prezzo_unitario: c.prezzo_unitario != null ? String(c.prezzo_unitario) : ''})}>✏️</button>
-                              <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaCosto(c.id)}>✕</button>
-                            </div>
+                          <td onClick={e => e.stopPropagation()}>
+                            {c.tipo === 'ddt' ? (
+                              <button className="btn btn-sm text-purple-600 border-purple-200 hover:bg-purple-50" onClick={() => apriDettaglioDdt(c.ddtRiferimento)}>👁️</button>
+                            ) : (
+                              <div className="flex gap-1">
+                                <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => setModalModificaCosto({...c, importo: String(c.importo), quantita: c.quantita != null ? String(c.quantita) : '', prezzo_unitario: c.prezzo_unitario != null ? String(c.prezzo_unitario) : ''})}>✏️</button>
+                                <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaCosto(c.id)}>✕</button>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -1159,6 +1221,57 @@ export default function CostiCantiere() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL DETTAGLIO DDT (sola lettura, dal registro costi unificato) ── */}
+      {modalDettaglioDdt && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">📋 Dettaglio DDT — {modalDettaglioDdt.numero}</h2>
+              <button onClick={() => { setModalDettaglioDdt(null); setVociDettaglioDdt([]) }} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-4 text-sm">
+              <div><span className="text-gray-400 text-xs block">Data</span>{modalDettaglioDdt.data ? new Date(modalDettaglioDdt.data).toLocaleDateString('it-IT') : '—'}</div>
+              <div><span className="text-gray-400 text-xs block">Fornitore</span>{modalDettaglioDdt.fornitore_nome}</div>
+              <div><span className="text-gray-400 text-xs block">Cantiere</span>{modalDettaglioDdt.progetto_nome || '—'}</div>
+              <div><span className="text-gray-400 text-xs block">Stato</span>{statoBadge(modalDettaglioDdt.stato)}</div>
+              <div className="col-span-2"><span className="text-gray-400 text-xs block">Note</span>{modalDettaglioDdt.note || '—'}</div>
+              <div><span className="text-gray-400 text-xs block">Fattura abbinata</span>{modalDettaglioDdt.fattura_abbinata || '—'}</div>
+            </div>
+
+            <h3 className="text-sm font-medium text-gray-600 mb-2">📦 Voci ({vociDettaglioDdt.length})</h3>
+            {vociDettaglioDdt.length === 0 ? (
+              <p className="text-xs text-gray-400 py-3 text-center border border-dashed rounded-lg">Nessuna voce registrata per questo DDT.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="table-base">
+                  <thead><tr><th>Descrizione</th><th>Macro-categoria</th><th>Categoria costi</th><th>U.M.</th><th>Qtà</th><th>€/unit</th><th>Totale</th></tr></thead>
+                  <tbody>
+                    {vociDettaglioDdt.map((v: any) => (
+                      <tr key={v.id}>
+                        <td className="text-sm">{v.descrizione}</td>
+                        <td className="text-xs text-gray-500">{v.macro_categoria}</td>
+                        <td><span className="text-xs font-medium px-2 py-0.5 rounded-full text-white" style={{ background: CAT_COLORS[mappaCategoriaDdt(v.macro_categoria)] || '#6b7280' }}>{mappaCategoriaDdt(v.macro_categoria)}</span></td>
+                        <td className="text-xs">{v.unita_misura}</td>
+                        <td className="text-xs">{v.quantita}</td>
+                        <td className="text-xs">{euro(v.prezzo_unitario)}</td>
+                        <td className="font-medium text-sm">{euro(v.importo_totale)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
+                  <span className="font-semibold text-sm">Totale: {euro(modalDettaglioDdt.importo)}</span>
+                </div>
+              </div>
+            )}
+            <p className="text-xs text-gray-400 mt-3">Per modificare questo DDT, vai alla pagina DDT / Bolle.</p>
+            <div className="flex justify-end mt-4">
+              <button className="btn" onClick={() => { setModalDettaglioDdt(null); setVociDettaglioDdt([]) }}>Chiudi</button>
+            </div>
           </div>
         </div>
       )}
