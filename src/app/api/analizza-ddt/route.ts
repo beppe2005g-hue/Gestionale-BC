@@ -1,13 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 export const maxDuration = 60
 
-// NOTA: usiamo gemini-2.5-flash invece di gemini-3.5-flash perché quest'ultimo,
-// essendo appena rilasciato (GA dal 19 maggio 2026), condivide un pool di capacità
-// con gli altri modelli Gemini 3.x che si satura facilmente lato Google, causando
-// errori 503 prolungati indipendenti dal piano di fatturazione dell'utente.
-// gemini-2.5-flash è un modello più maturo e stabile. Per tornare al modello più
-// recente in futuro, basta cambiare la stringa qui sotto.
-const GEMINI_MODEL = 'gemini-2.5-flash'
+// Modello Gemini usato per leggere le bolle.
+// Se in futuro 3.5 Flash dovesse di nuovo saturarsi (errori 503 prolungati),
+// si può tornare temporaneamente a 'gemini-2.5-flash' cambiando solo questa riga.
+const GEMINI_MODEL = 'gemini-3.5-flash'
 
 async function callGemini(apiKey: string, body: any, retries = 5): Promise<any> {
   for (let i = 0; i < retries; i++) {
