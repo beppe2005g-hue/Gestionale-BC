@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     })
     const genRes = await callGemini(apiKey, {
       contents: [{ parts }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+      generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
     })
     if (!genRes.ok) {
       const err = await genRes.text()
@@ -54,16 +54,18 @@ export async function POST(req: NextRequest) {
     if (!testo) {
       return NextResponse.json({ error: 'Nessun testo da Gemini' }, { status: 500 })
     }
+    // Gemini a volte avvolge il JSON in un blocco markdown ```json ... ```: lo rimuoviamo prima del parsing.
+    const testoPulito = testo.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()
     let parsed
     try {
-      parsed = JSON.parse(testo)
+      parsed = JSON.parse(testoPulito)
     } catch {
-      const start = testo.indexOf('{')
-      const end = testo.lastIndexOf('}')
+      const start = testoPulito.indexOf('{')
+      const end = testoPulito.lastIndexOf('}')
       if (start === -1 || end === -1) {
         return NextResponse.json({ error: 'Nessun JSON trovato' }, { status: 500 })
       }
-      const jsonStr = testo.slice(start, end + 1)
+      const jsonStr = testoPulito.slice(start, end + 1)
         .replace(/[\x00-\x1F\x7F]/g, ' ')
         .replace(/,\s*\]/g, ']')
         .replace(/,\s*\}/g, '}')
