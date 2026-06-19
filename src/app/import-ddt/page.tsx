@@ -6,6 +6,11 @@ import Sidebar from '@/components/Sidebar'
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const MACRO_CATEGORIE = ['Cementi','Laterizi','Ferro e Acciaio','Legno','Isolanti','Impermeabilizzanti','Inerti e Calcestruzzo','Impianti','Attrezzatura','Noli','Trasporti','Altro']
 
+// Modello Gemini usato per leggere le bolle.
+// Se in futuro 3.5 Flash dovesse di nuovo saturarsi (errori 503 prolungati),
+// si può tornare temporaneamente a 'gemini-2.5-flash' cambiando solo questa riga.
+const GEMINI_MODEL = 'gemini-3.5-flash'
+
 interface VoceDDT {
   descrizione: string; macro_categoria: string; categoria: string
   unita_misura: string; quantita: number; prezzo_unitario: number
@@ -21,6 +26,8 @@ interface BollaDDT {
   stato: 'approvazione' | 'salvato'; nomefile: string
 }
 
+interface FileFallito { nomefile: string; motivo: string; dettaglioTecnico?: string }
+
 export default function ImportDDTV2() {
   const [bolle, setBolle] = useState<BollaDDT[]>([])
   const [bollaAttiva, setBollaAttiva] = useState<string | null>(null)
@@ -29,6 +36,7 @@ export default function ImportDDTV2() {
   const [elaborando, setElaborando] = useState(false)
   const [salvando, setSalvando] = useState(false)
   const [progressoTesto, setProgressoTesto] = useState('')
+  const [fileFalliti, setFileFalliti] = useState<FileFallito[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -47,6 +55,7 @@ export default function ImportDDTV2() {
   async function caricaFile(files: FileList | null) {
     if (!files || elaborando) return
     setElaborando(true)
+    setFileFalliti([])
     for (const file of Array.from(files)) {
       setProgressoTesto(`Analisi di ${file.name}...`)
       try {
@@ -61,7 +70,7 @@ export default function ImportDDTV2() {
         let geminiResponse
         for (let attempt = 0; attempt < 3; attempt++) {
           geminiResponse = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -81,12 +90,23 @@ export default function ImportDDTV2() {
         }
 
         if (!geminiResponse || !geminiResponse.ok) {
-          const err = await geminiResponse?.json()
+          const err = await geminiResponse?.json().catch(() => null)
           throw new Error(`Errore Gemini ${geminiResponse?.status}: ${err?.error?.message || 'errore sconosciuto'}`)
         }
 
         const geminiData = await geminiResponse.json()
         const testo = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || ''
+
+        // Gemini ha risposto ma senza testo utile: spesso succede per blocco di sicurezza,
+        // risposta troncata per instabilità del servizio, o output vuoto.
+        // Prima si falliva qui in silenzio (nessuna bolla aggiunta, nessun avviso visibile).
+        if (!testo) {
+          const finishReason = geminiData.candidates?.[0]?.finishReason || 'sconosciuto'
+          const blockReason = geminiData.promptFeedback?.blockReason || null
+          throw new Error(blockReason
+            ? `Risposta bloccata da Gemini (motivo: ${blockReason})`
+            : `Gemini ha risposto senza contenuto utile (finishReason: ${finishReason}). Possibile instabilità temporanea del servizio.`)
+        }
 
         let parsed: any[]
         try {
@@ -96,40 +116,48 @@ export default function ImportDDTV2() {
           const arrEnd = testo.lastIndexOf(']')
           if (arrStart !== -1 && arrEnd !== -1) {
             try { parsed = JSON.parse(testo.slice(arrStart, arrEnd + 1).replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}')) }
-            catch { parsed = [] }
-          } else { parsed = [] }
+            catch (e2: any) { throw new Error(`JSON malformato nella risposta di Gemini: ${e2.message}. Testo ricevuto: "${testo.slice(0, 200)}..."`) }
+          } else {
+            throw new Error(`Gemini ha risposto con un testo che non contiene JSON riconoscibile: "${testo.slice(0, 200)}..."`)
+          }
         }
 
         const ddtArray = Array.isArray(parsed) ? parsed : [parsed]
-        for (const p of ddtArray) {
-          if (p && !p.skip && p.numero !== undefined) {
-            const nomeAI = p.fornitore_nome || ''
-            const fornitoreIdMatch = trovaFornitoreEsatto(nomeAI)
-            const nuovaBolla: BollaDDT = {
-              id: Math.random().toString(36).slice(2),
-              numero: p.numero || '',
-              data: p.data || new Date().toISOString().split('T')[0],
-              fornitore_nome_ai: nomeAI,
-              fornitore_id: fornitoreIdMatch,
-              fornitore_nome_nuovo: fornitoreIdMatch ? '' : nomeAI,
-              fornitore_piva: p.fornitore_piva || '',
-              voci: (p.voci || []).map((v: any) => ({
-                ...v,
-                quantita: parseFloat(v.quantita) || 0,
-                prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
-                importo_totale: parseFloat(v.importo_totale) || 0,
-                approvata: true
-              })),
-              progetto_id: '', note: '', stato: 'approvazione', nomefile: file.name
-            }
-            setBolle(prev => {
-              if (prev.length === 0) setBollaAttiva(nuovaBolla.id)
-              return [...prev, nuovaBolla]
-            })
+        const ddtValidi = ddtArray.filter(p => p && !p.skip && p.numero !== undefined)
+
+        // Prima, se ddtValidi era vuoto, semplicemente non succedeva nulla: nessuna bolla
+        // aggiunta, nessun avviso. Ora segnaliamo esplicitamente il caso.
+        if (ddtValidi.length === 0) {
+          throw new Error(`Gemini ha risposto ma non ha riconosciuto nessun DDT valido in questo file (${ddtArray.length} elementi ricevuti, tutti scartati o senza numero).`)
+        }
+
+        for (const p of ddtValidi) {
+          const nomeAI = p.fornitore_nome || ''
+          const fornitoreIdMatch = trovaFornitoreEsatto(nomeAI)
+          const nuovaBolla: BollaDDT = {
+            id: Math.random().toString(36).slice(2),
+            numero: p.numero || '',
+            data: p.data || new Date().toISOString().split('T')[0],
+            fornitore_nome_ai: nomeAI,
+            fornitore_id: fornitoreIdMatch,
+            fornitore_nome_nuovo: fornitoreIdMatch ? '' : nomeAI,
+            fornitore_piva: p.fornitore_piva || '',
+            voci: (p.voci || []).map((v: any) => ({
+              ...v,
+              quantita: parseFloat(v.quantita) || 0,
+              prezzo_unitario: parseFloat(v.prezzo_unitario) || 0,
+              importo_totale: parseFloat(v.importo_totale) || 0,
+              approvata: true
+            })),
+            progetto_id: '', note: '', stato: 'approvazione', nomefile: file.name
           }
+          setBolle(prev => {
+            if (prev.length === 0) setBollaAttiva(nuovaBolla.id)
+            return [...prev, nuovaBolla]
+          })
         }
       } catch (e: any) {
-        alert(`Errore su ${file.name}: ${e.message}`)
+        setFileFalliti(prev => [...prev, { nomefile: file.name, motivo: e.message }])
       }
     }
     setElaborando(false)
@@ -246,9 +274,26 @@ export default function ImportDDTV2() {
             <p className="text-sm text-gray-500 mt-0.5">Carica foto o PDF — Gemini AI analizza tutto</p>
           </div>
           {bolle.length > 0 && !elaborando && (
-            <button className="btn" onClick={() => { setBolle([]); setBollaAttiva(null) }}>🗑 Svuota</button>
+            <button className="btn" onClick={() => { setBolle([]); setBollaAttiva(null); setFileFalliti([]) }}>🗑 Svuota</button>
           )}
         </div>
+
+        {fileFalliti.length > 0 && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-red-800">⚠️ {fileFalliti.length} file non analizzati correttamente</p>
+              <button className="text-xs text-red-600 hover:underline" onClick={() => setFileFalliti([])}>Nascondi</button>
+            </div>
+            <div className="space-y-1.5">
+              {fileFalliti.map((f, i) => (
+                <div key={i} className="text-xs text-red-700 bg-white rounded-lg px-3 py-2 border border-red-100">
+                  <strong>{f.nomefile}</strong>: {f.motivo}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-3 gap-4">
           <div className="space-y-3">
             <div className="card border-2 border-dashed border-blue-200 hover:border-blue-400 cursor-pointer text-center py-8"
