@@ -114,7 +114,10 @@ export default function Progetti() {
       // Fatturato = somma fatture da emettere effettivamente emesse
       const fatturato = (fde || []).filter(f => f.progetto_id === proj.id && f.stato === 'Emessa').reduce((s, f) => s + (f.importo_emesso || 0), 0)
       const cosFF = (ff || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
-      const cosDDT = (ddt || []).filter(d => d.progetto_id === proj.id && d.stato === 'Da Fatturare').reduce((s, d) => s + (d.importo || 0), 0)
+      // Tutti i DDT collegati al cantiere sono un costo sostenuto, indipendentemente
+      // dallo stato di fatturazione (Da Fatturare/Fatturato/Parziale) — coerente con
+      // il Registro Costi unificato di Costi Cantiere, che include sempre tutti i DDT.
+      const cosDDT = (ddt || []).filter(d => d.progetto_id === proj.id).reduce((s, d) => s + (d.importo || 0), 0)
       const cos = cosFF + cosDDT
       const margPerc = ric > 0 ? Math.round((ric - cos) / ric * 100) : 0
       const budgetPerc = proj.budget_costi > 0 ? Math.round(cos / proj.budget_costi * 100) : 0
