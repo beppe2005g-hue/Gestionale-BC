@@ -52,10 +52,15 @@ export async function POST(req: NextRequest) {
     const data = await genRes.json()
     const testo = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
     if (!testo) {
-      return NextResponse.json({ parsed: [] })
-    }
-    if (!testo) {
-      return NextResponse.json({ parsed: [] })
+      // Gemini ha risposto ma senza testo utile: spesso succede per blocco di sicurezza,
+      // risposta troncata per instabilità del servizio, o output vuoto. Rendiamo visibile il motivo
+      // invece di restituire silenziosamente un array vuoto.
+      const finishReason = data.candidates?.[0]?.finishReason || 'sconosciuto'
+      const promptFeedback = data.promptFeedback?.blockReason || null
+      const dettaglio = promptFeedback
+        ? `Risposta bloccata da Gemini (motivo: ${promptFeedback}).`
+        : `Gemini ha risposto senza contenuto utile (finishReason: ${finishReason}). Possibile instabilità temporanea del servizio: riprova tra qualche minuto.`
+      return NextResponse.json({ error: dettaglio, parsed: [] }, { status: 200 })
     }
     let parsed
     try {
@@ -71,10 +76,12 @@ export async function POST(req: NextRequest) {
       } else if (objStart !== -1 && objEnd !== -1) {
         jsonStr = `[${testo.slice(objStart, objEnd + 1)}]`
       } else {
-        return NextResponse.json({ parsed: [] })
+        return NextResponse.json({ error: 'Gemini ha risposto con un testo che non contiene JSON riconoscibile.', parsed: [], testoGrezzo: testo.slice(0, 500) }, { status: 200 })
       }
       jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}')
-      try { parsed = JSON.parse(jsonStr) } catch { return NextResponse.json({ parsed: [] }) }
+      try { parsed = JSON.parse(jsonStr) } catch (e3: any) {
+        return NextResponse.json({ error: 'JSON malformato nella risposta di Gemini: ' + e3.message, parsed: [], testoGrezzo: testo.slice(0, 500) }, { status: 200 })
+      }
     }
     const ddtArray = Array.isArray(parsed) ? parsed : [parsed]
     const filtrati = ddtArray.filter((d: any) => !d.skip && d.numero !== undefined)
