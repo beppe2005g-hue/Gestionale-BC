@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
           { text: prompt }
         ]
       }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+      generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
     }
     const genRes = await callGemini(apiKey, genBody)
     if (!genRes.ok) {
@@ -63,24 +63,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: dettaglio, parsed: [] }, { status: 200 })
     }
     let parsed
+    // Gemini a volte avvolge il JSON in un blocco markdown ```json ... ```: lo rimuoviamo prima del parsing.
+    const testoPulito = testo.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()
     try {
-      parsed = JSON.parse(testo)
+      parsed = JSON.parse(testoPulito)
     } catch {
-      const arrStart = testo.indexOf('[')
-      const arrEnd = testo.lastIndexOf(']')
-      const objStart = testo.indexOf('{')
-      const objEnd = testo.lastIndexOf('}')
+      const arrStart = testoPulito.indexOf('[')
+      const arrEnd = testoPulito.lastIndexOf(']')
+      const objStart = testoPulito.indexOf('{')
+      const objEnd = testoPulito.lastIndexOf('}')
       let jsonStr = ''
       if (arrStart !== -1 && arrEnd !== -1) {
-        jsonStr = testo.slice(arrStart, arrEnd + 1)
+        jsonStr = testoPulito.slice(arrStart, arrEnd + 1)
       } else if (objStart !== -1 && objEnd !== -1) {
-        jsonStr = `[${testo.slice(objStart, objEnd + 1)}]`
+        jsonStr = `[${testoPulito.slice(objStart, objEnd + 1)}]`
       } else {
-        return NextResponse.json({ error: 'Gemini ha risposto con un testo che non contiene JSON riconoscibile.', parsed: [], testoGrezzo: testo.slice(0, 500) }, { status: 200 })
+        return NextResponse.json({ error: 'Gemini ha risposto con un testo che non contiene JSON riconoscibile.', parsed: [], testoGrezzo: testoPulito.slice(0, 500) }, { status: 200 })
       }
       jsonStr = jsonStr.replace(/[\x00-\x1F\x7F]/g, ' ').replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}')
       try { parsed = JSON.parse(jsonStr) } catch (e3: any) {
-        return NextResponse.json({ error: 'JSON malformato nella risposta di Gemini: ' + e3.message, parsed: [], testoGrezzo: testo.slice(0, 500) }, { status: 200 })
+        return NextResponse.json({ error: 'JSON malformato nella risposta di Gemini: ' + e3.message, parsed: [], testoGrezzo: testoPulito.slice(0, 500) }, { status: 200 })
       }
     }
     const ddtArray = Array.isArray(parsed) ? parsed : [parsed]
