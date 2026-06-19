@@ -81,7 +81,7 @@ export default function ImportDDTV2() {
                     { text: `DDT italiano. JSON array only. Se prezzo non è sulla stessa riga della quantità metti 0. Non cercare prezzi in altre parti del documento:\n[{"numero":"","data":"YYYY-MM-DD","fornitore_nome":"","fornitore_piva":"","voci":[{"descrizione":"","macro_categoria":"Cementi|Laterizi|Ferro e Acciaio|Legno|Isolanti|Impermeabilizzanti|Inerti e Calcestruzzo|Impianti|Attrezzatura|Noli|Trasporti|Altro","categoria":"","unita_misura":"","quantita":0,"prezzo_unitario":0,"importo_totale":0}]}]` }
                   ]
                 }],
-                generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+                generationConfig: { temperature: 0.1, maxOutputTokens: 8192 }
               })
             }
           )
@@ -109,16 +109,25 @@ export default function ImportDDTV2() {
         }
 
         let parsed: any[]
+        // Gemini a volte avvolge il JSON in un blocco markdown ```json ... ```: lo rimuoviamo prima di tentare il parsing.
+        const testoPulito = testo.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()
         try {
-          parsed = JSON.parse(testo)
+          parsed = JSON.parse(testoPulito)
         } catch {
-          const arrStart = testo.indexOf('[')
-          const arrEnd = testo.lastIndexOf(']')
-          if (arrStart !== -1 && arrEnd !== -1) {
-            try { parsed = JSON.parse(testo.slice(arrStart, arrEnd + 1).replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}')) }
-            catch (e2: any) { throw new Error(`JSON malformato nella risposta di Gemini: ${e2.message}. Testo ricevuto: "${testo.slice(0, 200)}..."`) }
+          const arrStart = testoPulito.indexOf('[')
+          const arrEnd = testoPulito.lastIndexOf(']')
+          if (arrStart !== -1 && arrEnd !== -1 && arrEnd > arrStart) {
+            try { parsed = JSON.parse(testoPulito.slice(arrStart, arrEnd + 1).replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}')) }
+            catch (e2: any) {
+              // Se il testo finisce a metà di una parola/valore, è quasi certamente una risposta troncata
+              // per limite di token di output, non un problema di formato.
+              const sembraTroncato = !testoPulito.trim().endsWith(']') && !testoPulito.trim().endsWith('}')
+              throw new Error(sembraTroncato
+                ? `Risposta di Gemini troncata (probabilmente troppe voci per il limite di lunghezza). Testo ricevuto: "${testoPulito.slice(0, 200)}..."`
+                : `JSON malformato nella risposta di Gemini: ${e2.message}. Testo ricevuto: "${testoPulito.slice(0, 200)}..."`)
+            }
           } else {
-            throw new Error(`Gemini ha risposto con un testo che non contiene JSON riconoscibile: "${testo.slice(0, 200)}..."`)
+            throw new Error(`Gemini ha risposto con un testo che non contiene JSON riconoscibile: "${testoPulito.slice(0, 200)}..."`)
           }
         }
 
