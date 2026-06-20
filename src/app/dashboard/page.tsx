@@ -9,6 +9,24 @@ import {
 
 const euro = (n: number) => '€ ' + Math.round(n).toLocaleString('it-IT')
 
+// Stessa mappatura usata in Costi Cantiere: le macro_categoria merceologiche dei DDT
+// confluiscono nelle categorie di costi_cantiere, per avere un'unica composizione coerente.
+const MAPPA_CATEGORIA_DDT: Record<string, string> = {
+  'Cementi': 'Materiali', 'Laterizi': 'Materiali', 'Ferro e Acciaio': 'Materiali',
+  'Legno': 'Materiali', 'Isolanti': 'Materiali', 'Impermeabilizzanti': 'Materiali',
+  'Inerti e Calcestruzzo': 'Materiali', 'Impianti': 'Attrezzatura',
+  'Attrezzatura': 'Attrezzatura', 'Noli': 'Noli mezzi', 'Trasporti': 'Trasporti', 'Altro': 'Altro',
+}
+function mappaCategoriaDdt(macroCategoria: string): string {
+  return MAPPA_CATEGORIA_DDT[macroCategoria] || 'Materiali'
+}
+
+const CAT_COLORS: Record<string, string> = {
+  'Ore Operai': '#0f766e', 'Materiali': '#1d4ed8', 'Noli mezzi': '#7c3aed',
+  'Manodopera esterna': '#0891b2', 'Subappalto': '#b45309', 'Trasporti': '#059669',
+  'Attrezzatura': '#dc2626', 'Smaltimento': '#9333ea', 'Altro': '#6b7280', 'Personalizzato': '#d97706',
+}
+
 export default function Dashboard() {
   const [kpi, setKpi] = useState({
     saldo: 0, ricavi: 0, costi: 0, margine: 0, ddt_aperti: 0, rate_scadute: 0
@@ -24,17 +42,37 @@ export default function Dashboard() {
 
   async function loadDashboard() {
     const oggi = new Date().toISOString().split('T')[0]
+    const annoCorrente = new Date().getFullYear()
 
-    // KPI
-    const [{ data: fc }, { data: ff }, { data: ddt }, { data: cf }] = await Promise.all([
-      supabase.from('fatture_clienti').select('imponibile,rata1_importo,rata1_stato,rata2_importo,rata2_stato,rata3_importo,rata3_stato,rata1_scadenza,rata2_scadenza,rata3_scadenza'),
+    // ── Dati grezzi da tutte le fonti coinvolte nei calcoli di costo/ricavo ──
+    const [
+      { data: ff }, { data: ddt }, { data: cf }, { data: sal },
+      { data: costiManuali }, { data: ddtVoci }, { data: ffConProgetto },
+    ] = await Promise.all([
       supabase.from('fatture_fornitori').select('imponibile,rata1_importo,rata1_stato,rata2_importo,rata2_stato,rata3_importo,rata3_stato,rata1_scadenza,rata2_scadenza,rata3_scadenza'),
-      supabase.from('ddt').select('importo,stato'),
+      supabase.from('ddt').select('progetto_id,importo,stato,data'),
       supabase.from('cash_flow').select('entrata,uscita'),
+      supabase.from('sal_cantiere').select('progetto_id,importo_lavori,data'),
+      supabase.from('costi_cantiere').select('progetto_id,importo,categoria,data'),
+      supabase.from('ddt_voci').select('macro_categoria,importo_totale,data_ddt'),
+      supabase.from('fatture_fornitori').select('progetto_id,imponibile'),
     ])
 
-    const ricavi = (fc || []).reduce((s: number, r: any) => s + (r.imponibile || 0), 0)
-    const costi = (ff || []).reduce((s: number, r: any) => s + (r.imponibile || 0), 0)
+    // Ricavi YTD = SAL maturati nell'anno corrente (coerente con Progetti e Costi Cantiere)
+    const ricavi = (sal || [])
+      .filter((s: any) => s.data?.startsWith(String(annoCorrente)))
+      .reduce((s: number, r: any) => s + (r.importo_lavori || 0), 0)
+
+    // Costi YTD = fatture fornitori + DDT + costi manuali, tutti dell'anno corrente
+    const costiFF = (ff || []).reduce((s: number, r: any) => s + (r.imponibile || 0), 0)
+    const costiDDT = (ddt || [])
+      .filter((d: any) => d.data?.startsWith(String(annoCorrente)))
+      .reduce((s: number, d: any) => s + (d.importo || 0), 0)
+    const costiManualiYTD = (costiManuali || [])
+      .filter((c: any) => c.data?.startsWith(String(annoCorrente)))
+      .reduce((s: number, c: any) => s + (c.importo || 0), 0)
+    const costi = costiFF + costiDDT + costiManualiYTD
+
     const ddtAperti = (ddt || []).filter((d: any) => d.stato === 'Da Fatturare').reduce((s: number, d: any) => s + (d.importo || 0), 0)
     const saldo = (cf || []).reduce((s: number, m: any) => s + (m.entrata || 0) - (m.uscita || 0), 0)
 
@@ -47,30 +85,39 @@ export default function Dashboard() {
 
     setKpi({ saldo, ricavi, costi, margine: ricavi - costi, ddt_aperti: ddtAperti, rate_scadute: rateScadute })
 
-    // Cantieri con margine
+    // ── Cantieri con margine: stessa logica di Progetti (SAL + tutte le fonti di costo) ──
     const { data: proj } = await supabase.from('progetti').select('id,nome,valore_contratto,stato').eq('stato', 'In Corso').limit(8)
-    if (proj) {
-      const { data: ffProj } = await supabase.from('fatture_fornitori').select('progetto_id,imponibile')
-      const { data: fcProj } = await supabase.from('fatture_clienti').select('progetto_id,imponibile')
+    if (proj && ffConProgetto) {
       const cantieriData = proj.map((p: any) => {
-        const ricP = (fcProj || []).filter((f: any) => f.progetto_id === p.id).reduce((s: number, f: any) => s + (f.imponibile || 0), 0)
-        const cosP = (ffProj || []).filter((f: any) => f.progetto_id === p.id).reduce((s: number, f: any) => s + (f.imponibile || 0), 0)
+        const ricP = (sal || []).filter((s: any) => s.progetto_id === p.id).reduce((s: number, x: any) => s + (x.importo_lavori || 0), 0)
+        const cosFFp = ffConProgetto.filter((f: any) => f.progetto_id === p.id).reduce((s: number, f: any) => s + (f.imponibile || 0), 0)
+        const cosDDTp = (ddt || []).filter((d: any) => d.progetto_id === p.id).reduce((s: number, d: any) => s + (d.importo || 0), 0)
+        const cosManualip = (costiManuali || []).filter((c: any) => c.progetto_id === p.id).reduce((s: number, c: any) => s + (c.importo || 0), 0)
+        const cosP = cosFFp + cosDDTp + cosManualip
         const marg = ricP > 0 ? Math.round((ricP - cosP) / ricP * 100) : 0
         return { nome: p.nome.substring(0, 18), margine: marg, ricavi: ricP, costi: cosP }
       }).sort((a: any, b: any) => b.margine - a.margine)
       setCantieri(cantieriData)
     }
 
-    // Torta costi (mock categorizzato - in prod viene dalle categorie fornitori)
-    setCostiTorta([
-      { name: 'Materiali', value: 42 },
-      { name: 'Subappalti', value: 28 },
-      { name: 'Manodopera', value: 18 },
-      { name: 'Noli', value: 8 },
-      { name: 'Altro', value: 4 },
-    ])
+    // ── Composizione costi reale: costi manuali per categoria + voci DDT mappate sulle stesse categorie ──
+    const totaliCategoria: Record<string, number> = {}
+    ;(costiManuali || []).forEach((c: any) => {
+      const cat = c.categoria || 'Altro'
+      totaliCategoria[cat] = (totaliCategoria[cat] || 0) + (c.importo || 0)
+    })
+    ;(ddtVoci || []).forEach((v: any) => {
+      const cat = mappaCategoriaDdt(v.macro_categoria)
+      totaliCategoria[cat] = (totaliCategoria[cat] || 0) + (v.importo_totale || 0)
+    })
+    const totaleComposizione = Object.values(totaliCategoria).reduce((s, v) => s + v, 0)
+    const torta = Object.entries(totaliCategoria)
+      .filter(([, v]) => v > 0)
+      .map(([name, v]) => ({ name, value: totaleComposizione > 0 ? Math.round(v / totaleComposizione * 100) : 0, importo: v }))
+      .sort((a, b) => b.importo - a.importo)
+    setCostiTorta(torta)
 
-    // Scadenze prossime
+    // ── Scadenze prossime (invariato: riguarda solo i pagamenti fornitori) ──
     const scad: any[] = []
     ;(ff || []).slice(0, 20).forEach((f: any) => {
       ;[
@@ -87,20 +134,25 @@ export default function Dashboard() {
     scad.sort((a, b) => a.gg - b.gg)
     setScadenze(scad.slice(0, 6))
 
-    // Dati mensili ricavi/costi
+    // ── Dati mensili ricavi/costi: ricavi da SAL, costi da fatture_fornitori (come prima per i pagamenti) ──
     const mesi = ['Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic']
-    const anno = new Date().getFullYear()
     const mensileData = mesi.map((m, i) => {
-      const ric = (fc || []).filter((f: any) => f.rata1_scadenza?.startsWith(`${anno}-${String(i+1).padStart(2,'0')}`))
+      const meseStr = `${annoCorrente}-${String(i+1).padStart(2,'0')}`
+      const ric = (sal || []).filter((s: any) => s.data?.startsWith(meseStr))
+        .reduce((s: number, x: any) => s + (x.importo_lavori || 0), 0)
+      const cosFFmese = (ff || []).filter((f: any) => f.rata1_scadenza?.startsWith(meseStr))
         .reduce((s: number, f: any) => s + (f.rata1_importo || 0), 0)
-      const cos = (ff || []).filter((f: any) => f.rata1_scadenza?.startsWith(`${anno}-${String(i+1).padStart(2,'0')}`))
-        .reduce((s: number, f: any) => s + (f.rata1_importo || 0), 0)
+      const cosDDTmese = (ddt || []).filter((d: any) => d.data?.startsWith(meseStr))
+        .reduce((s: number, d: any) => s + (d.importo || 0), 0)
+      const cosManualiMese = (costiManuali || []).filter((c: any) => c.data?.startsWith(meseStr))
+        .reduce((s: number, c: any) => s + (c.importo || 0), 0)
+      const cos = cosFFmese + cosDDTmese + cosManualiMese
       return { mese: m, ricavi: ric, costi: cos, margine: ric - cos }
     })
     setMensile(mensileData)
   }
 
-  const COLORS = ['#A32D2D','#854F0B','#185FA5','#5F5E5A','#B4B2A9']
+  const COLORS = ['#1d4ed8', '#b45309', '#0f766e', '#7c3aed', '#059669', '#dc2626', '#9333ea', '#0891b2', '#6b7280', '#d97706']
 
   const badgeScadenza = (gg: number) => {
     if (gg < 0) return <span className="badge badge-red">Scaduto</span>
@@ -123,7 +175,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-6 gap-3 mb-6">
           {[
             { label: 'Saldo banca', value: euro(kpi.saldo), color: 'text-blue-700' },
-            { label: 'Ricavi YTD', value: euro(kpi.ricavi), color: 'text-green-700' },
+            { label: 'Ricavi YTD (SAL)', value: euro(kpi.ricavi), color: 'text-green-700' },
             { label: 'Costi YTD', value: euro(kpi.costi), color: 'text-red-700' },
             { label: 'Margine', value: euro(kpi.margine), color: kpi.margine >= 0 ? 'text-green-700' : 'text-red-700' },
             { label: 'DDT aperti', value: euro(kpi.ddt_aperti), color: 'text-amber-700' },
@@ -139,7 +191,7 @@ export default function Dashboard() {
         {/* Grafici riga 1 */}
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div className="card">
-            <h3 className="text-sm font-medium text-gray-600 mb-3">Ricavi / Costi / Margine mensile</h3>
+            <h3 className="text-sm font-medium text-gray-600 mb-3">Ricavi (SAL) / Costi / Margine mensile</h3>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={mensile} margin={{ top: 0, right: 0, bottom: 0, left: -10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -155,25 +207,29 @@ export default function Dashboard() {
           </div>
 
           <div className="card">
-            <h3 className="text-sm font-medium text-gray-600 mb-3">Composizione costi</h3>
-            <div className="flex gap-4 items-center">
-              <PieChart width={160} height={160}>
-                <Pie data={costiTorta} cx={75} cy={75} innerRadius={45} outerRadius={70}
-                  dataKey="value" paddingAngle={2}>
-                  {costiTorta.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}
-                </Pie>
-                <Tooltip formatter={(v: number) => v + '%'} />
-              </PieChart>
-              <div className="flex flex-col gap-2">
-                {costiTorta.map((c, i) => (
-                  <div key={c.name} className="flex items-center gap-2 text-xs">
-                    <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: COLORS[i] }}></div>
-                    <span className="text-gray-600">{c.name}</span>
-                    <span className="font-medium text-gray-900 ml-auto">{c.value}%</span>
-                  </div>
-                ))}
+            <h3 className="text-sm font-medium text-gray-600 mb-3">Composizione costi (categorie reali)</h3>
+            {costiTorta.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-12">Nessun costo registrato ancora.</p>
+            ) : (
+              <div className="flex gap-4 items-center">
+                <PieChart width={160} height={160}>
+                  <Pie data={costiTorta} cx={75} cy={75} innerRadius={45} outerRadius={70}
+                    dataKey="value" paddingAngle={2}>
+                    {costiTorta.map((c, i) => <Cell key={c.name} fill={CAT_COLORS[c.name] || COLORS[i % COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip formatter={(v: number, name: string, props: any) => [`${v}% (${euro(props.payload.importo)})`, props.payload.name]} />
+                </PieChart>
+                <div className="flex flex-col gap-2">
+                  {costiTorta.map((c, i) => (
+                    <div key={c.name} className="flex items-center gap-2 text-xs">
+                      <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: CAT_COLORS[c.name] || COLORS[i % COLORS.length] }}></div>
+                      <span className="text-gray-600">{c.name}</span>
+                      <span className="font-medium text-gray-900 ml-auto">{c.value}%</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
