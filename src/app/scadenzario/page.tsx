@@ -58,16 +58,19 @@ export default function Scadenzario() {
   const [loadingIncassare, setLoadingIncassare] = useState(true)
 
   const [loading, setLoading] = useState(true)
+  const [pagamentiClienti, setPagamentiClienti] = useState<any[]>([])
 
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
     setLoadingIncassare(true)
-    const [{ data: ff }, { data: fc }] = await Promise.all([
+    const [{ data: ff }, { data: fc }, { data: pagCli }] = await Promise.all([
       supabase.from('fatture_fornitori').select('id,numero,data,fornitore_nome,progetto_nome,rata1_importo,rata1_scadenza,rata1_stato,rata2_importo,rata2_scadenza,rata2_stato,rata3_importo,rata3_scadenza,rata3_stato'),
       supabase.from('fatture_clienti').select('*').order('cliente_nome').order('data'),
+      supabase.from('pagamenti_clienti').select('fattura_id,rata,importo'),
     ])
+    setPagamentiClienti(pagCli || [])
 
     // ── Costruisce le righe Da Pagare (solo rate non pagate) ──
     const righePagare: RigaPagamento[] = []
@@ -141,23 +144,30 @@ export default function Scadenzario() {
     const righe: RigaIncasso[] = []
     fattureClienti.forEach(f => {
       ;[1, 2, 3].forEach(n => {
-        const imp = f[`rata${n}_importo`]
-        const stato = f[`rata${n}_stato`]
+        const impTotale = f[`rata${n}_importo`]
         const scad = f[`rata${n}_scadenza`]
-        if (imp > 0 && stato !== 'Incassata') {
-          const gg = giorniAllaScadenza(scad)
-          righe.push({
-            fattura_id: f.id, numero: f.numero, data_fattura: f.data,
-            cliente_nome: f.cliente_nome, progetto_nome: f.progetto_nome,
-            rata: n, importo: imp, scadenza: scad, gg,
-            scaduta: gg !== null && gg < 0,
-            mese_key: meseKey(scad), mese_label: meseLabel(scad),
-          })
+        if (impTotale > 0) {
+          // Quanto è già stato effettivamente incassato su questa rata, dai pagamenti registrati
+          // (più affidabile del solo campo "stato", che può restare disallineato su pagamenti parziali)
+          const pagato = pagamentiClienti
+            .filter(p => p.fattura_id === f.id && p.rata === n)
+            .reduce((s, p) => s + (p.importo || 0), 0)
+          const residuo = Math.round((impTotale - pagato) * 100) / 100
+          if (residuo > 0.01) {
+            const gg = giorniAllaScadenza(scad)
+            righe.push({
+              fattura_id: f.id, numero: f.numero, data_fattura: f.data,
+              cliente_nome: f.cliente_nome, progetto_nome: f.progetto_nome,
+              rata: n, importo: residuo, scadenza: scad, gg,
+              scaduta: gg !== null && gg < 0,
+              mese_key: meseKey(scad), mese_label: meseLabel(scad),
+            })
+          }
         }
       })
     })
     return righe
-  }, [fattureClienti])
+  }, [fattureClienti, pagamentiClienti])
 
   const rateIncassareFiltrate = useMemo(() => {
     let r = rateIncassareGrezze
@@ -306,6 +316,24 @@ export default function Scadenzario() {
               <div className="card text-center py-12 text-gray-400">Caricamento...</div>
             ) : (
               <div id="report-incassare">
+                {/* Intestazione formale: compare solo quando si stampa un cliente specifico (filtro attivo) */}
+                {filtroCliente && (
+                  <div className="report-header flex items-start justify-between mb-6 pb-4" style={{ borderBottom: '3px solid #1e3a8a' }}>
+                    <div className="flex items-center gap-4">
+                      <img src="/logo.png" alt="BC General Service" style={{ height: 55, objectFit: 'contain' }} />
+                      <div>
+                        <p style={{ fontSize: 15, fontWeight: 800, color: '#1e3a8a', letterSpacing: 1 }}>BC GENERAL SERVICE</p>
+                        <p style={{ fontSize: 10, color: '#6b7280' }}>Società Consortile a Responsabilità Limitata</p>
+                        <p style={{ fontSize: 10, color: '#6b7280' }}>Via Duca d'Este 7 — 41036 Medolla (MO)</p>
+                        <p style={{ fontSize: 10, color: '#6b7280' }}>P.IVA 03943310361</p>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <p style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>ESTRATTO CONTO</p>
+                      <p style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>Data: <strong>{new Date().toLocaleDateString('it-IT')}</strong></p>
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-3 gap-3 mb-4 print:grid-cols-3">
                   <div className="bg-red-50 rounded-xl p-3 border border-red-100">
                     <p className="text-xs text-red-600 mb-1">⚠️ Scaduto</p>
@@ -461,11 +489,30 @@ export default function Scadenzario() {
             overflow: visible !important;
             height: auto !important;
             max-height: none !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            flex: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+          }
+
+          /* La Sidebar resta nel DOM con visibility:hidden ma il layout flex le riserva
+             comunque spazio fisico, lasciando un vuoto a destra del contenuto stampato.
+             Annullando il flex sul contenitore esterno, il main torna a occupare
+             tutta la larghezza del foglio invece di restare schiacciato a sinistra. */
+          .flex.min-h-screen {
+            display: block !important;
           }
 
           /* Ogni blocco cliente non si spezza a metà tra due pagine */
           div[style*="page-break-inside"] {
             break-inside: avoid !important;
+          }
+
+          /* L'intestazione formale (logo + dati aziendali) non si spezza tra due pagine */
+          .report-header {
+            break-inside: avoid !important;
+            break-after: avoid !important;
           }
 
           .print\\:hidden { display: none !important; }
