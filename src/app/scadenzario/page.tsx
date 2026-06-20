@@ -436,9 +436,38 @@ export default function Scadenzario() {
 
       <style>{`
         @media print {
+          @page { size: A4; margin: 12mm; }
+
           body * { visibility: hidden; }
           #report-incassare, #report-incassare * { visibility: visible; }
-          #report-incassare { position: fixed; top: 0; left: 0; width: 100%; padding: 20px; font-size: 11px; }
+
+          /* IMPORTANTE: nessun position:fixed/absolute qui. Il contenuto deve restare
+             nel flusso normale del documento perché il browser possa impaginarlo
+             correttamente su più pagine. position:fixed ancorava il blocco alla prima
+             pagina e tagliava via tutto ciò che eccedeva quell'altezza. */
+          #report-incassare {
+            position: static !important;
+            width: 100% !important;
+            height: auto !important;
+            max-height: none !important;
+            overflow: visible !important;
+            padding: 0 !important;
+            font-size: 11px;
+          }
+
+          /* Rimuove i vincoli di scroll/altezza di main e dei contenitori genitori,
+             pensati per lo schermo, che altrimenti tagliano il contenuto in stampa */
+          main {
+            overflow: visible !important;
+            height: auto !important;
+            max-height: none !important;
+          }
+
+          /* Ogni blocco cliente non si spezza a metà tra due pagine */
+          div[style*="page-break-inside"] {
+            break-inside: avoid !important;
+          }
+
           .print\\:hidden { display: none !important; }
         }
       `}</style>
