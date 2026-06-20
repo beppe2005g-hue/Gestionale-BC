@@ -102,11 +102,12 @@ export default function Progetti() {
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true),
       supabase.from('utenti').select('id,nome,ruolo,capo_geometra'),
     ])
-    const [{ data: sal }, { data: ff }, { data: ddt }, { data: fde }] = await Promise.all([
+    const [{ data: sal }, { data: ff }, { data: ddt }, { data: fde }, { data: costiManuali }] = await Promise.all([
       supabase.from('sal_cantiere').select('progetto_id,importo_lavori'),
       supabase.from('fatture_fornitori').select('progetto_id,imponibile'),
       supabase.from('ddt').select('progetto_id,importo,stato'),
       supabase.from('fatture_da_emettere').select('progetto_id,stato,importo_emesso'),
+      supabase.from('costi_cantiere').select('progetto_id,importo'),
     ])
     const enhanced = (p || []).map(proj => {
       // Ricavi = totale SAL maturati (lavoro eseguito), non più fatture_clienti
@@ -118,7 +119,12 @@ export default function Progetti() {
       // dallo stato di fatturazione (Da Fatturare/Fatturato/Parziale) — coerente con
       // il Registro Costi unificato di Costi Cantiere, che include sempre tutti i DDT.
       const cosDDT = (ddt || []).filter(d => d.progetto_id === proj.id).reduce((s, d) => s + (d.importo || 0), 0)
-      const cos = cosFF + cosDDT
+      // Costi manuali inseriti da Costi Cantiere (ore operai, noli, manodopera, ecc.):
+      // mancavano del tutto da questo calcolo, causando un disallineamento con il
+      // "Totale costi inseriti" mostrato in Costi Cantiere ogni volta che si usano
+      // costi manuali oltre ai DDT.
+      const cosManuali = (costiManuali || []).filter(c => c.progetto_id === proj.id).reduce((s, c) => s + (c.importo || 0), 0)
+      const cos = cosFF + cosDDT + cosManuali
       const margPerc = ric > 0 ? Math.round((ric - cos) / ric * 100) : 0
       const budgetPerc = proj.budget_costi > 0 ? Math.round(cos / proj.budget_costi * 100) : 0
       const avanzamentoMedio = Math.round(FASI.reduce((s, f) => s + (proj[f.key] || 0), 0) / FASI.length)
