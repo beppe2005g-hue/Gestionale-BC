@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 
@@ -9,23 +9,27 @@ export default function FattureClienti() {
   const [fatture, setFatture] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
   const [progetti, setProgetti] = useState<any[]>([])
-  const [pagamenti, setPagamenti] = useState<any[]>([]) // tutti i pagamenti di tutte le fatture, raggruppati per fattura_id lato client
+  const [pagamenti, setPagamenti] = useState<any[]>([])
   const [modal, setModal] = useState(false)
   const [modalModifica, setModalModifica] = useState<any>(null)
   const [modalDettaglio, setModalDettaglio] = useState<any>(null)
   const [loading, setLoading] = useState(false)
+  const [filtroTipo, setFiltroTipo] = useState('tutti')
 
-  // Form registrazione nuovo pagamento parziale dentro il dettaglio
   const [formPagamento, setFormPagamento] = useState({ rata: 1, importo: '', data_pagamento: '', note: '' })
   const [loadingPagamento, setLoadingPagamento] = useState(false)
 
   const [form, setForm] = useState({
     data: '', numero: '', cliente_id: '', progetto_id: '', descrizione: '',
-    imponibile: '', iva_percentuale: '0',
+    imponibile: '', iva_percentuale: '0', tipo: 'Fattura', fattura_collegata_id: '',
     r1i: '', r1s: '', r2i: '', r2s: '', r3i: '', r3s: '', note: ''
   })
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    window.addEventListener('gestionale:refresh', load)
+    return () => window.removeEventListener('gestionale:refresh', load)
+  }, [])
 
   async function load() {
     const [{ data: f }, { data: c }, { data: p }, { data: pag }] = await Promise.all([
@@ -170,6 +174,7 @@ export default function FattureClienti() {
     const cli = clienti.find(c => c.id === form.cliente_id)
     const prj = progetti.find(p => p.id === form.progetto_id)
     const imp = parseFloat(form.imponibile) || 0
+    const isNotaCredito = form.tipo === 'Nota di credito'
     await supabase.from('fatture_clienti').insert({
       data: form.data || new Date().toISOString().split('T')[0],
       numero: form.numero, cliente_id: form.cliente_id,
@@ -178,12 +183,15 @@ export default function FattureClienti() {
       progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
       descrizione: form.descrizione, imponibile: imp,
       iva_percentuale: parseFloat(form.iva_percentuale) || 0,
-      rata1_importo: parseFloat(form.r1i) || imp,
-      rata1_scadenza: form.r1s || null, rata1_stato: 'Da Incassare',
-      rata2_importo: parseFloat(form.r2i) || 0,
-      rata2_scadenza: form.r2s || null, rata2_stato: form.r2i ? 'Da Incassare' : null,
-      rata3_importo: parseFloat(form.r3i) || 0,
-      rata3_scadenza: form.r3s || null, rata3_stato: form.r3i ? 'Da Incassare' : null,
+      tipo: form.tipo,
+      fattura_collegata_id: form.fattura_collegata_id || null,
+      rata1_importo: isNotaCredito ? 0 : (parseFloat(form.r1i) || imp),
+      rata1_scadenza: isNotaCredito ? null : (form.r1s || null),
+      rata1_stato: isNotaCredito ? null : 'Da Incassare',
+      rata2_importo: isNotaCredito ? 0 : (parseFloat(form.r2i) || 0),
+      rata2_scadenza: isNotaCredito ? null : (form.r2s || null),
+      rata2_stato: isNotaCredito ? null : (form.r2i ? 'Da Incassare' : null),
+      rata3_importo: 0, rata3_scadenza: null, rata3_stato: null,
       note: form.note
     })
     setModal(false); setLoading(false); load()
@@ -195,6 +203,18 @@ export default function FattureClienti() {
     return <span className="badge badge-gray">Da Incassare</span>
   }
 
+  const isNC = (f: any) => f.tipo === 'Nota di credito'
+
+  const fattureFiltrate = useMemo(() => {
+    if (filtroTipo === 'fattura') return fatture.filter(f => !isNC(f))
+    if (filtroTipo === 'nota_credito') return fatture.filter(f => isNC(f))
+    return fatture
+  }, [fatture, filtroTipo])
+
+  const totFatture = fatture.filter(f => !isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
+  const totNC = fatture.filter(f => isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
+  const totNetto = totFatture - totNC
+
   return (
     <div className="flex min-h-screen">
       <Sidebar />
@@ -203,24 +223,66 @@ export default function FattureClienti() {
           <h1 className="text-xl font-semibold">Fatture clienti</h1>
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuova fattura</button>
         </div>
+
+        {/* Filtro tipo + totali netti */}
+        <div className="card mb-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex gap-1">
+              {[
+                { key: 'tutti', label: `Tutti (${fatture.length})` },
+                { key: 'fattura', label: `Solo fatture (${fatture.filter(f => !isNC(f)).length})` },
+                { key: 'nota_credito', label: `Solo NC (${fatture.filter(f => isNC(f)).length})` },
+              ].map(opt => (
+                <button key={opt.key} onClick={() => setFiltroTipo(opt.key)}
+                  className={`btn btn-sm ${filtroTipo === opt.key ? 'btn-primary' : ''}`}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex-1 text-right text-xs text-gray-500 space-x-3">
+              <span>Fatture: <strong>{euro(totFatture)}</strong></span>
+              {totNC > 0 && <span className="text-purple-600">NC: <strong>- {euro(totNC)}</strong></span>}
+              <span className="font-semibold text-gray-800">Netto: <strong>{euro(totNetto)}</strong></span>
+            </div>
+          </div>
+        </div>
+
         <div className="card overflow-x-auto">
           <table className="table-base">
             <thead><tr><th>Data</th><th>N° Fattura</th><th>Cliente</th><th>Cantiere</th><th>Imponibile</th><th>Incassato</th><th>Stato</th><th></th></tr></thead>
             <tbody>
-              {fatture.length === 0 ? (
+              {fattureFiltrate.length === 0 ? (
                 <tr><td colSpan={8} className="text-center text-gray-400 py-8">Nessuna fattura cliente.</td></tr>
-              ) : fatture.map(f => {
-                const incassato = totaleIncassatoFattura(f)
-                const saldata = fatturaSaldata(f)
+              ) : fattureFiltrate.map(f => {
+                const nc = isNC(f)
+                const incassato = nc ? 0 : totaleIncassatoFattura(f)
+                const saldata = nc ? false : fatturaSaldata(f)
+                const collegata = nc && f.fattura_collegata_id ? fatture.find(x => x.id === f.fattura_collegata_id) : null
                 return (
-                  <tr key={f.id} className="cursor-pointer hover:bg-gray-50" onClick={() => apriDettaglio(f)}>
+                  <tr key={f.id} className={`cursor-pointer ${nc ? 'bg-purple-50 hover:bg-purple-100' : 'hover:bg-gray-50'}`}
+                    onClick={() => !nc && apriDettaglio(f)}>
                     <td className="text-xs">{new Date(f.data).toLocaleDateString('it-IT')}</td>
-                    <td className="font-medium text-sm">{f.numero}</td>
+                    <td className="font-medium text-sm">
+                      {f.numero}
+                      {nc && <span className="ml-1 inline-block bg-purple-100 text-purple-700 text-xs px-1.5 py-0.5 rounded font-medium">NC</span>}
+                    </td>
                     <td className="text-sm">{f.cliente_nome}</td>
-                    <td className="text-xs text-gray-500">{f.progetto_nome || '—'}</td>
-                    <td className="font-medium text-sm">{euro(f.imponibile)}</td>
-                    <td className="text-sm">{incassato > 0 ? euro(incassato) : <span className="text-gray-300">—</span>}</td>
-                    <td>{saldata ? <span className="badge badge-green">✓ Saldata</span> : incassato > 0 ? <span className="badge badge-amber">Parziale</span> : <span className="badge badge-gray">Da incassare</span>}</td>
+                    <td className="text-xs text-gray-500">
+                      {f.progetto_nome || '—'}
+                      {collegata && <span className="block text-purple-500 text-xs">→ comp. {collegata.numero}</span>}
+                    </td>
+                    <td className={`font-medium text-sm ${nc ? 'text-purple-700' : ''}`}>
+                      {nc ? '- ' : ''}{euro(f.imponibile)}
+                    </td>
+                    <td className="text-sm">{nc ? <span className="text-gray-300">—</span> : incassato > 0 ? euro(incassato) : <span className="text-gray-300">—</span>}</td>
+                    <td>
+                      {nc
+                        ? <span className="badge" style={{background:'#f3e8ff',color:'#7e22ce'}}>Nota di credito</span>
+                        : saldata ? <span className="badge badge-green">✓ Saldata</span>
+                        : incassato > 0 ? <span className="badge badge-amber">Parziale</span>
+                        : <span className="badge badge-gray">Da incassare</span>
+                      }
+                    </td>
                     <td onClick={e => e.stopPropagation()}>
                       <div className="flex gap-1">
                         <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => setModalModifica({...f})}>✏️</button>
@@ -245,13 +307,29 @@ export default function FattureClienti() {
             </div>
             <div className="bg-blue-50 rounded-lg p-2 mb-3 text-xs text-blue-700">IVA = 0% (Reverse Charge) impostata di default</div>
             <div className="grid grid-cols-2 gap-3">
+              <div><label className="label">Tipo documento *</label>
+                <select className="input" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value, r1i: '', r1s: '', r2i: '', r2s: '', fattura_collegata_id: ''})}>
+                  <option value="Fattura">Fattura</option>
+                  <option value="Nota di credito">Nota di credito</option>
+                </select></div>
               <div><label className="label">Data</label><input className="input" type="date" value={form.data} onChange={e => setForm({...form, data: e.target.value})} /></div>
               <div><label className="label">N° Fattura *</label><input className="input" placeholder="es. FT/2026/001" value={form.numero} onChange={e => setForm({...form, numero: e.target.value})} /></div>
               <div><label className="label">Cliente *</label>
-                <select className="input" value={form.cliente_id} onChange={e => setForm({...form, cliente_id: e.target.value})}>
+                <select className="input" value={form.cliente_id} onChange={e => setForm({...form, cliente_id: e.target.value, fattura_collegata_id: ''})}>
                   <option value="">-- seleziona --</option>
                   {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
                 </select></div>
+              {form.tipo === 'Nota di credito' && (
+                <div className="col-span-2">
+                  <label className="label">Fattura di riferimento (opzionale)</label>
+                  <select className="input" value={form.fattura_collegata_id} onChange={e => setForm({...form, fattura_collegata_id: e.target.value})}>
+                    <option value="">-- nessuna (NC flottante) --</option>
+                    {fatture.filter(f => !isNC(f) && f.cliente_id === form.cliente_id).map(f => (
+                      <option key={f.id} value={f.id}>{f.numero} — {euro(f.imponibile)} — {new Date(f.data).toLocaleDateString('it-IT')}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div><label className="label">Cantiere</label>
                 <select className="input" value={form.progetto_id} onChange={e => setForm({...form, progetto_id: e.target.value})}>
                   <option value="">-- seleziona --</option>
@@ -262,11 +340,15 @@ export default function FattureClienti() {
                 <select className="input" value={form.iva_percentuale} onChange={e => setForm({...form, iva_percentuale: e.target.value})}>
                   <option value="0">0% (RC)</option><option value="22">22%</option><option value="10">10%</option>
                 </select></div>
-              <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate di incasso</div>
-              <div><label className="label">Rata 1 — Importo</label><input className="input" type="number" step="0.01" value={form.r1i} onChange={e => setForm({...form, r1i: e.target.value})} /></div>
-              <div><label className="label">Rata 1 — Scadenza</label><input className="input" type="date" value={form.r1s} onChange={e => setForm({...form, r1s: e.target.value})} /></div>
-              <div><label className="label">Rata 2 (opz.)</label><input className="input" type="number" step="0.01" value={form.r2i} onChange={e => setForm({...form, r2i: e.target.value})} /></div>
-              <div><label className="label">Rata 2 — Scadenza</label><input className="input" type="date" value={form.r2s} onChange={e => setForm({...form, r2s: e.target.value})} /></div>
+              {form.tipo === 'Fattura' && (
+                <>
+                  <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate di incasso</div>
+                  <div><label className="label">Rata 1 — Importo</label><input className="input" type="number" step="0.01" value={form.r1i} onChange={e => setForm({...form, r1i: e.target.value})} /></div>
+                  <div><label className="label">Rata 1 — Scadenza</label><input className="input" type="date" value={form.r1s} onChange={e => setForm({...form, r1s: e.target.value})} /></div>
+                  <div><label className="label">Rata 2 (opz.)</label><input className="input" type="number" step="0.01" value={form.r2i} onChange={e => setForm({...form, r2i: e.target.value})} /></div>
+                  <div><label className="label">Rata 2 — Scadenza</label><input className="input" type="date" value={form.r2s} onChange={e => setForm({...form, r2s: e.target.value})} /></div>
+                </>
+              )}
               <div className="col-span-2"><label className="label">Note</label><input className="input" value={form.note} onChange={e => setForm({...form, note: e.target.value})} /></div>
             </div>
             <div className="flex gap-2 justify-end mt-4">
