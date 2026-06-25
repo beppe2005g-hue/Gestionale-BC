@@ -59,22 +59,33 @@ export default function Scadenzario() {
 
   const [loading, setLoading] = useState(true)
   const [pagamentiClienti, setPagamentiClienti] = useState<any[]>([])
+  const [ncFornitori, setNcFornitori] = useState<any[]>([]) // note di credito fornitori per calcolo saldo netto
+  const [ncClienti, setNcClienti] = useState<any[]>([])     // note di credito clienti per calcolo saldo netto
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    window.addEventListener('gestionale:refresh', load)
+    return () => window.removeEventListener('gestionale:refresh', load)
+  }, [])
 
   async function load() {
     setLoading(true)
     setLoadingIncassare(true)
-    const [{ data: ff }, { data: fc }, { data: pagCli }] = await Promise.all([
-      supabase.from('fatture_fornitori').select('id,numero,data,fornitore_nome,progetto_nome,rata1_importo,rata1_scadenza,rata1_stato,rata2_importo,rata2_scadenza,rata2_stato,rata3_importo,rata3_scadenza,rata3_stato'),
+    const [{ data: ff }, { data: fc }, { data: pagCli }, { data: ncFF }, { data: ncFC }] = await Promise.all([
+      supabase.from('fatture_fornitori').select('id,numero,data,fornitore_nome,progetto_nome,tipo,rata1_importo,rata1_scadenza,rata1_stato,rata2_importo,rata2_scadenza,rata2_stato,rata3_importo,rata3_scadenza,rata3_stato'),
       supabase.from('fatture_clienti').select('*').order('cliente_nome').order('data'),
       supabase.from('pagamenti_clienti').select('fattura_id,rata,importo'),
+      supabase.from('fatture_fornitori').select('fornitore_nome,imponibile').eq('tipo', 'Nota di credito'),
+      supabase.from('fatture_clienti').select('cliente_nome,imponibile').eq('tipo', 'Nota di credito'),
     ])
     setPagamentiClienti(pagCli || [])
+    setNcFornitori(ncFF || [])
+    setNcClienti(ncFC || [])
 
-    // ── Costruisce le righe Da Pagare (solo rate non pagate) ──
+    // ── Costruisce le righe Da Pagare (solo fatture vere, non NC) ──
     const righePagare: RigaPagamento[] = []
     ;(ff || []).forEach((f: any) => {
+      if (f.tipo === 'Nota di credito') return // le NC non sono scadenze da pagare
       ;[1, 2, 3].forEach(n => {
         const imp = f[`rata${n}_importo`]
         const scad = f[`rata${n}_scadenza`]
@@ -91,7 +102,8 @@ export default function Scadenzario() {
     setPagamenti(righePagare)
     setLoading(false)
 
-    setFattureClienti(fc || [])
+    // ── Esclude le NC dalle fatture clienti (non sono rate da incassare) ──
+    setFattureClienti((fc || []).filter((f: any) => f.tipo !== 'Nota di credito'))
     setLoadingIncassare(false)
   }
 
@@ -129,6 +141,11 @@ export default function Scadenzario() {
   const totalePagare = pagamentiFiltrati.reduce((s, r) => s + r.importo, 0)
   const scadutoPagare = pagamentiFiltrati.filter(r => r.gg !== null && r.gg < 0).reduce((s, r) => s + r.importo, 0)
   const scadutoOltre30Pagare = pagamentiFiltrati.filter(r => r.gg !== null && r.gg < -30).reduce((s, r) => s + r.importo, 0)
+  // NC fornitori: scalate dal totale da pagare per mostrare il saldo netto reale
+  const totaleNcFornitori = ncFornitori
+    .filter(nc => !cercaFornitore || nc.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase()))
+    .reduce((s, nc) => s + (nc.imponibile || 0), 0)
+  const totalePagareNetto = Math.max(0, totalePagare - totaleNcFornitori)
 
   function badgeGiorni(gg: number | null) {
     if (gg === null) return <span className="text-xs text-gray-400">—</span>
@@ -193,6 +210,11 @@ export default function Scadenzario() {
   const totaleIncassare = rateIncassareFiltrate.reduce((s, r) => s + r.importo, 0)
   const scadutoIncassare = rateIncassareFiltrate.filter(r => r.scaduta).reduce((s, r) => s + r.importo, 0)
   const scadutoOltre30Incassare = rateIncassareFiltrate.filter(r => r.gg !== null && r.gg < -30).reduce((s, r) => s + r.importo, 0)
+  // NC clienti: scalate dal totale da incassare per mostrare il saldo netto reale
+  const totaleNcClienti = ncClienti
+    .filter(nc => !filtroCliente || nc.cliente_nome?.toLowerCase().includes(filtroCliente.toLowerCase()))
+    .reduce((s, nc) => s + (nc.imponibile || 0), 0)
+  const totaleIncassareNetto = Math.max(0, totaleIncassare - totaleNcClienti)
 
   function stampaIncassare() { window.print() }
 
@@ -230,7 +252,10 @@ export default function Scadenzario() {
               </div>
               <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
                 <p className="text-xs text-amber-600 mb-1">📄 Totale da pagare</p>
-                <p className="text-lg font-bold text-amber-800">{euro(totalePagare)}</p>
+                <p className="text-lg font-bold text-amber-800">{euro(totalePagareNetto)}</p>
+                {totaleNcFornitori > 0 && (
+                  <p className="text-xs text-purple-600 mt-0.5">NC: - {euro(totaleNcFornitori)}</p>
+                )}
               </div>
             </div>
 
@@ -346,7 +371,10 @@ export default function Scadenzario() {
                   </div>
                   <div className="bg-blue-50 rounded-xl p-3 border border-blue-100">
                     <p className="text-xs text-blue-600 mb-1">🧾 Totale da incassare</p>
-                    <p className="text-lg font-bold text-blue-800">{euro(totaleIncassare)}</p>
+                    <p className="text-lg font-bold text-blue-800">{euro(totaleIncassareNetto)}</p>
+                    {totaleNcClienti > 0 && (
+                      <p className="text-xs text-purple-600 mt-0.5">NC: - {euro(totaleNcClienti)}</p>
+                    )}
                     <p className="text-xs text-blue-500 mt-0.5">{perCliente.length} clienti</p>
                   </div>
                 </div>
