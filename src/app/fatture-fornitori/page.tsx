@@ -49,6 +49,7 @@ export default function FattureFornitori() {
   const [ricerca, setRicerca] = useState('')
   const [filtroStato, setFiltroStato] = useState('tutti')
   const [ordinamento, setOrdinamento] = useState('data_desc')
+  const [filtroTipo, setFiltroTipo] = useState('tutti') // tutti / fattura / nota_credito
   const [dataDA, setDataDA] = useState('')
   const [dataA, setDataA] = useState('')
   const [importoDA, setImportoDA] = useState('')
@@ -56,7 +57,7 @@ export default function FattureFornitori() {
 
   const [form, setForm] = useState({
     data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '',
-    imponibile: '', iva_percentuale: '22',
+    imponibile: '', iva_percentuale: '22', tipo: 'Fattura', fattura_collegata_id: '',
     r1i: '', r1s: '', r2i: '', r2s: '', r3i: '', r3s: '',
     modalita_pagamento: 'Bonifico', note: ''
   })
@@ -108,9 +109,12 @@ export default function FattureFornitori() {
 
         const data = excelDateToISO(row[0])
         const numero = String(row[1] || '').trim()
+        const tipoExcel = String(row[2] || '').toLowerCase().trim() // Colonna C: Tipo
         const fornitoreNome = String(row[3] || '').trim()
         const piva = String(row[8] || '').trim()
         const nettoAPagare = parseFloat(String(row[11]).replace(',', '.')) || 0
+        // Riconosce le Note di credito dalla colonna Tipo dell'export QuifatturA
+        const isNotaCredito = tipoExcel.includes('nota') || tipoExcel.includes('credito')
 
         if (!numero || !fornitoreNome) continue
 
@@ -143,7 +147,11 @@ export default function FattureFornitori() {
           numero, fornitore_id: fornitoreId, fornitore_nome: fornitoreNomeDB,
           progetto_id: null, progetto_nome: '', descrizione: '',
           imponibile: nettoAPagare, iva_percentuale: 22,
-          rata1_importo: nettoAPagare, rata1_scadenza: null, rata1_stato: 'Da Pagare',
+          tipo: isNotaCredito ? 'Nota di credito' : 'Fattura',
+          fattura_collegata_id: null,
+          rata1_importo: isNotaCredito ? 0 : nettoAPagare,
+          rata1_scadenza: null,
+          rata1_stato: isNotaCredito ? null : 'Da Pagare',
           rata2_importo: 0, rata2_scadenza: null, rata2_stato: null,
           rata3_importo: 0, rata3_scadenza: null, rata3_stato: null,
           modalita_pagamento: 'Bonifico', note: ''
@@ -160,10 +168,12 @@ export default function FattureFornitori() {
     setImportando(false)
   }
 
-  const haFiltri = ricerca || filtroStato !== 'tutti' || dataDA || dataA || importoDA || importoA
+  const isNC = (f: any) => f.tipo === 'Nota di credito'
+
+  const haFiltri = ricerca || filtroStato !== 'tutti' || filtroTipo !== 'tutti' || dataDA || dataA || importoDA || importoA
 
   function resetFiltri() {
-    setRicerca(''); setFiltroStato('tutti')
+    setRicerca(''); setFiltroStato('tutti'); setFiltroTipo('tutti')
     setDataDA(''); setDataA(''); setImportoDA(''); setImportoA('')
   }
 
@@ -177,7 +187,9 @@ export default function FattureFornitori() {
         f.progetto_nome?.toLowerCase().includes(q)
       )
     }
-    if (filtroStato !== 'tutti') result = result.filter(f => statoFattura(f) === filtroStato)
+    if (filtroTipo === 'fattura') result = result.filter(f => !isNC(f))
+    if (filtroTipo === 'nota_credito') result = result.filter(f => isNC(f))
+    if (filtroStato !== 'tutti') result = result.filter(f => !isNC(f) && statoFattura(f) === filtroStato)
     if (dataDA) result = result.filter(f => f.data >= dataDA)
     if (dataA) result = result.filter(f => f.data <= dataA)
     if (importoDA) result = result.filter(f => (f.imponibile || 0) >= parseFloat(importoDA))
@@ -190,9 +202,11 @@ export default function FattureFornitori() {
       return 0
     })
     return result
-  }, [fatture, ricerca, filtroStato, ordinamento, dataDA, dataA, importoDA, importoA])
+  }, [fatture, ricerca, filtroStato, filtroTipo, ordinamento, dataDA, dataA, importoDA, importoA])
 
-  const totaleFiltratoImponibile = fattureFiltrate.reduce((s, f) => s + (f.imponibile || 0), 0)
+  const totFatture = fattureFiltrate.filter(f => !isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
+  const totNC = fattureFiltrate.filter(f => isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
+  const totNetto = totFatture - totNC
 
   async function pagaRata(id: string, rata: number) {
     const { data: fatt } = await supabase.from('fatture_fornitori').select('*').eq('id', id).single()
@@ -240,6 +254,8 @@ export default function FattureFornitori() {
     await supabase.from('fatture_fornitori').update({
       data: modalModifica.data, numero: modalModifica.numero,
       descrizione: modalModifica.descrizione,
+      tipo: modalModifica.tipo || 'Fattura',
+      fattura_collegata_id: modalModifica.fattura_collegata_id || null,
       progetto_id: modalModifica.progetto_id || null,
       progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : (modalModifica.progetto_nome || ''),
       imponibile: parseFloat(modalModifica.imponibile) || 0,
@@ -252,7 +268,7 @@ export default function FattureFornitori() {
       rata3_scadenza: modalModifica.rata3_scadenza || null,
       modalita_pagamento: modalModifica.modalita_pagamento, note: modalModifica.note
     }).eq('id', modalModifica.id)
-    await logActivity('modifica', 'fatture_fornitori', modalModifica.id, `Fattura ${modalModifica.numero} — ${modalModifica.fornitore_nome} · € ${modalModifica.imponibile}`)
+    await logActivity('modifica', 'fatture_fornitori', modalModifica.id, `${modalModifica.tipo || 'Fattura'} ${modalModifica.numero} — ${modalModifica.fornitore_nome} · € ${modalModifica.imponibile}`)
     setModalModifica(null); setLoading(false); load()
   }
 
@@ -269,6 +285,7 @@ export default function FattureFornitori() {
     const for_ = fornitori.find(f => f.id === form.fornitore_id)
     const prj = progetti.find(p => p.id === form.progetto_id)
     const imp = parseFloat(form.imponibile) || 0
+    const isNotaCredito = form.tipo === 'Nota di credito'
     const { data: inserted } = await supabase.from('fatture_fornitori').insert({
       data: form.data || new Date().toISOString().split('T')[0],
       numero: form.numero, fornitore_id: form.fornitore_id,
@@ -277,15 +294,21 @@ export default function FattureFornitori() {
       progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
       descrizione: form.descrizione, imponibile: imp,
       iva_percentuale: parseFloat(form.iva_percentuale) || 22,
-      rata1_importo: parseFloat(form.r1i) || imp * (1 + parseFloat(form.iva_percentuale) / 100),
-      rata1_scadenza: form.r1s || null, rata1_stato: 'Da Pagare',
-      rata2_importo: parseFloat(form.r2i) || 0,
-      rata2_scadenza: form.r2s || null, rata2_stato: form.r2i ? 'Da Pagare' : null,
-      rata3_importo: parseFloat(form.r3i) || 0,
-      rata3_scadenza: form.r3s || null, rata3_stato: form.r3i ? 'Da Pagare' : null,
+      tipo: form.tipo,
+      fattura_collegata_id: form.fattura_collegata_id || null,
+      // Le NC non hanno rate — importo 0 su tutto
+      rata1_importo: isNotaCredito ? 0 : (parseFloat(form.r1i) || imp * (1 + parseFloat(form.iva_percentuale) / 100)),
+      rata1_scadenza: isNotaCredito ? null : (form.r1s || null),
+      rata1_stato: isNotaCredito ? null : 'Da Pagare',
+      rata2_importo: isNotaCredito ? 0 : (parseFloat(form.r2i) || 0),
+      rata2_scadenza: isNotaCredito ? null : (form.r2s || null),
+      rata2_stato: isNotaCredito ? null : (form.r2i ? 'Da Pagare' : null),
+      rata3_importo: isNotaCredito ? 0 : (parseFloat(form.r3i) || 0),
+      rata3_scadenza: isNotaCredito ? null : (form.r3s || null),
+      rata3_stato: isNotaCredito ? null : (form.r3i ? 'Da Pagare' : null),
       modalita_pagamento: form.modalita_pagamento, note: form.note
     }).select('id').single()
-    await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `Fattura ${form.numero} — ${for_?.ragione_sociale} · € ${imp}`)
+    await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `${form.tipo} ${form.numero} — ${for_?.ragione_sociale} · € ${imp}`)
     setModal(false); setLoading(false); load()
   }
 
@@ -311,12 +334,20 @@ export default function FattureFornitori() {
                 value={ricerca} onChange={e => setRicerca(e.target.value)} />
             </div>
             <div>
+              <label className="label">Tipo documento</label>
+              <select className="input" value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}>
+                <option value="tutti">Tutti ({fatture.length})</option>
+                <option value="fattura">Solo fatture ({fatture.filter(f => !isNC(f)).length})</option>
+                <option value="nota_credito">Solo NC ({fatture.filter(f => isNC(f)).length})</option>
+              </select>
+            </div>
+            <div>
               <label className="label">Stato pagamento</label>
               <select className="input" value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
-                <option value="tutti">Tutti ({fatture.length})</option>
-                <option value="da_pagare">Da pagare ({fatture.filter(f => statoFattura(f) === 'da_pagare').length})</option>
-                <option value="parziale">Parziale ({fatture.filter(f => statoFattura(f) === 'parziale').length})</option>
-                <option value="pagata">Pagate ({fatture.filter(f => statoFattura(f) === 'pagata').length})</option>
+                <option value="tutti">Tutti</option>
+                <option value="da_pagare">Da pagare</option>
+                <option value="parziale">Parziale</option>
+                <option value="pagata">Pagate</option>
               </select>
             </div>
             <div>
@@ -335,7 +366,12 @@ export default function FattureFornitori() {
           </div>
           {haFiltri && (
             <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
-              <span className="text-xs text-gray-500">{fattureFiltrate.length} fatture — Totale imponibile: <strong>{euro(totaleFiltratoImponibile)}</strong></span>
+              <div className="text-xs text-gray-500 space-x-3">
+                <span>{fattureFiltrate.length} documenti</span>
+                <span>Fatture: <strong>{euro(totFatture)}</strong></span>
+                {totNC > 0 && <span className="text-purple-600">NC: <strong>- {euro(totNC)}</strong></span>}
+                <span className="font-semibold text-gray-800">Netto: <strong>{euro(totNetto)}</strong></span>
+              </div>
               <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">× Azzera filtri</button>
             </div>
           )}
@@ -354,19 +390,35 @@ export default function FattureFornitori() {
                 </td></tr>
               ) : fattureFiltrate.map(f => {
                 const stato = statoFattura(f)
+                const nc = isNC(f)
+                const collegata = nc && f.fattura_collegata_id ? fatture.find(x => x.id === f.fattura_collegata_id) : null
                 return (
-                  <tr key={f.id} className={stato === 'pagata' ? 'opacity-60' : ''}>
+                  <tr key={f.id} className={nc ? 'bg-purple-50' : stato === 'pagata' ? 'opacity-60' : ''}>
                     <td className="text-xs">{new Date(f.data).toLocaleDateString('it-IT')}</td>
-                    <td className="font-medium text-sm">{f.numero}</td>
-                    <td className="text-sm">{f.fornitore_nome}</td>
-                    <td className="text-xs text-gray-500">{f.progetto_nome || '—'}</td>
-                    <td className="text-sm">{euro(f.imponibile)}</td>
                     <td className="font-medium text-sm">
-                      {euro(f.totale)}
-                      {stato === 'pagata' && <span className="ml-1 text-xs text-green-600">✓</span>}
-                      {stato === 'parziale' && <span className="ml-1 text-xs text-amber-600">½</span>}
+                      {f.numero}
+                      {nc && <span className="ml-1 inline-block bg-purple-100 text-purple-700 text-xs px-1.5 py-0.5 rounded font-medium">NC</span>}
                     </td>
-                    {[1,2,3].map(n => (
+                    <td className="text-sm">{f.fornitore_nome}</td>
+                    <td className="text-xs text-gray-500">
+                      {f.progetto_nome || '—'}
+                      {collegata && <span className="block text-purple-500 text-xs">→ comp. {collegata.numero}</span>}
+                    </td>
+                    <td className={`text-sm font-medium ${nc ? 'text-purple-700' : ''}`}>
+                      {nc ? '- ' : ''}{euro(f.imponibile)}
+                    </td>
+                    <td className="font-medium text-sm">
+                      {nc ? <span className="text-purple-600 text-xs">—</span> : (
+                        <>
+                          {euro(f.totale)}
+                          {stato === 'pagata' && <span className="ml-1 text-xs text-green-600">✓</span>}
+                          {stato === 'parziale' && <span className="ml-1 text-xs text-amber-600">½</span>}
+                        </>
+                      )}
+                    </td>
+                    {nc ? (
+                      <td colSpan={3} className="text-xs text-purple-400 text-center">Nota di credito — nessuna rata</td>
+                    ) : [1,2,3].map(n => (
                       <td key={n}>
                         {f[`rata${n}_importo`] > 0 ? (
                           <div className="text-xs">
@@ -469,13 +521,29 @@ export default function FattureFornitori() {
               <button onClick={() => setModal(false)} className="text-gray-400 text-xl">×</button>
             </div>
             <div className="grid grid-cols-2 gap-3">
+              <div><label className="label">Tipo documento *</label>
+                <select className="input" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value, r1i: '', r1s: '', r2i: '', r2s: '', r3i: '', r3s: ''})}>
+                  <option value="Fattura">Fattura</option>
+                  <option value="Nota di credito">Nota di credito</option>
+                </select></div>
               <div><label className="label">Data fattura</label><input className="input" type="date" value={form.data} onChange={e => setForm({...form, data: e.target.value})} /></div>
               <div><label className="label">N° Fattura *</label><input className="input" placeholder="es. FF/2026/018" value={form.numero} onChange={e => setForm({...form, numero: e.target.value})} /></div>
               <div><label className="label">Fornitore *</label>
-                <select className="input" value={form.fornitore_id} onChange={e => setForm({...form, fornitore_id: e.target.value})}>
+                <select className="input" value={form.fornitore_id} onChange={e => setForm({...form, fornitore_id: e.target.value, fattura_collegata_id: ''})}>
                   <option value="">-- seleziona --</option>
                   {fornitori.map(f => <option key={f.id} value={f.id}>{f.ragione_sociale}</option>)}
                 </select></div>
+              {form.tipo === 'Nota di credito' && (
+                <div className="col-span-2">
+                  <label className="label">Fattura di riferimento (opzionale)</label>
+                  <select className="input" value={form.fattura_collegata_id} onChange={e => setForm({...form, fattura_collegata_id: e.target.value})}>
+                    <option value="">-- nessuna (NC flottante) --</option>
+                    {fatture.filter(f => !isNC(f) && f.fornitore_id === form.fornitore_id).map(f => (
+                      <option key={f.id} value={f.id}>{f.numero} — {euro(f.imponibile)} — {new Date(f.data).toLocaleDateString('it-IT')}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div><label className="label">Cantiere</label>
                 <select className="input" value={form.progetto_id} onChange={e => setForm({...form, progetto_id: e.target.value})}>
                   <option value="">-- seleziona --</option>
@@ -486,13 +554,17 @@ export default function FattureFornitori() {
                 <select className="input" value={form.iva_percentuale} onChange={e => setForm({...form, iva_percentuale: e.target.value})}>
                   <option value="22">22%</option><option value="10">10%</option><option value="0">0% (RC)</option>
                 </select></div>
-              <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate di pagamento</div>
-              <div><label className="label">Rata 1 — Importo</label><input className="input" type="number" step="0.01" value={form.r1i} onChange={e => setForm({...form, r1i: e.target.value})} /></div>
-              <div><label className="label">Rata 1 — Scadenza</label><input className="input" type="date" value={form.r1s} onChange={e => setForm({...form, r1s: e.target.value})} /></div>
-              <div><label className="label">Rata 2 (opz.)</label><input className="input" type="number" step="0.01" value={form.r2i} onChange={e => setForm({...form, r2i: e.target.value})} /></div>
-              <div><label className="label">Rata 2 — Scadenza</label><input className="input" type="date" value={form.r2s} onChange={e => setForm({...form, r2s: e.target.value})} /></div>
-              <div><label className="label">Rata 3 (opz.)</label><input className="input" type="number" step="0.01" value={form.r3i} onChange={e => setForm({...form, r3i: e.target.value})} /></div>
-              <div><label className="label">Rata 3 — Scadenza</label><input className="input" type="date" value={form.r3s} onChange={e => setForm({...form, r3s: e.target.value})} /></div>
+              {form.tipo === 'Fattura' && (
+                <>
+                  <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate di pagamento</div>
+                  <div><label className="label">Rata 1 — Importo</label><input className="input" type="number" step="0.01" value={form.r1i} onChange={e => setForm({...form, r1i: e.target.value})} /></div>
+                  <div><label className="label">Rata 1 — Scadenza</label><input className="input" type="date" value={form.r1s} onChange={e => setForm({...form, r1s: e.target.value})} /></div>
+                  <div><label className="label">Rata 2 (opz.)</label><input className="input" type="number" step="0.01" value={form.r2i} onChange={e => setForm({...form, r2i: e.target.value})} /></div>
+                  <div><label className="label">Rata 2 — Scadenza</label><input className="input" type="date" value={form.r2s} onChange={e => setForm({...form, r2s: e.target.value})} /></div>
+                  <div><label className="label">Rata 3 (opz.)</label><input className="input" type="number" step="0.01" value={form.r3i} onChange={e => setForm({...form, r3i: e.target.value})} /></div>
+                  <div><label className="label">Rata 3 — Scadenza</label><input className="input" type="date" value={form.r3s} onChange={e => setForm({...form, r3s: e.target.value})} /></div>
+                </>
+              )}
               <div className="col-span-2"><label className="label">Note</label><input className="input" value={form.note} onChange={e => setForm({...form, note: e.target.value})} /></div>
             </div>
             <div className="flex gap-2 justify-end mt-4">
@@ -512,8 +584,24 @@ export default function FattureFornitori() {
               <button onClick={() => setModalModifica(null)} className="text-gray-400 text-xl">×</button>
             </div>
             <div className="grid grid-cols-2 gap-3">
+              <div><label className="label">Tipo documento</label>
+                <select className="input" value={modalModifica.tipo || 'Fattura'} onChange={e => setModalModifica({...modalModifica, tipo: e.target.value})}>
+                  <option value="Fattura">Fattura</option>
+                  <option value="Nota di credito">Nota di credito</option>
+                </select></div>
               <div><label className="label">Data</label><input className="input" type="date" value={modalModifica.data} onChange={e => setModalModifica({...modalModifica, data: e.target.value})} /></div>
               <div><label className="label">N° Fattura</label><input className="input" value={modalModifica.numero} onChange={e => setModalModifica({...modalModifica, numero: e.target.value})} /></div>
+              {(modalModifica.tipo || 'Fattura') === 'Nota di credito' && (
+                <div className="col-span-2">
+                  <label className="label">Fattura di riferimento (opzionale)</label>
+                  <select className="input" value={modalModifica.fattura_collegata_id || ''} onChange={e => setModalModifica({...modalModifica, fattura_collegata_id: e.target.value || null})}>
+                    <option value="">-- nessuna (NC flottante) --</option>
+                    {fatture.filter(f => !isNC(f) && f.fornitore_id === modalModifica.fornitore_id).map(f => (
+                      <option key={f.id} value={f.id}>{f.numero} — {euro(f.imponibile)} — {new Date(f.data).toLocaleDateString('it-IT')}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div><label className="label">Cantiere</label>
                 <select className="input" value={modalModifica.progetto_id || ''} onChange={e => {
                   const prj = progetti.find(p => p.id === e.target.value)
@@ -527,13 +615,17 @@ export default function FattureFornitori() {
                 <select className="input" value={modalModifica.iva_percentuale} onChange={e => setModalModifica({...modalModifica, iva_percentuale: e.target.value})}>
                   <option value="22">22%</option><option value="10">10%</option><option value="0">0% (RC)</option>
                 </select></div>
-              <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate</div>
-              <div><label className="label">Rata 1 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata1_importo || ''} onChange={e => setModalModifica({...modalModifica, rata1_importo: e.target.value})} /></div>
-              <div><label className="label">Rata 1 — Scadenza</label><input className="input" type="date" value={modalModifica.rata1_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata1_scadenza: e.target.value})} /></div>
-              <div><label className="label">Rata 2 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata2_importo || ''} onChange={e => setModalModifica({...modalModifica, rata2_importo: e.target.value})} /></div>
-              <div><label className="label">Rata 2 — Scadenza</label><input className="input" type="date" value={modalModifica.rata2_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata2_scadenza: e.target.value})} /></div>
-              <div><label className="label">Rata 3 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata3_importo || ''} onChange={e => setModalModifica({...modalModifica, rata3_importo: e.target.value})} /></div>
-              <div><label className="label">Rata 3 — Scadenza</label><input className="input" type="date" value={modalModifica.rata3_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata3_scadenza: e.target.value})} /></div>
+              {(modalModifica.tipo || 'Fattura') === 'Fattura' && (
+                <>
+                  <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate</div>
+                  <div><label className="label">Rata 1 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata1_importo || ''} onChange={e => setModalModifica({...modalModifica, rata1_importo: e.target.value})} /></div>
+                  <div><label className="label">Rata 1 — Scadenza</label><input className="input" type="date" value={modalModifica.rata1_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata1_scadenza: e.target.value})} /></div>
+                  <div><label className="label">Rata 2 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata2_importo || ''} onChange={e => setModalModifica({...modalModifica, rata2_importo: e.target.value})} /></div>
+                  <div><label className="label">Rata 2 — Scadenza</label><input className="input" type="date" value={modalModifica.rata2_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata2_scadenza: e.target.value})} /></div>
+                  <div><label className="label">Rata 3 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata3_importo || ''} onChange={e => setModalModifica({...modalModifica, rata3_importo: e.target.value})} /></div>
+                  <div><label className="label">Rata 3 — Scadenza</label><input className="input" type="date" value={modalModifica.rata3_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata3_scadenza: e.target.value})} /></div>
+                </>
+              )}
               <div className="col-span-2"><label className="label">Note</label><input className="input" value={modalModifica.note || ''} onChange={e => setModalModifica({...modalModifica, note: e.target.value})} /></div>
             </div>
             <div className="flex gap-2 justify-end mt-4">
