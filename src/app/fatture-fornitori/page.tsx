@@ -1,10 +1,26 @@
 'use client'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import { logActivity } from '@/lib/logActivity'
+import * as XLSX from 'xlsx'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+// Le date nell'Excel di QuifatturA sono numeri seriali Excel (es. 46194 = 12/06/2026)
+function excelDateToISO(v: any): string {
+  if (!v) return ''
+  if (typeof v === 'string' && v.match(/^\d{4}-\d{2}-\d{2}$/)) return v
+  if (typeof v === 'string' && v.includes('/')) {
+    const [d, m, y] = v.split('/')
+    return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`
+  }
+  if (typeof v === 'number') {
+    const ms = (v - 25569) * 86400 * 1000
+    return new Date(ms).toISOString().split('T')[0]
+  }
+  return String(v)
+}
 
 function statoFattura(f: any): 'pagata' | 'parziale' | 'da_pagare' {
   const rate = [
@@ -25,6 +41,11 @@ export default function FattureFornitori() {
   const [modalModifica, setModalModifica] = useState<any>(null)
   const [loading, setLoading] = useState(false)
 
+  const [modalImport, setModalImport] = useState(false)
+  const [importando, setImportando] = useState(false)
+  const [esitoImport, setEsitoImport] = useState<{ inserite: number; scartate: number; errori: string[] } | null>(null)
+  const inputImportRef = useRef<HTMLInputElement>(null)
+
   const [ricerca, setRicerca] = useState('')
   const [filtroStato, setFiltroStato] = useState('tutti')
   const [ordinamento, setOrdinamento] = useState('data_desc')
@@ -40,12 +61,16 @@ export default function FattureFornitori() {
     modalita_pagamento: 'Bonifico', note: ''
   })
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    window.addEventListener('gestionale:refresh', load)
+    return () => window.removeEventListener('gestionale:refresh', load)
+  }, [])
 
   async function load() {
     const [{ data: f }, { data: fo }, { data: p }] = await Promise.all([
       supabase.from('fatture_fornitori').select('*').order('data', { ascending: false }),
-      supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true),
+      supabase.from('fornitori').select('id,ragione_sociale,cf_piva').eq('attivo', true),
       supabase.from('progetti').select('id,codice,nome'),
     ])
     setFatture(f || [])
@@ -53,12 +78,93 @@ export default function FattureFornitori() {
     setProgetti(p || [])
   }
 
+  async function importaExcel(file: File) {
+    setImportando(true)
+    setEsitoImport(null)
+    try {
+      const buffer = await file.arrayBuffer()
+      const wb = XLSX.read(buffer, { type: 'array' })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+
+      // Trova riga di intestazione (quella con "Data" in colonna A)
+      let headerRow = -1
+      for (let i = 0; i < Math.min(rows.length, 10); i++) {
+        if (String(rows[i][0]).toLowerCase().trim() === 'data') { headerRow = i; break }
+      }
+      const dataStart = headerRow >= 0 ? headerRow + 1 : 5
+
+      let inserite = 0
+      let scartate = 0
+      const errori: string[] = []
+
+      // Carica lista fornitori aggiornata per abbinamento
+      const { data: fornitoriDB } = await supabase.from('fornitori').select('id,ragione_sociale,cf_piva').eq('attivo', true)
+      const fornitoriLista: any[] = fornitoriDB || []
+
+      for (let i = dataStart; i < rows.length; i++) {
+        const row = rows[i]
+        if (!row[0] && !row[1] && !row[3]) continue
+
+        const data = excelDateToISO(row[0])
+        const numero = String(row[1] || '').trim()
+        const fornitoreNome = String(row[3] || '').trim()
+        const piva = String(row[8] || '').trim()
+        const nettoAPagare = parseFloat(String(row[11]).replace(',', '.')) || 0
+
+        if (!numero || !fornitoreNome) continue
+
+        // Controlla duplicato
+        const { data: dup } = await supabase.from('fatture_fornitori')
+          .select('id').eq('numero', numero).ilike('fornitore_nome', fornitoreNome)
+        if (dup && dup.length > 0) { scartate++; continue }
+
+        // Abbina fornitore: prima per P.IVA, poi per nome, poi crea nuovo
+        let fornitoreId: string | null = null
+        let fornitoreNomeDB = fornitoreNome
+
+        if (piva) {
+          const m = fornitoriLista.find(f => f.cf_piva && f.cf_piva.replace(/\s/g,'') === piva.replace(/\s/g,''))
+          if (m) { fornitoreId = m.id; fornitoreNomeDB = m.ragione_sociale }
+        }
+        if (!fornitoreId) {
+          const m = fornitoriLista.find(f => f.ragione_sociale.toLowerCase().trim() === fornitoreNome.toLowerCase().trim())
+          if (m) { fornitoreId = m.id; fornitoreNomeDB = m.ragione_sociale }
+        }
+        if (!fornitoreId) {
+          const { data: nf } = await supabase.from('fornitori').insert({
+            ragione_sociale: fornitoreNome, cf_piva: piva || null, categoria: 'Materiali', attivo: true
+          }).select('id,ragione_sociale,cf_piva').single()
+          if (nf) { fornitoreId = nf.id; fornitoreNomeDB = nf.ragione_sociale; fornitoriLista.push(nf) }
+        }
+
+        const { error } = await supabase.from('fatture_fornitori').insert({
+          data: data || new Date().toISOString().split('T')[0],
+          numero, fornitore_id: fornitoreId, fornitore_nome: fornitoreNomeDB,
+          progetto_id: null, progetto_nome: '', descrizione: '',
+          imponibile: nettoAPagare, iva_percentuale: 22,
+          rata1_importo: nettoAPagare, rata1_scadenza: null, rata1_stato: 'Da Pagare',
+          rata2_importo: 0, rata2_scadenza: null, rata2_stato: null,
+          rata3_importo: 0, rata3_scadenza: null, rata3_stato: null,
+          modalita_pagamento: 'Bonifico', note: ''
+        })
+        if (error) errori.push(`${numero} (${fornitoreNome}): ${error.message}`)
+        else inserite++
+      }
+
+      setEsitoImport({ inserite, scartate, errori })
+      if (inserite > 0) await load()
+    } catch (e: any) {
+      setEsitoImport({ inserite: 0, scartate: 0, errori: [`Errore lettura file: ${e.message}`] })
+    }
+    setImportando(false)
+  }
+
   const haFiltri = ricerca || filtroStato !== 'tutti' || dataDA || dataA || importoDA || importoA
 
   function resetFiltri() {
     setRicerca(''); setFiltroStato('tutti')
-    setDataDA(''); setDataA('')
-    setImportoDA(''); setImportoA('')
+    setDataDA(''); setDataA(''); setImportoDA(''); setImportoA('')
   }
 
   const fattureFiltrate = useMemo(() => {
@@ -94,8 +200,7 @@ export default function FattureFornitori() {
     if (!confirm(`Confermi pagamento rata ${rata}?\n${fatt.fornitore_nome} - ${fatt.numero}`)) return
     const oggi = new Date().toISOString().split('T')[0]
     await supabase.from('fatture_fornitori').update({
-      [`rata${rata}_stato`]: 'Pagata',
-      [`rata${rata}_data_pagamento`]: oggi
+      [`rata${rata}_stato`]: 'Pagata', [`rata${rata}_data_pagamento`]: oggi
     }).eq('id', id)
     const imp = (fatt as any)[`rata${rata}_importo`] || 0
     await supabase.from('cash_flow').insert({
@@ -103,8 +208,7 @@ export default function FattureFornitori() {
       descrizione: `Pagamento ${fatt.fornitore_nome} - Ft ${fatt.numero} rata ${rata}`,
       conto: 'Conto 1', tipologia: 'Pagamento Fornitore',
       entrata: 0, uscita: imp,
-      progetto_id: (fatt as any).progetto_id || null,
-      riferimento_fattura: fatt.numero
+      progetto_id: (fatt as any).progetto_id || null, riferimento_fattura: fatt.numero
     })
     await logActivity('modifica', 'fatture_fornitori', id, `Pagamento rata ${rata} — ${fatt.numero} · ${fatt.fornitore_nome} · € ${imp}`)
     load()
@@ -114,8 +218,7 @@ export default function FattureFornitori() {
     if (!confirm(`Annullare il pagamento della rata ${rata}?\nNota: il movimento in cash flow NON viene rimosso automaticamente.`)) return
     const fatt = fatture.find(f => f.id === id)
     await supabase.from('fatture_fornitori').update({
-      [`rata${rata}_stato`]: 'Da Pagare',
-      [`rata${rata}_data_pagamento`]: null
+      [`rata${rata}_stato`]: 'Da Pagare', [`rata${rata}_data_pagamento`]: null
     }).eq('id', id)
     await logActivity('modifica', 'fatture_fornitori', id, `Annullato pagamento rata ${rata} — ${fatt?.numero} · ${fatt?.fornitore_nome}`)
     load()
@@ -133,10 +236,12 @@ export default function FattureFornitori() {
   async function salvaModifica() {
     if (!modalModifica) return
     setLoading(true)
+    const prj = progetti.find(p => p.id === modalModifica.progetto_id)
     await supabase.from('fatture_fornitori').update({
-      data: modalModifica.data,
-      numero: modalModifica.numero,
+      data: modalModifica.data, numero: modalModifica.numero,
       descrizione: modalModifica.descrizione,
+      progetto_id: modalModifica.progetto_id || null,
+      progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : (modalModifica.progetto_nome || ''),
       imponibile: parseFloat(modalModifica.imponibile) || 0,
       iva_percentuale: parseFloat(modalModifica.iva_percentuale) || 22,
       rata1_importo: parseFloat(modalModifica.rata1_importo) || 0,
@@ -145,8 +250,7 @@ export default function FattureFornitori() {
       rata2_scadenza: modalModifica.rata2_scadenza || null,
       rata3_importo: parseFloat(modalModifica.rata3_importo) || 0,
       rata3_scadenza: modalModifica.rata3_scadenza || null,
-      modalita_pagamento: modalModifica.modalita_pagamento,
-      note: modalModifica.note
+      modalita_pagamento: modalModifica.modalita_pagamento, note: modalModifica.note
     }).eq('id', modalModifica.id)
     await logActivity('modifica', 'fatture_fornitori', modalModifica.id, `Fattura ${modalModifica.numero} — ${modalModifica.fornitore_nome} · € ${modalModifica.imponibile}`)
     setModalModifica(null); setLoading(false); load()
@@ -167,13 +271,11 @@ export default function FattureFornitori() {
     const imp = parseFloat(form.imponibile) || 0
     const { data: inserted } = await supabase.from('fatture_fornitori').insert({
       data: form.data || new Date().toISOString().split('T')[0],
-      numero: form.numero,
-      fornitore_id: form.fornitore_id,
+      numero: form.numero, fornitore_id: form.fornitore_id,
       fornitore_nome: for_?.ragione_sociale || '',
       progetto_id: form.progetto_id || null,
       progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
-      descrizione: form.descrizione,
-      imponibile: imp,
+      descrizione: form.descrizione, imponibile: imp,
       iva_percentuale: parseFloat(form.iva_percentuale) || 22,
       rata1_importo: parseFloat(form.r1i) || imp * (1 + parseFloat(form.iva_percentuale) / 100),
       rata1_scadenza: form.r1s || null, rata1_stato: 'Da Pagare',
@@ -193,7 +295,12 @@ export default function FattureFornitori() {
       <main className="flex-1 p-6 overflow-auto">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold">Fatture ricevute</h1>
-          <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuova fattura</button>
+          <div className="flex gap-2">
+            <button className="btn text-sm" onClick={() => { setModalImport(true); setEsitoImport(null) }}>
+              📥 Importa da Excel
+            </button>
+            <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuova fattura</button>
+          </div>
         </div>
 
         <div className="card mb-4">
@@ -266,8 +373,11 @@ export default function FattureFornitori() {
                             <div className="font-medium">{euro(f[`rata${n}_importo`])}</div>
                             <div className="text-gray-400">{f[`rata${n}_scadenza`] ? new Date(f[`rata${n}_scadenza`]).toLocaleDateString('it-IT') : ''}</div>
                             {f[`rata${n}_stato`] === 'Pagata' ? (
-                              <div className="flex gap-1 mt-1 items-center">
+                              <div className="flex gap-1 mt-1 items-center flex-wrap">
                                 <span className="badge badge-green">Pagata</span>
+                                {f[`rata${n}_data_pagamento`] && (
+                                  <span className="text-gray-400 text-xs">{new Date(f[`rata${n}_data_pagamento`]).toLocaleDateString('it-IT')}</span>
+                                )}
                                 <button className="text-amber-600 hover:text-amber-800 text-sm font-bold px-1"
                                   onClick={() => annullaRata(f.id, n)} title="Annulla">↩</button>
                               </div>
@@ -292,6 +402,65 @@ export default function FattureFornitori() {
         </div>
       </main>
 
+      {/* ── MODAL IMPORT EXCEL ── */}
+      {modalImport && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">Importa fatture da Excel</h2>
+              <button onClick={() => setModalImport(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+            {!esitoImport ? (
+              <>
+                <div className="bg-blue-50 rounded-lg p-3 mb-4 text-xs text-blue-700 space-y-1">
+                  <p>File: export <strong>QuifatturA</strong> (.xlsx)</p>
+                  <p>Colonne lette: <strong>A</strong> Data · <strong>B</strong> Numero · <strong>D</strong> Fornitore · <strong>I</strong> P.IVA · <strong>L</strong> Netto a pagare</p>
+                  <p>Fatture già presenti: saltate silenziosamente.</p>
+                  <p>Cantiere e rate: da completare manualmente dopo l'import.</p>
+                </div>
+                <div className="border-2 border-dashed border-gray-200 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 transition-colors"
+                  onClick={() => !importando && inputImportRef.current?.click()}>
+                  {importando ? (
+                    <>
+                      <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+                      <p className="text-sm text-blue-600">Importazione in corso...</p>
+                      <p className="text-xs text-gray-400 mt-1">Potrebbe richiedere qualche secondo</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-3xl mb-3">📊</p>
+                      <p className="text-sm font-medium text-gray-700">Clicca per selezionare il file Excel</p>
+                      <p className="text-xs text-gray-400 mt-1">.xlsx esportato da QuifatturA</p>
+                    </>
+                  )}
+                  <input ref={inputImportRef} type="file" accept=".xlsx,.xls" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) importaExcel(f) }} />
+                </div>
+              </>
+            ) : (
+              <div className="space-y-3">
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                  <p className="text-sm font-semibold text-green-800 mb-2">✅ Importazione completata</p>
+                  <p className="text-lg font-bold text-green-700">{esitoImport.inserite} fatture inserite</p>
+                  <p className="text-sm text-gray-500 mt-1">{esitoImport.scartate} già presenti (saltate)</p>
+                </div>
+                {esitoImport.errori.length > 0 && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                    <p className="text-xs font-medium text-red-700 mb-1">⚠️ {esitoImport.errori.length} errori di inserimento</p>
+                    {esitoImport.errori.map((e, i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
+                  </div>
+                )}
+                <div className="flex gap-2 justify-end">
+                  <button className="btn" onClick={() => setEsitoImport(null)}>Importa altro file</button>
+                  <button className="btn btn-primary" onClick={() => setModalImport(false)}>Chiudi</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL NUOVA FATTURA ── */}
       {modal && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -334,6 +503,7 @@ export default function FattureFornitori() {
         </div>
       )}
 
+      {/* ── MODAL MODIFICA ── */}
       {modalModifica && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -344,6 +514,14 @@ export default function FattureFornitori() {
             <div className="grid grid-cols-2 gap-3">
               <div><label className="label">Data</label><input className="input" type="date" value={modalModifica.data} onChange={e => setModalModifica({...modalModifica, data: e.target.value})} /></div>
               <div><label className="label">N° Fattura</label><input className="input" value={modalModifica.numero} onChange={e => setModalModifica({...modalModifica, numero: e.target.value})} /></div>
+              <div><label className="label">Cantiere</label>
+                <select className="input" value={modalModifica.progetto_id || ''} onChange={e => {
+                  const prj = progetti.find(p => p.id === e.target.value)
+                  setModalModifica({...modalModifica, progetto_id: e.target.value || null, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : ''})
+                }}>
+                  <option value="">-- nessuno --</option>
+                  {progetti.map(p => <option key={p.id} value={p.id}>{p.codice} - {p.nome}</option>)}
+                </select></div>
               <div><label className="label">Imponibile (€)</label><input className="input" type="number" step="0.01" value={modalModifica.imponibile} onChange={e => setModalModifica({...modalModifica, imponibile: e.target.value})} /></div>
               <div><label className="label">IVA %</label>
                 <select className="input" value={modalModifica.iva_percentuale} onChange={e => setModalModifica({...modalModifica, iva_percentuale: e.target.value})}>
@@ -360,7 +538,7 @@ export default function FattureFornitori() {
             </div>
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModalModifica(null)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva'}</button>
+              <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva modifiche'}</button>
             </div>
           </div>
         </div>
