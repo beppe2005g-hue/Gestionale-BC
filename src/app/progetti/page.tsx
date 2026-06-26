@@ -13,8 +13,8 @@ const FASI = [
   { key: 'avanzamento_impianti', label: 'Impianti' },
 ]
 
-// ── Specchietto contrattuale — usato sia nel dettaglio cantiere che in Fatture da Emettere ──
-export function SpecchettoContrattuale({ progetto, compact = false }: { progetto: any, compact?: boolean }) {
+// ── Specchietto contrattuale — visibile nella lista cantieri e nel dettaglio ──
+function SpecchettoContrattuale({ progetto, compact = false }: { progetto: any, compact?: boolean }) {
   if (!progetto) return null
   const haContratto = progetto.modalita_pagamento_contratto || progetto.scadenza_pagamento_contratto || progetto.ritenuta_garanzia_perc || progetto.accettazione_prezzi_riferimento
   if (!haContratto) return null
