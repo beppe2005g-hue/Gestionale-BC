@@ -13,41 +13,109 @@ const FASI = [
   { key: 'avanzamento_impianti', label: 'Impianti' },
 ]
 
-// ── FormProgetto fuori dal componente principale per evitare re-render ad ogni tasto ──
-function FormProgetto({ data, setData, clienti, utenti }: { data: any, setData: any, clienti: any[], utenti: any[] }) {
+// ── Specchietto contrattuale — usato sia nel dettaglio cantiere che in Fatture da Emettere ──
+export function SpecchettoContrattuale({ progetto, compact = false }: { progetto: any, compact?: boolean }) {
+  if (!progetto) return null
+  const haContratto = progetto.modalita_pagamento_contratto || progetto.scadenza_pagamento_contratto || progetto.ritenuta_garanzia_perc || progetto.accettazione_prezzi_riferimento
+  if (!haContratto) return null
   return (
-    <div className="grid grid-cols-2 gap-3">
-      <div><label className="label">Codice</label><input className="input bg-gray-50" value={data.codice} readOnly /></div>
-      <div><label className="label">Nome cantiere *</label><input className="input" value={data.nome} onChange={e => setData({...data, nome: e.target.value})} /></div>
-      <div><label className="label">Cliente / Committente</label>
-        <select className="input" value={data.cliente_id} onChange={e => setData({...data, cliente_id: e.target.value})}>
-          <option value="">-- seleziona --</option>
-          {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
-        </select>
+    <div className={`rounded-xl border-2 border-blue-200 bg-blue-50 ${compact ? 'p-3' : 'p-4'}`}>
+      <p className={`font-semibold text-blue-800 mb-2 ${compact ? 'text-xs' : 'text-sm'}`}>📋 Condizioni contrattuali</p>
+      <div className={`grid gap-2 ${compact ? 'grid-cols-2 text-xs' : 'grid-cols-2 md:grid-cols-4 text-sm'}`}>
+        <div>
+          <p className="text-gray-500 text-xs">Modalità pagamento</p>
+          <p className="font-medium text-gray-800">{progetto.modalita_pagamento_contratto || '—'}</p>
+        </div>
+        <div>
+          <p className="text-gray-500 text-xs">Scadenza contrattuale</p>
+          <p className="font-medium text-gray-800">{progetto.scadenza_pagamento_contratto || '—'}</p>
+        </div>
+        <div>
+          <p className="text-gray-500 text-xs">Ritenuta garanzia</p>
+          <p className="font-medium text-gray-800">
+            {progetto.ritenuta_garanzia_perc > 0 ? `${progetto.ritenuta_garanzia_perc}%` : '—'}
+          </p>
+        </div>
+        <div>
+          <p className="text-gray-500 text-xs">Accettazione prezzi</p>
+          <p className="font-medium text-gray-800">{progetto.accettazione_prezzi_riferimento || '—'}</p>
+        </div>
       </div>
-      <div><label className="label">Località cantiere</label><input className="input" placeholder="es. Via Roma 10, Bologna" value={data.localita || ''} onChange={e => setData({...data, localita: e.target.value})} /></div>
-      <div><label className="label">Tipo</label>
-        <select className="input" value={data.tipo} onChange={e => setData({...data, tipo: e.target.value})}>
-          <option>Privato</option><option>Corporate</option><option>Pubblica</option><option>Movimenti Terra</option><option>Gestione Completa</option>
-        </select>
+    </div>
+  )
+}
+
+// ── FormProgetto fuori dal componente principale per evitare re-render ad ogni tasto ──
+function FormProgetto({ data, setData, clienti, utenti, isNuovo }: { data: any, setData: any, clienti: any[], utenti: any[], isNuovo?: boolean }) {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div><label className="label">Codice</label><input className="input bg-gray-50" value={data.codice} readOnly /></div>
+        <div><label className="label">Nome cantiere *</label><input className="input" value={data.nome} onChange={e => setData({...data, nome: e.target.value})} /></div>
+        <div><label className="label">Cliente / Committente</label>
+          <select className="input" value={data.cliente_id} onChange={e => setData({...data, cliente_id: e.target.value})}>
+            <option value="">-- seleziona --</option>
+            {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
+          </select>
+        </div>
+        <div><label className="label">Località cantiere</label><input className="input" placeholder="es. Via Roma 10, Bologna" value={data.localita || ''} onChange={e => setData({...data, localita: e.target.value})} /></div>
+        <div><label className="label">Tipo</label>
+          <select className="input" value={data.tipo} onChange={e => setData({...data, tipo: e.target.value})}>
+            <option>Privato</option><option>Corporate</option><option>Pubblica</option><option>Movimenti Terra</option><option>Gestione Completa</option>
+          </select>
+        </div>
+        <div><label className="label">Stato</label>
+          <select className="input" value={data.stato} onChange={e => setData({...data, stato: e.target.value})}>
+            <option>Offerta</option><option>In Corso</option><option>Completato</option><option>Sospeso</option><option>Annullato</option>
+          </select>
+        </div>
+        <div><label className="label">Geometra assegnato</label>
+          <select className="input" value={data.geometra_id || ''} onChange={e => setData({...data, geometra_id: e.target.value})}>
+            <option value="">-- nessuno --</option>
+            {utenti.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}
+          </select>
+        </div>
+        <div><label className="label">Responsabile cantiere</label><input className="input" value={data.responsabile || ''} onChange={e => setData({...data, responsabile: e.target.value})} /></div>
+        <div><label className="label">Valore contratto (€)</label><input className="input" type="number" step="0.01" value={data.valore_contratto || ''} onChange={e => setData({...data, valore_contratto: e.target.value})} /></div>
+        <div><label className="label">Budget costi (€)</label><input className="input" type="number" step="0.01" value={data.budget_costi || ''} onChange={e => setData({...data, budget_costi: e.target.value})} /></div>
+        <div><label className="label">Data inizio</label><input className="input" type="date" value={data.data_inizio || ''} onChange={e => setData({...data, data_inizio: e.target.value})} /></div>
+        <div><label className="label">Data fine prevista</label><input className="input" type="date" value={data.data_fine || ''} onChange={e => setData({...data, data_fine: e.target.value})} /></div>
+        <div className="col-span-2"><label className="label">Note</label><textarea className="input h-20 resize-none" value={data.note || ''} onChange={e => setData({...data, note: e.target.value})} /></div>
       </div>
-      <div><label className="label">Stato</label>
-        <select className="input" value={data.stato} onChange={e => setData({...data, stato: e.target.value})}>
-          <option>Offerta</option><option>In Corso</option><option>Completato</option><option>Sospeso</option><option>Annullato</option>
-        </select>
+
+      {/* ── Sezione dati contrattuali OBBLIGATORI ── */}
+      <div className="border-2 border-blue-200 rounded-xl p-4 bg-blue-50">
+        <p className="text-sm font-semibold text-blue-800 mb-3">
+          📋 Dati contrattuali {isNuovo && <span className="text-red-600 ml-1">— obbligatori per creare il cantiere</span>}
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Modalità di pagamento *</label>
+            <input className="input" placeholder="es. Bonifico 30gg, SAL mensile, Rimessa diretta..."
+              value={data.modalita_pagamento_contratto || ''}
+              onChange={e => setData({...data, modalita_pagamento_contratto: e.target.value})} />
+          </div>
+          <div>
+            <label className="label">Scadenza pagamento contrattuale *</label>
+            <input className="input" placeholder="es. 30 giorni dalla fattura, fine mese..."
+              value={data.scadenza_pagamento_contratto || ''}
+              onChange={e => setData({...data, scadenza_pagamento_contratto: e.target.value})} />
+          </div>
+          <div>
+            <label className="label">Ritenuta di garanzia % *</label>
+            <input className="input" type="number" step="0.01" min="0" max="100"
+              placeholder="es. 5 (per 5%)"
+              value={data.ritenuta_garanzia_perc ?? ''}
+              onChange={e => setData({...data, ritenuta_garanzia_perc: e.target.value})} />
+          </div>
+          <div>
+            <label className="label">Accettazione prezzi — riferimento *</label>
+            <input className="input" placeholder="es. Preventivo firmato 12/05/2026 — \\Server\Cantieri\..."
+              value={data.accettazione_prezzi_riferimento || ''}
+              onChange={e => setData({...data, accettazione_prezzi_riferimento: e.target.value})} />
+          </div>
+        </div>
       </div>
-      <div><label className="label">Geometra assegnato</label>
-        <select className="input" value={data.geometra_id || ''} onChange={e => setData({...data, geometra_id: e.target.value})}>
-          <option value="">-- nessuno --</option>
-          {utenti.map(u => <option key={u.id} value={u.id}>{u.nome}</option>)}
-        </select>
-      </div>
-      <div><label className="label">Responsabile cantiere</label><input className="input" value={data.responsabile || ''} onChange={e => setData({...data, responsabile: e.target.value})} /></div>
-      <div><label className="label">Valore contratto (€)</label><input className="input" type="number" step="0.01" value={data.valore_contratto || ''} onChange={e => setData({...data, valore_contratto: e.target.value})} /></div>
-      <div><label className="label">Budget costi (€)</label><input className="input" type="number" step="0.01" value={data.budget_costi || ''} onChange={e => setData({...data, budget_costi: e.target.value})} /></div>
-      <div><label className="label">Data inizio</label><input className="input" type="date" value={data.data_inizio || ''} onChange={e => setData({...data, data_inizio: e.target.value})} /></div>
-      <div><label className="label">Data fine prevista</label><input className="input" type="date" value={data.data_fine || ''} onChange={e => setData({...data, data_fine: e.target.value})} /></div>
-      <div className="col-span-2"><label className="label">Note</label><textarea className="input h-20 resize-none" value={data.note || ''} onChange={e => setData({...data, note: e.target.value})} /></div>
     </div>
   )
 }
@@ -75,29 +143,25 @@ export default function Progetti() {
   const [form, setForm] = useState({
     codice: '', nome: '', cliente_id: '', tipo: 'Privato', responsabile: '',
     valore_contratto: '', budget_costi: '', data_inizio: '', data_fine: '',
-    stato: 'In Corso', note: '', geometra_id: '', localita: ''
+    stato: 'In Corso', note: '', geometra_id: '', localita: '',
+    modalita_pagamento_contratto: '', scadenza_pagamento_contratto: '',
+    ritenuta_garanzia_perc: '', accettazione_prezzi_riferimento: ''
   })
 
-  useEffect(() => { loadAll() }, [])
+  useEffect(() => {
+    loadAll()
+    window.addEventListener('gestionale:refresh', loadAll)
+    return () => window.removeEventListener('gestionale:refresh', loadAll)
+  }, [])
 
   async function loadAll() {
     setErroreCaricamento('')
-
-    // Query progetti: ordino solo per codice (colonna sempre presente),
-    // evitando "updated_at" che se non esiste sulla tabella fa fallire la request con 400
-    // e blocca tutto il caricamento della pagina.
     const { data: p, error: errP } = await supabase
-      .from('progetti')
-      .select('*')
-      .order('codice', { ascending: false })
-
+      .from('progetti').select('*').order('codice', { ascending: false })
     if (errP) {
-      console.error('Errore caricamento progetti:', errP)
       setErroreCaricamento(errP.message || 'Errore nel caricamento dei progetti')
-      setProgetti([])
-      return
+      setProgetti([]); return
     }
-
     const [{ data: c }, { data: u }] = await Promise.all([
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true),
       supabase.from('utenti').select('id,nome,ruolo,capo_geometra'),
@@ -110,25 +174,16 @@ export default function Progetti() {
       supabase.from('costi_cantiere').select('progetto_id,importo'),
     ])
     const enhanced = (p || []).map(proj => {
-      // Ricavi = totale SAL maturati (lavoro eseguito), non più fatture_clienti
       const ric = (sal || []).filter(s => s.progetto_id === proj.id).reduce((s, x) => s + (x.importo_lavori || 0), 0)
-      // Fatturato = somma fatture da emettere effettivamente emesse
       const fatturato = (fde || []).filter(f => f.progetto_id === proj.id && f.stato === 'Emessa').reduce((s, f) => s + (f.importo_emesso || 0), 0)
       const cosFF = (ff || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
-      // Tutti i DDT collegati al cantiere sono un costo sostenuto, indipendentemente
-      // dallo stato di fatturazione (Da Fatturare/Fatturato/Parziale) — coerente con
-      // il Registro Costi unificato di Costi Cantiere, che include sempre tutti i DDT.
       const cosDDT = (ddt || []).filter(d => d.progetto_id === proj.id).reduce((s, d) => s + (d.importo || 0), 0)
-      // Costi manuali inseriti da Costi Cantiere (ore operai, noli, manodopera, ecc.):
-      // mancavano del tutto da questo calcolo, causando un disallineamento con il
-      // "Totale costi inseriti" mostrato in Costi Cantiere ogni volta che si usano
-      // costi manuali oltre ai DDT.
       const cosManuali = (costiManuali || []).filter(c => c.progetto_id === proj.id).reduce((s, c) => s + (c.importo || 0), 0)
       const cos = cosFF + cosDDT + cosManuali
       const margPerc = ric > 0 ? Math.round((ric - cos) / ric * 100) : 0
       const budgetPerc = proj.budget_costi > 0 ? Math.round(cos / proj.budget_costi * 100) : 0
       const avanzamentoMedio = Math.round(FASI.reduce((s, f) => s + (proj[f.key] || 0), 0) / FASI.length)
-      const scostamentoFatturazione = ric - fatturato // > 0 = a rilento con la fatturazione
+      const scostamentoFatturazione = ric - fatturato
       const percFatturatoSuSal = ric > 0 ? Math.round(fatturato / ric * 100) : 0
       return { ...proj, ricavi: ric, fatturato, costi: cos, marg_perc: margPerc, budget_perc: budgetPerc, avanzamento_medio: avanzamentoMedio, scostamento_fatturazione: scostamentoFatturazione, perc_fatturato_su_sal: percFatturatoSuSal }
     })
@@ -171,18 +226,11 @@ export default function Progetti() {
     setNote(prev => prev.filter(n => n.id !== id))
   }
 
-  // ── Nuovo formato codice annuale: 26PJ001, 26PJ002... si riazzera ogni anno ──
   async function generaCodice() {
-    const annoCorrente = new Date().getFullYear() % 100 // es. 2026 -> 26
+    const annoCorrente = new Date().getFullYear() % 100
     const prefisso = `${String(annoCorrente).padStart(2, '0')}PJ`
-
-    const { data } = await supabase
-      .from('progetti')
-      .select('codice')
-      .ilike('codice', `${prefisso}%`)
-      .order('codice', { ascending: false })
-      .limit(1)
-
+    const { data } = await supabase.from('progetti').select('codice')
+      .ilike('codice', `${prefisso}%`).order('codice', { ascending: false }).limit(1)
     const last = data?.[0]?.codice
     let prossimoNumero = 1
     if (last) {
@@ -195,12 +243,23 @@ export default function Progetti() {
 
   async function apriModal() {
     const codice = await generaCodice()
-    setForm({ codice, nome: '', cliente_id: '', tipo: 'Privato', responsabile: '', valore_contratto: '', budget_costi: '', data_inizio: '', data_fine: '', stato: 'In Corso', note: '', geometra_id: '', localita: '' })
+    setForm({
+      codice, nome: '', cliente_id: '', tipo: 'Privato', responsabile: '',
+      valore_contratto: '', budget_costi: '', data_inizio: '', data_fine: '',
+      stato: 'In Corso', note: '', geometra_id: '', localita: '',
+      modalita_pagamento_contratto: '', scadenza_pagamento_contratto: '',
+      ritenuta_garanzia_perc: '', accettazione_prezzi_riferimento: ''
+    })
     setModal(true)
   }
 
   async function salva() {
     if (!form.nome || !form.codice) { alert('Inserisci almeno codice e nome cantiere'); return }
+    // ── Validazione campi contrattuali obbligatori ──
+    if (!form.modalita_pagamento_contratto?.trim()) { alert('⚠️ Inserisci la modalità di pagamento contrattuale'); return }
+    if (!form.scadenza_pagamento_contratto?.trim()) { alert('⚠️ Inserisci la scadenza di pagamento contrattuale'); return }
+    if (form.ritenuta_garanzia_perc === '' || form.ritenuta_garanzia_perc === null) { alert('⚠️ Inserisci la percentuale di ritenuta di garanzia (metti 0 se non prevista)'); return }
+    if (!form.accettazione_prezzi_riferimento?.trim()) { alert('⚠️ Inserisci il riferimento per l\'accettazione prezzi'); return }
     setLoading(true)
     const cli = clienti.find(c => c.id === form.cliente_id)
     const geo = utenti.find(u => u.id === form.geometra_id)
@@ -213,7 +272,11 @@ export default function Progetti() {
       data_inizio: form.data_inizio || null, data_fine: form.data_fine || null,
       stato: form.stato, note: form.note,
       geometra_id: form.geometra_id || null, geometra_nome: geo?.nome || '',
-      localita: form.localita || ''
+      localita: form.localita || '',
+      modalita_pagamento_contratto: form.modalita_pagamento_contratto,
+      scadenza_pagamento_contratto: form.scadenza_pagamento_contratto,
+      ritenuta_garanzia_perc: parseFloat(String(form.ritenuta_garanzia_perc)) || 0,
+      accettazione_prezzi_riferimento: form.accettazione_prezzi_riferimento,
     })
     setModal(false); setLoading(false); loadAll()
   }
@@ -233,7 +296,11 @@ export default function Progetti() {
       stato: modalModifica.stato, note: modalModifica.note,
       geometra_id: modalModifica.geometra_id || null,
       geometra_nome: geo?.nome || modalModifica.geometra_nome,
-      localita: modalModifica.localita || ''
+      localita: modalModifica.localita || '',
+      modalita_pagamento_contratto: modalModifica.modalita_pagamento_contratto || null,
+      scadenza_pagamento_contratto: modalModifica.scadenza_pagamento_contratto || null,
+      ritenuta_garanzia_perc: parseFloat(modalModifica.ritenuta_garanzia_perc) || 0,
+      accettazione_prezzi_riferimento: modalModifica.accettazione_prezzi_riferimento || null,
     }).eq('id', modalModifica.id)
     setModalModifica(null); setLoading(false); loadAll()
   }
@@ -341,11 +408,11 @@ export default function Progetti() {
                 <div className="flex items-center gap-3 mb-3 mt-4 first:mt-0">
                   <h2 className="text-sm font-semibold text-gray-700">👤 {gruppo}</h2>
                   <div className="flex-1 h-px bg-gray-200" />
-                  <span className="text-xs text-gray-400">{items.length} cantieri</span>
+                  <span className="text-xs text-gray-400">{(items as any[]).length} cantieri</span>
                 </div>
               )}
               <div className="grid grid-cols-1 gap-4 mb-2">
-                {items.map(p => (
+                {(items as any[]).map(p => (
                   <div key={p.id} className="card hover:shadow-md transition-shadow cursor-pointer" onClick={() => apriDettaglio(p)}>
                     <div className="flex items-start justify-between mb-3">
                       <div>
@@ -354,6 +421,8 @@ export default function Progetti() {
                           {statoBadge(p.stato)}
                           <span className="badge badge-gray">{p.tipo}</span>
                           {p.localita && <span className="text-xs text-gray-400">📍 {p.localita}</span>}
+                          {/* Badge se mancano dati contrattuali */}
+                          {!p.modalita_pagamento_contratto && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">⚠️ Dati contrattuali mancanti</span>}
                         </div>
                         <h3 className="font-semibold text-base">{p.nome}</h3>
                         <p className="text-sm text-gray-500">{p.cliente_nome || '—'}</p>
@@ -361,9 +430,18 @@ export default function Progetti() {
                       <div className="text-right flex-shrink-0">
                         <p className="text-xs text-gray-400">Contratto</p>
                         <p className="font-semibold text-sm">{euro(p.valore_contratto)}</p>
+                        {p.ritenuta_garanzia_perc > 0 && <p className="text-xs text-amber-600 mt-0.5">Rit. {p.ritenuta_garanzia_perc}%</p>}
                         {p.geometra_nome && <p className="text-xs text-gray-400 mt-1">👷 {p.geometra_nome}</p>}
                       </div>
                     </div>
+
+                    {/* Specchietto contrattuale in lista (compatto) */}
+                    {p.modalita_pagamento_contratto && (
+                      <div className="mb-3">
+                        <SpecchettoContrattuale progetto={p} compact={true} />
+                      </div>
+                    )}
+
                     <div className="mb-3">
                       <div className="flex justify-between text-xs mb-1">
                         <span className="text-gray-500">Avanzamento lavori</span>
@@ -406,15 +484,9 @@ export default function Progetti() {
                     )}
                     <div className="mb-3">
                       <div className="flex justify-between text-xs mb-1">
-                        <span className="text-gray-400">Budget usato</span>
-                        <span className={`font-medium ${p.budget_perc >= 100 ? 'text-red-700' : p.budget_perc >= 80 ? 'text-amber-700' : 'text-gray-700'}`}>{p.budget_perc}%</span>
-                      </div>
-                    </div>
-                    <div className="mb-3">
-                      <div className="flex justify-between text-xs mb-1">
                         <span className="text-gray-400">Utilizzo budget</span>
                         <span className={p.budget_perc >= 100 ? 'text-red-600 font-medium' : 'text-gray-500'}>
-                          {euro(p.costi)} / {euro(p.budget_costi)}
+                          {euro(p.costi)} / {euro(p.budget_costi)} ({p.budget_perc}%)
                         </span>
                       </div>
                       <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
@@ -441,7 +513,7 @@ export default function Progetti() {
               <h2 className="text-base font-semibold">Nuovo progetto</h2>
               <button onClick={() => setModal(false)} className="text-gray-400 text-xl">×</button>
             </div>
-            <FormProgetto data={form} setData={setForm} clienti={clienti} utenti={utenti} />
+            <FormProgetto data={form} setData={setForm} clienti={clienti} utenti={utenti} isNuovo={true} />
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModal(false)}>Annulla</button>
               <button className="btn btn-primary" onClick={salva} disabled={loading}>{loading ? 'Salvataggio...' : 'Crea progetto'}</button>
@@ -494,6 +566,10 @@ export default function Progetti() {
               </div>
             </div>
             <div className="p-5 space-y-5">
+
+              {/* ── Specchietto contrattuale ben visibile in cima al dettaglio ── */}
+              <SpecchettoContrattuale progetto={modalDettaglio} />
+
               <div className="card">
                 <h3 className="font-medium text-sm mb-4">📊 Avanzamento per fase</h3>
                 <div className="space-y-4">
