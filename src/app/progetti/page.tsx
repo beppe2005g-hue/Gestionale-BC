@@ -131,11 +131,13 @@ export default function Progetti() {
   const [note, setNote] = useState<any[]>([])
   const [nuovaNota, setNuovaNota] = useState('')
   const [erroreCaricamento, setErroreCaricamento] = useState('')
+  const [utenteCorrente, setUtenteCorrente] = useState<any>(null) // per controllo permesso archivia
 
   const [cercaNome, setCercaNome] = useState('')
   const [cercaCliente, setCercaCliente] = useState('')
   const [cercaLocalita, setCercaLocalita] = useState('')
   const [filtroStato, setFiltroStato] = useState('attivi')
+  const [filtroArchivio, setFiltroArchivio] = useState(false) // mostra archiviati invece degli attivi
   const [importoDA, setImportoDA] = useState('')
   const [importoA, setImportoA] = useState('')
   const [raggruppaPer, setRaggruppaPer] = useState<'committente' | 'nessuno'>('nessuno')
@@ -152,12 +154,21 @@ export default function Progetti() {
     loadAll()
     window.addEventListener('gestionale:refresh', loadAll)
     return () => window.removeEventListener('gestionale:refresh', loadAll)
-  }, [])
+  }, [filtroArchivio])
 
   async function loadAll() {
     setErroreCaricamento('')
-    const { data: p, error: errP } = await supabase
-      .from('progetti').select('*').order('codice', { ascending: false })
+    // Carica utente corrente per controllo permesso archivia
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: profilo } = await supabase.from('utenti').select('ruolo,perm_archivia_progetti').eq('id', user.id).single()
+      setUtenteCorrente(profilo)
+    }
+    const query = supabase.from('progetti').select('*').order('codice', { ascending: false })
+    // Mostra archiviati o attivi in base al filtro
+    const { data: p, error: errP } = filtroArchivio
+      ? await query.eq('archiviato', true)
+      : await query.or('archiviato.is.null,archiviato.eq.false')
     if (errP) {
       setErroreCaricamento(errP.message || 'Errore nel caricamento dei progetti')
       setProgetti([]); return
@@ -224,6 +235,24 @@ export default function Progetti() {
     if (!confirm('Eliminare questa nota?')) return
     await supabase.from('note_cantiere').delete().eq('id', id)
     setNote(prev => prev.filter(n => n.id !== id))
+  }
+
+  // ── Archiviazione cantiere ──
+  // Può archiviare: admin (ruolo) oppure utente con perm_archivia_progetti abilitato
+  const puoArchiviare = utenteCorrente?.ruolo === 'admin' || !!utenteCorrente?.perm_archivia_progetti
+
+  async function archiviaProjetto(proj: any) {
+    const azione = proj.archiviato ? 'ripristinare' : 'archiviare'
+    if (!confirm(`${azione.charAt(0).toUpperCase() + azione.slice(1)} il cantiere "${proj.nome}"?\n\nI dati (costi, DDT, SAL, fatture) restano nel database.`)) return
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: profilo } = await supabase.from('utenti').select('nome').eq('id', user?.id || '').single()
+    await supabase.from('progetti').update({
+      archiviato: !proj.archiviato,
+      archiviato_il: proj.archiviato ? null : new Date().toISOString(),
+      archiviato_da: proj.archiviato ? null : (profilo?.nome || user?.email || 'Sconosciuto'),
+    }).eq('id', proj.id)
+    setModalDettaglio(null)
+    loadAll()
   }
 
   async function generaCodice() {
@@ -353,7 +382,15 @@ export default function Progetti() {
       <main className="flex-1 p-6 overflow-auto">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold">Progetti / Cantieri</h1>
-          <button className="btn btn-primary text-sm" onClick={apriModal}>+ Nuovo progetto</button>
+          <div className="flex gap-2">
+            {puoArchiviare && (
+              <button className={`btn btn-sm ${filtroArchivio ? 'btn-primary' : ''}`}
+                onClick={() => setFiltroArchivio(!filtroArchivio)}>
+                {filtroArchivio ? '📦 Archiviati' : '📦 Vedi archiviati'}
+              </button>
+            )}
+            <button className="btn btn-primary text-sm" onClick={apriModal}>+ Nuovo progetto</button>
+          </div>
         </div>
 
         {erroreCaricamento && (
@@ -494,6 +531,14 @@ export default function Progetti() {
                       </div>
                     </div>
                     <div className="flex justify-end gap-2">
+                      {puoArchiviare && !p.archiviato && (
+                        <button className="btn btn-sm text-amber-600 border-amber-200 hover:bg-amber-50"
+                          onClick={e => { e.stopPropagation(); archiviaProjetto(p) }}>📦 Archivia</button>
+                      )}
+                      {puoArchiviare && p.archiviato && (
+                        <button className="btn btn-sm text-green-600 border-green-200 hover:bg-green-50"
+                          onClick={e => { e.stopPropagation(); archiviaProjetto(p) }}>↺ Ripristina</button>
+                      )}
                       <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50"
                         onClick={e => { e.stopPropagation(); setModalModifica({...p}) }}>✏️ Modifica</button>
                     </div>
@@ -666,6 +711,25 @@ export default function Progetti() {
                 <div className="card bg-amber-50 border-amber-200">
                   <h3 className="font-medium text-sm mb-2">📌 Note progetto</h3>
                   <p className="text-sm text-gray-700">{modalDettaglio.note}</p>
+                </div>
+              )}
+
+              {/* Archiviazione dal dettaglio */}
+              {puoArchiviare && (
+                <div className="flex justify-end pt-2 border-t border-gray-100">
+                  {modalDettaglio.archiviato ? (
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-500">
+                        Archiviato il {modalDettaglio.archiviato_il ? new Date(modalDettaglio.archiviato_il).toLocaleDateString('it-IT') : '—'}
+                        {modalDettaglio.archiviato_da && ` da ${modalDettaglio.archiviato_da}`}
+                      </span>
+                      <button className="btn btn-sm text-green-600 border-green-200 hover:bg-green-50"
+                        onClick={() => archiviaProjetto(modalDettaglio)}>↺ Ripristina cantiere</button>
+                    </div>
+                  ) : (
+                    <button className="btn btn-sm text-amber-600 border-amber-200 hover:bg-amber-50"
+                      onClick={() => archiviaProjetto(modalDettaglio)}>📦 Archivia cantiere</button>
+                  )}
                 </div>
               )}
             </div>
