@@ -8,6 +8,7 @@ const ADMIN_EMAIL = 'bonarrigogiuseppe05@gmail.com'
 const SEZIONI = [
   { key: 'perm_dashboard',               label: 'Dashboard',              icon: '▦' },
   { key: 'perm_progetti',                label: 'Progetti',               icon: '🏗' },
+  { key: 'perm_archivia_progetti',       label: 'Archivia Cantieri',      icon: '📦' },
   { key: 'perm_costi_cantiere',          label: 'Costi Cantiere',         icon: '💰' },
   { key: 'perm_ddt',                     label: 'DDT',                    icon: '📋' },
   { key: 'perm_da_ricevere',             label: 'Da Ricevere',            icon: '⏳' },
@@ -25,32 +26,36 @@ const SEZIONI = [
 
 const PRESETS: Record<string, Record<string, boolean>> = {
   nessuno: {
-    perm_dashboard: false, perm_progetti: false, perm_costi_cantiere: false,
-    perm_ddt: false, perm_da_ricevere: false, perm_fatture_fornitori: false,
-    perm_fatture_clienti: false, perm_import_sdi: false, perm_scadenzario: false,
-    perm_cashflow: false, perm_budget: false, perm_anagrafiche: false,
-    perm_dipendenti: false, perm_utenti: false, perm_solo_cantieri_assegnati: false,
+    perm_dashboard: false, perm_progetti: false, perm_archivia_progetti: false,
+    perm_costi_cantiere: false, perm_ddt: false, perm_da_ricevere: false,
+    perm_fatture_fornitori: false, perm_fatture_clienti: false, perm_import_sdi: false,
+    perm_scadenzario: false, perm_cashflow: false, perm_budget: false,
+    perm_anagrafiche: false, perm_dipendenti: false, perm_utenti: false,
+    perm_solo_cantieri_assegnati: false,
   },
   geometra: {
-    perm_dashboard: false, perm_progetti: true, perm_costi_cantiere: true,
-    perm_ddt: true, perm_da_ricevere: false, perm_fatture_fornitori: false,
-    perm_fatture_clienti: false, perm_import_sdi: false, perm_scadenzario: false,
-    perm_cashflow: false, perm_budget: false, perm_anagrafiche: true,
-    perm_dipendenti: true, perm_utenti: false, perm_solo_cantieri_assegnati: true,
+    perm_dashboard: false, perm_progetti: true, perm_archivia_progetti: false,
+    perm_costi_cantiere: true, perm_ddt: true, perm_da_ricevere: false,
+    perm_fatture_fornitori: false, perm_fatture_clienti: false, perm_import_sdi: false,
+    perm_scadenzario: false, perm_cashflow: false, perm_budget: false,
+    perm_anagrafiche: true, perm_dipendenti: true, perm_utenti: false,
+    perm_solo_cantieri_assegnati: true,
   },
   capo_geometra: {
-    perm_dashboard: true, perm_progetti: true, perm_costi_cantiere: true,
-    perm_ddt: true, perm_da_ricevere: true, perm_fatture_fornitori: false,
-    perm_fatture_clienti: false, perm_import_sdi: false, perm_scadenzario: true,
-    perm_cashflow: false, perm_budget: true, perm_anagrafiche: true,
-    perm_dipendenti: true, perm_utenti: false, perm_solo_cantieri_assegnati: false,
+    perm_dashboard: true, perm_progetti: true, perm_archivia_progetti: true,
+    perm_costi_cantiere: true, perm_ddt: true, perm_da_ricevere: true,
+    perm_fatture_fornitori: false, perm_fatture_clienti: false, perm_import_sdi: false,
+    perm_scadenzario: true, perm_cashflow: false, perm_budget: true,
+    perm_anagrafiche: true, perm_dipendenti: true, perm_utenti: false,
+    perm_solo_cantieri_assegnati: false,
   },
   admin: {
-    perm_dashboard: true, perm_progetti: true, perm_costi_cantiere: true,
-    perm_ddt: true, perm_da_ricevere: true, perm_fatture_fornitori: true,
-    perm_fatture_clienti: true, perm_import_sdi: true, perm_scadenzario: true,
-    perm_cashflow: true, perm_budget: true, perm_anagrafiche: true,
-    perm_dipendenti: true, perm_utenti: true, perm_solo_cantieri_assegnati: false,
+    perm_dashboard: true, perm_progetti: true, perm_archivia_progetti: true,
+    perm_costi_cantiere: true, perm_ddt: true, perm_da_ricevere: true,
+    perm_fatture_fornitori: true, perm_fatture_clienti: true, perm_import_sdi: true,
+    perm_scadenzario: true, perm_cashflow: true, perm_budget: true,
+    perm_anagrafiche: true, perm_dipendenti: true, perm_utenti: true,
+    perm_solo_cantieri_assegnati: false,
   },
 }
 
@@ -82,7 +87,6 @@ export default function Utenti() {
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
 
-  // Log
   const [logs, setLogs] = useState<LogRow[]>([])
   const [loadingLog, setLoadingLog] = useState(false)
   const [filtroUtente, setFiltroUtente] = useState('')
@@ -110,11 +114,7 @@ export default function Utenti() {
 
   async function loadLog() {
     setLoadingLog(true)
-    const { data } = await supabase
-      .from('activity_log')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(500)
+    const { data } = await supabase.from('activity_log').select('*').order('created_at', { ascending: false }).limit(500)
     setLogs(data || [])
     setLoadingLog(false)
   }
@@ -150,7 +150,6 @@ export default function Utenti() {
     else showToast(`Preset "${preset}" applicato`, 'ok')
   }
 
-  // Log filtrati
   const logsFiltrati = logs.filter(l => {
     if (filtroUtente && !l.utente_nome?.toLowerCase().includes(filtroUtente.toLowerCase())) return false
     if (filtroAzione && l.azione !== filtroAzione) return false
@@ -178,7 +177,6 @@ export default function Utenti() {
           </p>
         </div>
 
-        {/* Tab switch */}
         <div className="flex gap-1 mb-5 border-b border-gray-200">
           <button onClick={() => setTab('permessi')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'permessi' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
@@ -190,7 +188,6 @@ export default function Utenti() {
           </button>
         </div>
 
-        {/* ── TAB PERMESSI ── */}
         {tab === 'permessi' && (
           <>
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm text-blue-800">
@@ -243,6 +240,7 @@ export default function Utenti() {
                             {SEZIONI.map(s => {
                               const active = !!u[s.key]
                               const isSpecial = s.key === 'perm_solo_cantieri_assegnati'
+                              const isArchivia = s.key === 'perm_archivia_progetti'
                               return (
                                 <button key={s.key}
                                   onClick={() => togglePermesso(u.id, s.key, active)}
@@ -250,7 +248,9 @@ export default function Utenti() {
                                   className={`text-xs px-3 py-2 rounded-lg border text-left transition-all duration-150
                                     ${isSpecial
                                       ? active ? 'bg-orange-50 border-orange-400 text-orange-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
-                                      : active ? 'bg-green-50 border-green-400 text-green-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
+                                      : isArchivia
+                                        ? active ? 'bg-amber-50 border-amber-400 text-amber-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
+                                        : active ? 'bg-green-50 border-green-400 text-green-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
                                     } ${isAdmin ? 'cursor-pointer hover:shadow-sm' : 'cursor-default'}`}>
                                   <span className="mr-1">{active ? '✓' : '×'}</span>
                                   {s.label}
@@ -268,10 +268,8 @@ export default function Utenti() {
           </>
         )}
 
-        {/* ── TAB LOG ── */}
         {tab === 'log' && (
           <>
-            {/* Filtri log */}
             <div className="card mb-4">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
                 <div>
@@ -313,18 +311,14 @@ export default function Utenti() {
               <div className="text-center py-12 text-gray-400">Caricamento log...</div>
             ) : logsFiltrati.length === 0 ? (
               <div className="card text-center py-12 text-gray-400">
-                {logs.length === 0 ? 'Nessuna attività registrata ancora. Il log si popola automaticamente con le prossime operazioni.' : 'Nessun evento con questi filtri.'}
+                {logs.length === 0 ? 'Nessuna attività registrata ancora.' : 'Nessun evento con questi filtri.'}
               </div>
             ) : (
               <div className="card overflow-x-auto">
                 <table className="table-base">
                   <thead>
                     <tr>
-                      <th>Data e ora</th>
-                      <th>Utente</th>
-                      <th>Azione</th>
-                      <th>Sezione</th>
-                      <th>Dettaglio</th>
+                      <th>Data e ora</th><th>Utente</th><th>Azione</th><th>Sezione</th><th>Dettaglio</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -338,15 +332,9 @@ export default function Utenti() {
                             <span className="text-gray-400">{new Date(l.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</span>
                           </td>
                           <td className="text-sm font-medium">{l.utente_nome || '—'}</td>
-                          <td>
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.cls}`}>{badge.label}</span>
-                          </td>
-                          <td className="text-xs text-gray-600">
-                            {TABELLA_LABEL[l.tabella] || l.tabella}
-                          </td>
-                          <td className="text-xs text-gray-700 max-w-xs truncate" title={l.descrizione}>
-                            {l.descrizione}
-                          </td>
+                          <td><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.cls}`}>{badge.label}</span></td>
+                          <td className="text-xs text-gray-600">{TABELLA_LABEL[l.tabella] || l.tabella}</td>
+                          <td className="text-xs text-gray-700 max-w-xs truncate" title={l.descrizione}>{l.descrizione}</td>
                         </tr>
                       )
                     })}
