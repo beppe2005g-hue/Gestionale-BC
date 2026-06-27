@@ -68,9 +68,10 @@ export default function FattureDaEmetterePage() {
   const [modalFde, setModalFde] = useState(false)
   const [loadingFde, setLoadingFde] = useState(false)
   const [fdeInModifica, setFdeInModifica] = useState<any>(null)
-  const [progettoSelezionato, setProgettoSelezionato] = useState<any>(null) // dati contrattuali del progetto scelto
-  const [formFde, setFormFde] = useState<{ progetto_id: string, cliente_id: string, aliquota_id: string, scadenza_prevista: string, note: string, righe: RigaFde[] }>({
-    progetto_id: '', cliente_id: '', aliquota_id: '', scadenza_prevista: '', note: '', righe: [nuovaRigaFde()]
+  const [progettoSelezionato, setProgettoSelezionato] = useState<any>(null)
+  const [filtroSocieta, setFiltroSocieta] = useState<'tutte'|'BC General Service'|'Filosofia'>('tutte')
+  const [formFde, setFormFde] = useState<{ progetto_id: string, cliente_id: string, aliquota_id: string, scadenza_prevista: string, note: string, societa: string, righe: RigaFde[] }>({
+    progetto_id: '', cliente_id: '', aliquota_id: '', scadenza_prevista: '', note: '', societa: 'BC General Service', righe: [nuovaRigaFde()]
   })
 
   const [modalEmissione, setModalEmissione] = useState<any>(null)
@@ -107,7 +108,7 @@ export default function FattureDaEmetterePage() {
     const aliquotaDefault = aliquote.find(a => a.percentuale === 22) || aliquote[0]
     setFdeInModifica(null)
     setProgettoSelezionato(null)
-    setFormFde({ progetto_id: '', cliente_id: '', aliquota_id: aliquotaDefault?.id || '', scadenza_prevista: '', note: '', righe: [nuovaRigaFde()] })
+    setFormFde({ progetto_id: '', cliente_id: '', aliquota_id: aliquotaDefault?.id || '', scadenza_prevista: '', note: '', societa: 'BC General Service', righe: [nuovaRigaFde()] })
     setModalFde(true)
   }
 
@@ -123,6 +124,7 @@ export default function FattureDaEmetterePage() {
     setFormFde({
       progetto_id: f.progetto_id || '', cliente_id: f.cliente_id || '', aliquota_id: f.aliquota_id || '',
       scadenza_prevista: f.scadenza_prevista || '', note: f.note || '',
+      societa: f.societa || 'BC General Service',
       righe: righeEsistenti.length > 0 ? righeEsistenti : [nuovaRigaFde()],
     })
     setModalFde(true)
@@ -182,7 +184,7 @@ export default function FattureDaEmetterePage() {
         progetto_id: formFde.progetto_id, cliente_id: formFde.cliente_id,
         cliente_nome: cli?.ragione_sociale || '', aliquota_iva: aliq?.percentuale ?? 22,
         aliquota_id: formFde.aliquota_id, scadenza_prevista: formFde.scadenza_prevista || null,
-        note: formFde.note || null,
+        note: formFde.note || null, societa: formFde.societa,
       }).eq('id', fdeInModifica.id)
       if (error) { alert('Errore: ' + error.message); setLoadingFde(false); return }
       await supabase.from('fatture_da_emettere_righe').delete().eq('fattura_da_emettere_id', fdeInModifica.id)
@@ -202,7 +204,7 @@ export default function FattureDaEmetterePage() {
       progetto_id: formFde.progetto_id, cliente_id: formFde.cliente_id,
       cliente_nome: cli?.ragione_sociale || '', aliquota_iva: aliq?.percentuale ?? 22,
       aliquota_id: formFde.aliquota_id, scadenza_prevista: formFde.scadenza_prevista || null,
-      stato: 'Da Emettere', note: formFde.note || null,
+      stato: 'Da Emettere', note: formFde.note || null, societa: formFde.societa,
     }).select('id').single()
     if (error) { alert('Errore: ' + error.message); setLoadingFde(false); return }
     if (inserted?.id) {
@@ -296,6 +298,7 @@ export default function FattureDaEmetterePage() {
     const filtrate = fatture.filter(f => {
       if (tab === 'da_emettere' && f.stato !== 'Da Emettere') return false
       if (tab === 'emesse' && f.stato !== 'Emessa') return false
+      if (filtroSocieta !== 'tutte' && f.societa !== filtroSocieta) return false
       if (cercaCliente && !f.cliente_nome?.toLowerCase().includes(cercaCliente.toLowerCase())) return false
       if (cercaCantiere) {
         const testo = `${f.progetti?.codice || ''} ${f.progetti?.nome || ''}`.toLowerCase()
@@ -352,6 +355,17 @@ export default function FattureDaEmetterePage() {
           <button onClick={() => setTab('emesse')} className={`btn ${tab === 'emesse' ? 'btn-primary' : ''}`}>
             ✓ Emesse ({numEmesse})
           </button>
+          <div className="flex-1" />
+          {/* Filtro società */}
+          <div className="flex gap-1 items-center">
+            <span className="text-xs text-gray-400 mr-1">Società:</span>
+            {(['tutte', 'BC General Service', 'Filosofia'] as const).map(s => (
+              <button key={s} onClick={() => setFiltroSocieta(s)}
+                className={`btn btn-sm ${filtroSocieta === s ? 'btn-primary' : ''}`}>
+                {s === 'tutte' ? 'Tutte' : s}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="card mb-4">
@@ -389,6 +403,9 @@ export default function FattureDaEmetterePage() {
                       <span className="text-xs text-gray-400 ml-2">{f.progetti?.codice} — {f.progetti?.nome}</span>
                       {f.stato === 'Emessa' && <span className="text-gray-400 text-xs ml-2">{f.numero_fattura_emessa}</span>}
                       {ritPerc > 0 && <span className="text-xs text-amber-600 ml-2">Rit. {ritPerc}%</span>}
+                      {f.societa && f.societa !== 'BC General Service' && (
+                        <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium">{f.societa}</span>
+                      )}
                     </div>
                     <span className="text-sm font-semibold">{euro(imponibile)}</span>
                     <span className="text-xs text-gray-400">+IVA {f.aliquota_iva}%: {euro(iva)}</span>
@@ -477,8 +494,21 @@ export default function FattureDaEmetterePage() {
                 </select>
               </div>
 
-              {/* ── Specchietto contrattuale: appare appena si seleziona un cantiere ── */}
+              {/* ── Specchietto contrattuale ── */}
               {progettoSelezionato && <SpecchettoContrattuale progetto={progettoSelezionato} />}
+
+              <div className="col-span-2">
+                <label className="label">Società emittente *</label>
+                <div className="flex gap-2">
+                  {(['BC General Service', 'Filosofia'] as const).map(s => (
+                    <button key={s} type="button"
+                      onClick={() => setFormFde({...formFde, societa: s})}
+                      className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-all ${formFde.societa === s ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-blue-300'}`}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               <div className="col-span-2">
                 <label className="label">Cliente *</label>
