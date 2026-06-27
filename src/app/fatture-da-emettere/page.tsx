@@ -348,6 +348,22 @@ export default function FattureDaEmetterePage() {
           </div>
         </div>
 
+        {/* Filtro società — molto evidente */}
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setFiltroSocieta('tutte')}
+            className={`btn flex-1 py-3 text-sm font-semibold transition-all ${filtroSocieta === 'tutte' ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-500 border-gray-200'}`}>
+            Tutte
+          </button>
+          <button onClick={() => setFiltroSocieta('BC General Service')}
+            className={`flex-1 py-3 rounded-xl border-2 text-sm font-bold transition-all ${filtroSocieta === 'BC General Service' ? 'bg-blue-600 text-white border-blue-600 shadow-lg scale-105' : 'bg-blue-50 text-blue-700 border-blue-300 hover:border-blue-500'}`}>
+            🏗 BC General Service
+          </button>
+          <button onClick={() => setFiltroSocieta('Filosofia')}
+            className={`flex-1 py-3 rounded-xl border-2 text-sm font-bold transition-all ${filtroSocieta === 'Filosofia' ? 'bg-orange-500 text-white border-orange-500 shadow-lg scale-105' : 'bg-orange-50 text-orange-700 border-orange-300 hover:border-orange-500'}`}>
+            🏢 Filosofia
+          </button>
+        </div>
+
         <div className="flex gap-2 mb-4">
           <button onClick={() => setTab('da_emettere')} className={`btn ${tab === 'da_emettere' ? 'btn-primary' : ''}`}>
             🔔 Da emettere ({numDaEmettere})
@@ -355,17 +371,6 @@ export default function FattureDaEmetterePage() {
           <button onClick={() => setTab('emesse')} className={`btn ${tab === 'emesse' ? 'btn-primary' : ''}`}>
             ✓ Emesse ({numEmesse})
           </button>
-          <div className="flex-1" />
-          {/* Filtro società */}
-          <div className="flex gap-1 items-center">
-            <span className="text-xs text-gray-400 mr-1">Società:</span>
-            {(['tutte', 'BC General Service', 'Filosofia'] as const).map(s => (
-              <button key={s} onClick={() => setFiltroSocieta(s)}
-                className={`btn btn-sm ${filtroSocieta === s ? 'btn-primary' : ''}`}>
-                {s === 'tutte' ? 'Tutte' : s}
-              </button>
-            ))}
-          </div>
         </div>
 
         <div className="card mb-4">
@@ -395,17 +400,27 @@ export default function FattureDaEmetterePage() {
               const ritPerc = f.progetti?.ritenuta_garanzia_perc || 0
               const ritImporto = imponibile * ritPerc / 100
               return (
-                <div key={f.id} className="card p-0 overflow-hidden">
-                  <div className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"
+                <div key={f.id} className={`card p-0 overflow-hidden border-l-4 ${
+                  f.societa === 'Filosofia' ? 'border-l-orange-400' : 'border-l-blue-400'
+                }`}>
+                  <div className={`flex items-center gap-3 px-4 py-3 cursor-pointer ${
+                    f.societa === 'Filosofia' ? 'hover:bg-orange-50' : 'hover:bg-blue-50'
+                  }`}
                     onClick={() => setEspansaFde(espansaFde === f.id ? null : f.id)}>
                     <div className="flex-1">
-                      <span className="font-medium text-sm">{f.cliente_nome}</span>
-                      <span className="text-xs text-gray-400 ml-2">{f.progetti?.codice} — {f.progetti?.nome}</span>
-                      {f.stato === 'Emessa' && <span className="text-gray-400 text-xs ml-2">{f.numero_fattura_emessa}</span>}
-                      {ritPerc > 0 && <span className="text-xs text-amber-600 ml-2">Rit. {ritPerc}%</span>}
-                      {f.societa && f.societa !== 'BC General Service' && (
-                        <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium">{f.societa}</span>
-                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                          f.societa === 'Filosofia'
+                            ? 'bg-orange-100 text-orange-700'
+                            : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          {f.societa === 'Filosofia' ? '🏢 Filosofia' : '🏗 BC General'}
+                        </span>
+                        <span className="font-medium text-sm">{f.cliente_nome}</span>
+                        <span className="text-xs text-gray-400">{f.progetti?.codice} — {f.progetti?.nome}</span>
+                        {f.stato === 'Emessa' && <span className="text-gray-400 text-xs">{f.numero_fattura_emessa}</span>}
+                        {ritPerc > 0 && <span className="text-xs text-amber-600">Rit. {ritPerc}%</span>}
+                      </div>
                     </div>
                     <span className="text-sm font-semibold">{euro(imponibile)}</span>
                     <span className="text-xs text-gray-400">+IVA {f.aliquota_iva}%: {euro(iva)}</span>
