@@ -16,15 +16,15 @@ const nav = [
   ]},
   { section: 'Ciclo Passivo', items: [
     { href: '/ddt', label: 'DDT / Bolle', icon: '📋', perm: 'perm_ddt' },
-    { href: '/import-ddt', label: 'Import DDT con AI', icon: '🤖', perm: 'perm_ddt' },
+    { href: '/import-ddt', label: 'Import DDT con AI', icon: '🤖', perm: 'perm_import_ddt' },
     { href: '/da-ricevere', label: 'Da ricevere', icon: '⏳', perm: 'perm_da_ricevere' },
     { href: '/fatture-fornitori', label: 'Fatt. fornitori', icon: '📄', perm: 'perm_fatture_fornitori' },
     { href: '/import-sdi', label: 'Import SDI', icon: '📥', perm: 'perm_import_sdi' },
-    { href: '/prezzario', label: 'Prezzario', icon: '💹', perm: 'perm_ddt' },
+    { href: '/prezzario', label: 'Prezzario', icon: '💹', perm: 'perm_prezzario' },
   ]},
   { section: 'Ciclo Attivo', items: [
     { href: '/fatture-clienti', label: 'Fatt. clienti', icon: '🧾', perm: 'perm_fatture_clienti' },
-    { href: '/fatture-da-emettere', label: 'Fatture da emettere', icon: '🔔', perm: 'perm_costi_cantiere', badgeKey: 'fattureDaEmettere' },
+    { href: '/fatture-da-emettere', label: 'Fatture da emettere', icon: '🔔', perm: 'perm_fatture_da_emettere', badgeKey: 'fattureDaEmettere' },
   ]},
   { section: 'Controllo', items: [
     { href: '/scadenzario', label: 'Scadenzario', icon: '📅', perm: 'perm_scadenzario' },
@@ -55,6 +55,25 @@ function inAllertaConPreavviso(data: string | null, giorniPreavviso: number): bo
 
 export default function Sidebar() {
   const path = usePathname()
+
+  // ── Aggiornamento automatico dati: quando si torna a guardare il gestionale
+  // (cambio tab del browser, o si torna a questa finestra), emette un evento globale
+  // "gestionale:refresh" che ogni pagina può ascoltare per ricaricare i propri dati.
+  // Centralizzato qui (Sidebar è presente in ogni pagina) invece che duplicato:
+  // un solo punto che emette il segnale, le pagine si limitano ad ascoltarlo. ──
+  useEffect(() => {
+    function onTornaVisibile() {
+      if (document.visibilityState === 'visible') {
+        window.dispatchEvent(new Event('gestionale:refresh'))
+      }
+    }
+    document.addEventListener('visibilitychange', onTornaVisibile)
+    window.addEventListener('focus', onTornaVisibile)
+    return () => {
+      document.removeEventListener('visibilitychange', onTornaVisibile)
+      window.removeEventListener('focus', onTornaVisibile)
+    }
+  }, [])
   const [permessi, setPermessi] = useState<Record<string, boolean> | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [loaded, setLoaded] = useState(false)
