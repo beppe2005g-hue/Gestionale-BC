@@ -11,17 +11,13 @@ oggi.setHours(0, 0, 0, 0)
 
 function giorniAllaScadenza(data: string | null): number | null {
   if (!data) return null
-  const d = new Date(data)
-  d.setHours(0, 0, 0, 0)
+  const d = new Date(data); d.setHours(0,0,0,0)
   return Math.round((d.getTime() - oggi.getTime()) / 86400000)
 }
-
 function meseLabel(data: string | null): string {
   if (!data) return 'Senza scadenza'
-  const d = new Date(data)
-  return d.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })
+  return new Date(data).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })
 }
-
 function meseKey(data: string | null): string {
   if (!data) return '9999-99'
   return data.substring(0, 7)
@@ -32,18 +28,16 @@ interface RigaPagamento {
   rata: number; importo: number; scadenza: string | null; gg: number | null; stato: string
   data_fattura: string | null
 }
-
 interface RigaIncasso {
   fattura_id: string; numero: string; data_fattura: string | null
   cliente_nome: string; progetto_nome: string
   rata: number; importo: number; scadenza: string | null; gg: number | null
   scaduta: boolean; mese_key: string; mese_label: string
 }
-
 type OrdinamentoPagare = 'scadenza' | 'fornitore'
 
 export default function Scadenzario() {
-  const [tab, setTab] = useState<'da_pagare' | 'da_incassare'>('da_pagare')
+  const [tab, setTab] = useState<'da_pagare' | 'da_incassare' | 'ritenute'>('da_pagare')
 
   // ── Da Pagare ──
   const [pagamenti, setPagamenti] = useState<RigaPagamento[]>([])
@@ -59,8 +53,28 @@ export default function Scadenzario() {
 
   const [loading, setLoading] = useState(true)
   const [pagamentiClienti, setPagamentiClienti] = useState<any[]>([])
-  const [ncFornitori, setNcFornitori] = useState<any[]>([]) // note di credito fornitori per calcolo saldo netto
-  const [ncClienti, setNcClienti] = useState<any[]>([])     // note di credito clienti per calcolo saldo netto
+  const [ncFornitori, setNcFornitori] = useState<any[]>([])
+  const [ncClienti, setNcClienti] = useState<any[]>([])
+
+  // ── Ritenute ──
+  const [subTab, setSubTab] = useState<'garanzia' | 'acconto'>('garanzia')
+  const [ritenutaGaranzia, setRitenutaGaranzia] = useState<any[]>([])
+  const [ritenutaAcconto, setRitenutaAcconto] = useState<any[]>([])
+  const [progetti, setProgetti] = useState<any[]>([])
+  const [clienti, setClienti] = useState<any[]>([])
+  const [loadingRitenute, setLoadingRitenute] = useState(false)
+  const [modalGaranzia, setModalGaranzia] = useState(false)
+  const [modalAcconto, setModalAcconto] = useState(false)
+  const [modalSvincolo, setModalSvincolo] = useState<any>(null)
+  const [formGaranzia, setFormGaranzia] = useState({
+    progetto_id: '', progetto_nome: '', fattura_riferimento: '',
+    importo_fattura: '', percentuale: '5', data_fattura: '', note: ''
+  })
+  const [formAcconto, setFormAcconto] = useState({
+    cliente_nome: '', fattura_numero: '', importo_fattura: '',
+    percentuale: '4', data_fattura: '', note: ''
+  })
+  const [formSvincolo, setFormSvincolo] = useState({ data_svincolo: '', importo_svincolato: '' })
 
   useEffect(() => {
     load()
@@ -68,71 +82,133 @@ export default function Scadenzario() {
     return () => window.removeEventListener('gestionale:refresh', load)
   }, [])
 
+  useEffect(() => {
+    if (tab === 'ritenute') loadRitenute()
+  }, [tab])
+
   async function load() {
-    setLoading(true)
-    setLoadingIncassare(true)
-    const [{ data: ff }, { data: fc }, { data: pagCli }, { data: ncFF }, { data: ncFC }] = await Promise.all([
+    setLoading(true); setLoadingIncassare(true)
+    const [{ data: ff }, { data: fc }, { data: pagCli }, { data: ncFF }, { data: ncFC }, { data: pr }, { data: cl }] = await Promise.all([
       supabase.from('fatture_fornitori').select('id,numero,data,fornitore_nome,progetto_nome,tipo,rata1_importo,rata1_scadenza,rata1_stato,rata2_importo,rata2_scadenza,rata2_stato,rata3_importo,rata3_scadenza,rata3_stato'),
       supabase.from('fatture_clienti').select('*').order('cliente_nome').order('data'),
       supabase.from('pagamenti_clienti').select('fattura_id,rata,importo'),
       supabase.from('fatture_fornitori').select('fornitore_nome,imponibile').eq('tipo', 'Nota di credito'),
       supabase.from('fatture_clienti').select('cliente_nome,imponibile').eq('tipo', 'Nota di credito'),
+      supabase.from('progetti').select('id,codice,nome').order('codice'),
+      supabase.from('clienti').select('id,ragione_sociale').order('ragione_sociale'),
     ])
     setPagamentiClienti(pagCli || [])
     setNcFornitori(ncFF || [])
     setNcClienti(ncFC || [])
-
-    // ── Costruisce le righe Da Pagare (solo fatture vere, non NC) ──
+    setProgetti(pr || [])
+    setClienti(cl || [])
     const righePagare: RigaPagamento[] = []
     ;(ff || []).forEach((f: any) => {
-      if (f.tipo === 'Nota di credito') return // le NC non sono scadenze da pagare
-      ;[1, 2, 3].forEach(n => {
-        const imp = f[`rata${n}_importo`]
-        const scad = f[`rata${n}_scadenza`]
-        const stato = f[`rata${n}_stato`]
+      if (f.tipo === 'Nota di credito') return
+      ;[1,2,3].forEach(n => {
+        const imp = f[`rata${n}_importo`], scad = f[`rata${n}_scadenza`], stato = f[`rata${n}_stato`]
         if (imp > 0 && stato !== 'Pagata') {
-          righePagare.push({
-            id: f.id, numero: f.numero, fornitore_nome: f.fornitore_nome,
+          righePagare.push({ id: f.id, numero: f.numero, fornitore_nome: f.fornitore_nome,
             cantiere: f.progetto_nome, rata: n, importo: imp, scadenza: scad,
-            gg: giorniAllaScadenza(scad), stato, data_fattura: f.data,
-          })
+            gg: giorniAllaScadenza(scad), stato, data_fattura: f.data })
         }
       })
     })
     setPagamenti(righePagare)
     setLoading(false)
-
-    // ── Esclude le NC dalle fatture clienti (non sono rate da incassare) ──
     setFattureClienti((fc || []).filter((f: any) => f.tipo !== 'Nota di credito'))
     setLoadingIncassare(false)
   }
 
-  // ════════════════ DA PAGARE ════════════════
+  async function loadRitenute() {
+    setLoadingRitenute(true)
+    const [{ data: rg }, { data: ra }] = await Promise.all([
+      supabase.from('ritenute_garanzia').select('*').order('data_fattura', { ascending: false }),
+      supabase.from('ritenute_acconto').select('*').order('data_fattura', { ascending: false }),
+    ])
+    setRitenutaGaranzia(rg || [])
+    setRitenutaAcconto(ra || [])
+    setLoadingRitenute(false)
+  }
+
+  async function salvaGaranzia() {
+    const imp = parseFloat(formGaranzia.importo_fattura) || 0
+    const perc = parseFloat(formGaranzia.percentuale) || 5
+    const ritenuta = Math.round(imp * perc / 100 * 100) / 100
+    const prj = progetti.find(p => p.id === formGaranzia.progetto_id)
+    await supabase.from('ritenute_garanzia').insert({
+      progetto_id: formGaranzia.progetto_id || null,
+      progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : formGaranzia.progetto_nome,
+      fattura_riferimento: formGaranzia.fattura_riferimento,
+      importo_fattura: imp, percentuale: perc, importo_ritenuta: ritenuta,
+      data_fattura: formGaranzia.data_fattura || null,
+      stato: 'In sospeso', note: formGaranzia.note
+    })
+    setModalGaranzia(false)
+    setFormGaranzia({ progetto_id: '', progetto_nome: '', fattura_riferimento: '', importo_fattura: '', percentuale: '5', data_fattura: '', note: '' })
+    loadRitenute()
+  }
+
+  async function salvaAcconto() {
+    const imp = parseFloat(formAcconto.importo_fattura) || 0
+    const perc = parseFloat(formAcconto.percentuale) || 4
+    const ritenuta = Math.round(imp * perc / 100 * 100) / 100
+    const anno = formAcconto.data_fattura ? new Date(formAcconto.data_fattura).getFullYear() : new Date().getFullYear()
+    await supabase.from('ritenute_acconto').insert({
+      cliente_nome: formAcconto.cliente_nome,
+      fattura_numero: formAcconto.fattura_numero,
+      importo_fattura: imp, percentuale: perc, importo_ritenuta: ritenuta,
+      data_fattura: formAcconto.data_fattura || null,
+      anno_fiscale: anno, note: formAcconto.note
+    })
+    setModalAcconto(false)
+    setFormAcconto({ cliente_nome: '', fattura_numero: '', importo_fattura: '', percentuale: '4', data_fattura: '', note: '' })
+    loadRitenute()
+  }
+
+  async function registraSvincolo() {
+    if (!modalSvincolo) return
+    const imp = parseFloat(formSvincolo.importo_svincolato) || modalSvincolo.importo_ritenuta
+    await supabase.from('ritenute_garanzia').update({
+      stato: 'Svincolata',
+      data_svincolo: formSvincolo.data_svincolo || null,
+      importo_svincolato: imp
+    }).eq('id', modalSvincolo.id)
+    setModalSvincolo(null)
+    setFormSvincolo({ data_svincolo: '', importo_svincolato: '' })
+    loadRitenute()
+  }
+
+  async function eliminaRitenuta(tabella: string, id: string) {
+    if (!confirm('Eliminare questa ritenuta?')) return
+    await supabase.from(tabella).delete().eq('id', id)
+    loadRitenute()
+  }
+
+  // KPI ritenute
+  const totGaranziaInSospeso = ritenutaGaranzia.filter(r => r.stato === 'In sospeso').reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
+  const totGaranziaVincolata = ritenutaGaranzia.filter(r => r.stato !== 'Svincolata').reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
+  const annoCorrente = new Date().getFullYear()
+  const totAccontoAnno = ritenutaAcconto.filter(r => r.anno_fiscale === annoCorrente).reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
+  const totAccontoTotale = ritenutaAcconto.reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
+
+  // ── Da Pagare ──
   const pagamentiFiltrati = useMemo(() => {
     let r = pagamenti
     if (cercaFornitore) r = r.filter(x => x.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase()))
     if (soloScadutePagare) r = r.filter(x => x.gg !== null && x.gg < 0)
     const sorted = [...r]
     if (ordinamentoPagare === 'scadenza') {
-      // Scadenza crescente; a parità di scadenza, stesso fornitore vicino; poi data emissione come 2° criterio
       sorted.sort((a, b) => {
-        const sa = a.scadenza || '9999-99-99'
-        const sb = b.scadenza || '9999-99-99'
+        const sa = a.scadenza || '9999-99-99', sb = b.scadenza || '9999-99-99'
         if (sa !== sb) return sa.localeCompare(sb)
-        const fa = a.fornitore_nome || ''
-        const fb = b.fornitore_nome || ''
-        if (fa !== fb) return fa.localeCompare(fb)
-        return (a.data_fattura || '').localeCompare(b.data_fattura || '')
+        return (a.fornitore_nome || '').localeCompare(b.fornitore_nome || '')
       })
     } else {
-      // Per fornitore; dentro lo stesso fornitore, per scadenza
       sorted.sort((a, b) => {
-        const fa = a.fornitore_nome || ''
-        const fb = b.fornitore_nome || ''
+        const fa = a.fornitore_nome || '', fb = b.fornitore_nome || ''
         if (fa !== fb) return fa.localeCompare(fb)
-        const sa = a.scadenza || '9999-99-99'
-        const sb = b.scadenza || '9999-99-99'
-        return sa.localeCompare(sb)
+        return (a.scadenza || '9999-99-99').localeCompare(b.scadenza || '9999-99-99')
       })
     }
     return sorted
@@ -141,10 +217,7 @@ export default function Scadenzario() {
   const totalePagare = pagamentiFiltrati.reduce((s, r) => s + r.importo, 0)
   const scadutoPagare = pagamentiFiltrati.filter(r => r.gg !== null && r.gg < 0).reduce((s, r) => s + r.importo, 0)
   const scadutoOltre30Pagare = pagamentiFiltrati.filter(r => r.gg !== null && r.gg < -30).reduce((s, r) => s + r.importo, 0)
-  // NC fornitori: scalate dal totale da pagare per mostrare il saldo netto reale
-  const totaleNcFornitori = ncFornitori
-    .filter(nc => !cercaFornitore || nc.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase()))
-    .reduce((s, nc) => s + (nc.imponibile || 0), 0)
+  const totaleNcFornitori = ncFornitori.filter(nc => !cercaFornitore || nc.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase())).reduce((s, nc) => s + (nc.imponibile || 0), 0)
   const totalePagareNetto = Math.max(0, totalePagare - totaleNcFornitori)
 
   function badgeGiorni(gg: number | null) {
@@ -156,29 +229,21 @@ export default function Scadenzario() {
     return <span className="badge badge-blue">Tra {gg} gg</span>
   }
 
-  // ════════════════ DA INCASSARE ════════════════
+  // ── Da Incassare ──
   const rateIncassareGrezze = useMemo(() => {
     const righe: RigaIncasso[] = []
     fattureClienti.forEach(f => {
-      ;[1, 2, 3].forEach(n => {
-        const impTotale = f[`rata${n}_importo`]
-        const scad = f[`rata${n}_scadenza`]
+      ;[1,2,3].forEach(n => {
+        const impTotale = f[`rata${n}_importo`], scad = f[`rata${n}_scadenza`]
         if (impTotale > 0) {
-          // Quanto è già stato effettivamente incassato su questa rata, dai pagamenti registrati
-          // (più affidabile del solo campo "stato", che può restare disallineato su pagamenti parziali)
-          const pagato = pagamentiClienti
-            .filter(p => p.fattura_id === f.id && p.rata === n)
-            .reduce((s, p) => s + (p.importo || 0), 0)
+          const pagato = pagamentiClienti.filter(p => p.fattura_id === f.id && p.rata === n).reduce((s, p) => s + (p.importo || 0), 0)
           const residuo = Math.round((impTotale - pagato) * 100) / 100
           if (residuo > 0.01) {
             const gg = giorniAllaScadenza(scad)
-            righe.push({
-              fattura_id: f.id, numero: f.numero, data_fattura: f.data,
+            righe.push({ fattura_id: f.id, numero: f.numero, data_fattura: f.data,
               cliente_nome: f.cliente_nome, progetto_nome: f.progetto_nome,
               rata: n, importo: residuo, scadenza: scad, gg,
-              scaduta: gg !== null && gg < 0,
-              mese_key: meseKey(scad), mese_label: meseLabel(scad),
-            })
+              scaduta: gg !== null && gg < 0, mese_key: meseKey(scad), mese_label: meseLabel(scad) })
           }
         }
       })
@@ -210,13 +275,8 @@ export default function Scadenzario() {
   const totaleIncassare = rateIncassareFiltrate.reduce((s, r) => s + r.importo, 0)
   const scadutoIncassare = rateIncassareFiltrate.filter(r => r.scaduta).reduce((s, r) => s + r.importo, 0)
   const scadutoOltre30Incassare = rateIncassareFiltrate.filter(r => r.gg !== null && r.gg < -30).reduce((s, r) => s + r.importo, 0)
-  // NC clienti: scalate dal totale da incassare per mostrare il saldo netto reale
-  const totaleNcClienti = ncClienti
-    .filter(nc => !filtroCliente || nc.cliente_nome?.toLowerCase().includes(filtroCliente.toLowerCase()))
-    .reduce((s, nc) => s + (nc.imponibile || 0), 0)
+  const totaleNcClienti = ncClienti.filter(nc => !filtroCliente || nc.cliente_nome?.toLowerCase().includes(filtroCliente.toLowerCase())).reduce((s, nc) => s + (nc.imponibile || 0), 0)
   const totaleIncassareNetto = Math.max(0, totaleIncassare - totaleNcClienti)
-
-  function stampaIncassare() { window.print() }
 
   return (
     <div className="flex min-h-screen">
@@ -225,20 +285,17 @@ export default function Scadenzario() {
         <div className="flex items-center justify-between mb-4 print:hidden">
           <h1 className="text-xl font-semibold">Scadenzario</h1>
           {tab === 'da_incassare' && (
-            <button className="btn btn-primary" onClick={stampaIncassare}>🖨️ Stampa / PDF</button>
+            <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Stampa / PDF</button>
           )}
         </div>
 
         <div className="flex gap-2 mb-4 print:hidden">
-          <button onClick={() => setTab('da_pagare')} className={`btn ${tab === 'da_pagare' ? 'btn-primary' : ''}`}>
-            📄 Da Pagare (Fornitori)
-          </button>
-          <button onClick={() => setTab('da_incassare')} className={`btn ${tab === 'da_incassare' ? 'btn-primary' : ''}`}>
-            🧾 Da Incassare (Clienti)
-          </button>
+          <button onClick={() => setTab('da_pagare')} className={`btn ${tab === 'da_pagare' ? 'btn-primary' : ''}`}>📄 Da Pagare</button>
+          <button onClick={() => setTab('da_incassare')} className={`btn ${tab === 'da_incassare' ? 'btn-primary' : ''}`}>🧾 Da Incassare</button>
+          <button onClick={() => setTab('ritenute')} className={`btn ${tab === 'ritenute' ? 'btn-primary' : ''}`}>🔒 Ritenute</button>
         </div>
 
-        {/* ════════════════ TAB DA PAGARE ════════════════ */}
+        {/* ════════ TAB DA PAGARE ════════ */}
         {tab === 'da_pagare' && (
           <>
             <div className="grid grid-cols-3 gap-3 mb-4">
@@ -253,12 +310,9 @@ export default function Scadenzario() {
               <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
                 <p className="text-xs text-amber-600 mb-1">📄 Totale da pagare</p>
                 <p className="text-lg font-bold text-amber-800">{euro(totalePagareNetto)}</p>
-                {totaleNcFornitori > 0 && (
-                  <p className="text-xs text-purple-600 mt-0.5">NC: - {euro(totaleNcFornitori)}</p>
-                )}
+                {totaleNcFornitori > 0 && <p className="text-xs text-purple-600 mt-0.5">NC: - {euro(totaleNcFornitori)}</p>}
               </div>
             </div>
-
             <div className="card mb-4">
               <div className="flex gap-3 items-end flex-wrap">
                 <div className="flex-1 min-w-48">
@@ -276,30 +330,20 @@ export default function Scadenzario() {
                   <input type="checkbox" checked={soloScadutePagare} onChange={e => setSoloScadutePagare(e.target.checked)} className="rounded" />
                   Solo scadute
                 </label>
-                {(cercaFornitore || soloScadutePagare) && (
-                  <button className="btn btn-sm pb-2" onClick={() => { setCercaFornitore(''); setSoloScadutePagare(false) }}>× Reset</button>
-                )}
+                {(cercaFornitore || soloScadutePagare) && <button className="btn btn-sm pb-2" onClick={() => { setCercaFornitore(''); setSoloScadutePagare(false) }}>× Reset</button>}
               </div>
             </div>
-
             <div className="card overflow-x-auto">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-sm text-gray-500">{pagamentiFiltrati.length} rate da pagare</span>
               </div>
-              {loading ? (
-                <div className="text-center text-gray-400 py-8">Caricamento...</div>
-              ) : (
+              {loading ? <div className="text-center text-gray-400 py-8">Caricamento...</div> : (
                 <table className="table-base">
-                  <thead>
-                    <tr>
-                      <th>Fornitore</th><th>Cantiere</th><th>N° Fattura</th><th>Data emissione</th>
-                      <th>Rata</th><th>Importo</th><th>Scadenza</th><th></th>
-                    </tr>
-                  </thead>
+                  <thead><tr><th>Fornitore</th><th>Cantiere</th><th>N° Fattura</th><th>Data emissione</th><th>Rata</th><th>Importo</th><th>Scadenza</th><th></th></tr></thead>
                   <tbody>
                     {pagamentiFiltrati.length === 0 ? (
-                      <tr><td colSpan={8} className="text-center text-gray-400 py-8">Nessuna fattura da pagare per questo filtro.</td></tr>
-                    ) : pagamentiFiltrati.map((r, i) => (
+                      <tr><td colSpan={8} className="text-center text-gray-400 py-8">Nessuna fattura da pagare.</td></tr>
+                    ) : pagamentiFiltrati.map(r => (
                       <tr key={`${r.id}-${r.rata}`} className={r.gg !== null && r.gg < 0 ? 'bg-red-50' : ''}>
                         <td className="font-medium text-sm">{r.fornitore_nome}</td>
                         <td className="text-xs text-gray-500">{r.cantiere || '—'}</td>
@@ -318,7 +362,7 @@ export default function Scadenzario() {
           </>
         )}
 
-        {/* ════════════════ TAB DA INCASSARE ════════════════ */}
+        {/* ════════ TAB DA INCASSARE ════════ */}
         {tab === 'da_incassare' && (
           <>
             <div className="card mb-4 print:hidden">
@@ -331,17 +375,11 @@ export default function Scadenzario() {
                   <input type="checkbox" checked={soloScaduteIncassare} onChange={e => setSoloScaduteIncassare(e.target.checked)} className="rounded" />
                   Solo scadute
                 </label>
-                {(filtroCliente || soloScaduteIncassare) && (
-                  <button className="btn btn-sm pb-2" onClick={() => { setFiltroCliente(''); setSoloScaduteIncassare(false) }}>× Reset</button>
-                )}
+                {(filtroCliente || soloScaduteIncassare) && <button className="btn btn-sm pb-2" onClick={() => { setFiltroCliente(''); setSoloScaduteIncassare(false) }}>× Reset</button>}
               </div>
             </div>
-
-            {loadingIncassare ? (
-              <div className="card text-center py-12 text-gray-400">Caricamento...</div>
-            ) : (
+            {loadingIncassare ? <div className="card text-center py-12 text-gray-400">Caricamento...</div> : (
               <div id="report-incassare">
-                {/* Intestazione formale: compare solo quando si stampa un cliente specifico (filtro attivo) */}
                 {filtroCliente && (
                   <div className="report-header flex items-start justify-between mb-6 pb-4" style={{ borderBottom: '3px solid #1e3a8a' }}>
                     <div className="flex items-center gap-4">
@@ -372,15 +410,12 @@ export default function Scadenzario() {
                   <div className="bg-blue-50 rounded-xl p-3 border border-blue-100">
                     <p className="text-xs text-blue-600 mb-1">🧾 Totale da incassare</p>
                     <p className="text-lg font-bold text-blue-800">{euro(totaleIncassareNetto)}</p>
-                    {totaleNcClienti > 0 && (
-                      <p className="text-xs text-purple-600 mt-0.5">NC: - {euro(totaleNcClienti)}</p>
-                    )}
+                    {totaleNcClienti > 0 && <p className="text-xs text-purple-600 mt-0.5">NC: - {euro(totaleNcClienti)}</p>}
                     <p className="text-xs text-blue-500 mt-0.5">{perCliente.length} clienti</p>
                   </div>
                 </div>
-
                 {perCliente.length === 0 ? (
-                  <div className="card text-center py-12 text-gray-400">Nessuna rata da incassare trovata.</div>
+                  <div className="card text-center py-12 text-gray-400">Nessuna rata da incassare.</div>
                 ) : (
                   <div className="space-y-6">
                     {perCliente.map(c => (
@@ -388,18 +423,13 @@ export default function Scadenzario() {
                         <div style={{ background: '#1e3a8a', color: 'white', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                           <div>
                             <p style={{ fontWeight: 700, fontSize: 14 }}>{c.cliente}</p>
-                            <p style={{ fontSize: 11, color: '#93c5fd' }}>
-                              {Object.keys(c.mesi).length} scadenze · {rateIncassareFiltrate.filter(r => r.cliente_nome === c.cliente).length} rate
-                            </p>
+                            <p style={{ fontSize: 11, color: '#93c5fd' }}>{Object.keys(c.mesi).length} scadenze · {rateIncassareFiltrate.filter(r => r.cliente_nome === c.cliente).length} rate</p>
                           </div>
                           <div style={{ textAlign: 'right' }}>
                             <p style={{ fontSize: 18, fontWeight: 800, color: '#fbbf24' }}>€ {euroShort(c.totale)}</p>
-                            {c.scaduto > 0 && (
-                              <p style={{ fontSize: 11, color: '#fca5a5' }}>🔴 Scaduto: € {euroShort(c.scaduto)}</p>
-                            )}
+                            {c.scaduto > 0 && <p style={{ fontSize: 11, color: '#fca5a5' }}>🔴 Scaduto: € {euroShort(c.scaduto)}</p>}
                           </div>
                         </div>
-
                         {(Object.entries(c.mesi) as [string, { label: string, rate: RigaIncasso[], totale: number }][])
                           .sort(([a], [b]) => a.localeCompare(b))
                           .map(([meseK, mese]) => {
@@ -407,49 +437,32 @@ export default function Scadenzario() {
                             const isMeseCorrente = meseK === new Date().toISOString().substring(0, 7)
                             return (
                               <div key={meseK}>
-                                <div style={{
-                                  background: meseK === '9999-99' ? '#f3f4f6' : isPassato ? '#fef2f2' : isMeseCorrente ? '#fffbeb' : '#f0fdf4',
-                                  padding: '6px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                  borderTop: '1px solid #e2e8f0'
-                                }}>
+                                <div style={{ background: meseK === '9999-99' ? '#f3f4f6' : isPassato ? '#fef2f2' : isMeseCorrente ? '#fffbeb' : '#f0fdf4', padding: '6px 16px', display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e2e8f0' }}>
                                   <p style={{ fontWeight: 600, fontSize: 12, color: isPassato ? '#dc2626' : isMeseCorrente ? '#d97706' : '#065f46' }}>
                                     {isPassato ? '🔴 ' : isMeseCorrente ? '🟡 ' : '🟢 '}
                                     {mese.label.charAt(0).toUpperCase() + mese.label.slice(1)}
-                                    {isPassato && ' — SCADUTO'}
-                                    {isMeseCorrente && ' — Mese corrente'}
+                                    {isPassato && ' — SCADUTO'}{isMeseCorrente && ' — Mese corrente'}
                                   </p>
                                   <p style={{ fontWeight: 700, fontSize: 13, color: isPassato ? '#dc2626' : '#374151' }}>€ {euroShort(mese.totale)}</p>
                                 </div>
                                 <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
                                   <thead>
                                     <tr style={{ background: '#f8faff' }}>
-                                      <th style={{ padding: '5px 16px', textAlign: 'left', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>N° Fattura</th>
-                                      <th style={{ padding: '5px 16px', textAlign: 'left', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>Data fattura</th>
-                                      <th style={{ padding: '5px 16px', textAlign: 'left', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>Cantiere</th>
-                                      <th style={{ padding: '5px 16px', textAlign: 'center', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>Rata</th>
-                                      <th style={{ padding: '5px 16px', textAlign: 'right', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>Scadenza</th>
-                                      <th style={{ padding: '5px 16px', textAlign: 'right', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>Gg</th>
-                                      <th style={{ padding: '5px 16px', textAlign: 'right', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>Importo</th>
+                                      {['N° Fattura','Data fattura','Cantiere','Rata','Scadenza','Gg','Importo'].map(h => (
+                                        <th key={h} style={{ padding: '5px 16px', textAlign: h === 'Rata' || h === 'Gg' ? 'center' : h === 'Scadenza' || h === 'Importo' ? 'right' : 'left', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>{h}</th>
+                                      ))}
                                     </tr>
                                   </thead>
                                   <tbody>
                                     {mese.rate.map((r, idx) => (
                                       <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#fafafa' }}>
                                         <td style={{ padding: '5px 16px', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: '#1e40af' }}>{r.numero}</td>
-                                        <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9', color: '#374151' }}>
-                                          {r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}
-                                        </td>
+                                        <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9' }}>{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
                                         <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9', color: '#6b7280' }}>{r.progetto_nome || '—'}</td>
-                                        <td style={{ padding: '5px 16px', textAlign: 'center', borderBottom: '1px solid #f1f5f9', color: '#374151' }}>{r.rata}</td>
-                                        <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#374151', fontWeight: r.scaduta ? 600 : 400 }}>
-                                          {r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}
-                                        </td>
-                                        <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#6b7280', fontWeight: r.scaduta ? 600 : 400 }}>
-                                          {r.gg !== null ? (r.gg < 0 ? `-${Math.abs(r.gg)}` : `+${r.gg}`) : '—'}
-                                        </td>
-                                        <td style={{ padding: '5px 16px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#1e3a8a' }}>
-                                          € {euroShort(r.importo)}
-                                        </td>
+                                        <td style={{ padding: '5px 16px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' }}>{r.rata}</td>
+                                        <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#374151', fontWeight: r.scaduta ? 600 : 400 }}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
+                                        <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#6b7280' }}>{r.gg !== null ? (r.gg < 0 ? `-${Math.abs(r.gg)}` : `+${r.gg}`) : '—'}</td>
+                                        <td style={{ padding: '5px 16px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#1e3a8a' }}>€ {euroShort(r.importo)}</td>
                                       </tr>
                                     ))}
                                   </tbody>
@@ -457,19 +470,15 @@ export default function Scadenzario() {
                               </div>
                             )
                           })}
-
                         <div style={{ background: '#f8faff', padding: '8px 16px', display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #1e40af' }}>
-                          <span style={{ fontWeight: 600, fontSize: 12, color: '#374151' }}>Totale {c.cliente}</span>
+                          <span style={{ fontWeight: 600, fontSize: 12 }}>Totale {c.cliente}</span>
                           <div style={{ textAlign: 'right' }}>
                             <span style={{ fontWeight: 800, fontSize: 14, color: '#1e3a8a' }}>€ {euroShort(c.totale)}</span>
-                            {c.scaduto > 0 && c.scaduto < c.totale && (
-                              <span style={{ fontSize: 11, color: '#dc2626', marginLeft: 12 }}>di cui scaduto: € {euroShort(c.scaduto)}</span>
-                            )}
+                            {c.scaduto > 0 && c.scaduto < c.totale && <span style={{ fontSize: 11, color: '#dc2626', marginLeft: 12 }}>di cui scaduto: € {euroShort(c.scaduto)}</span>}
                           </div>
                         </div>
                       </div>
                     ))}
-
                     <div style={{ border: '3px solid #1e3a8a', borderRadius: 8, padding: '16px 20px', background: '#eff6ff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div>
                         <p style={{ fontWeight: 700, fontSize: 15, color: '#1e3a8a' }}>TOTALE GENERALE</p>
@@ -477,9 +486,7 @@ export default function Scadenzario() {
                       </div>
                       <div style={{ textAlign: 'right' }}>
                         <p style={{ fontSize: 24, fontWeight: 900, color: '#1e3a8a' }}>€ {euroShort(totaleIncassare)}</p>
-                        {scadutoIncassare > 0 && (
-                          <p style={{ fontSize: 13, color: '#dc2626', fontWeight: 600 }}>🔴 Scaduto: € {euroShort(scadutoIncassare)}</p>
-                        )}
+                        {scadutoIncassare > 0 && <p style={{ fontSize: 13, color: '#dc2626', fontWeight: 600 }}>🔴 Scaduto: € {euroShort(scadutoIncassare)}</p>}
                       </div>
                     </div>
                   </div>
@@ -488,61 +495,252 @@ export default function Scadenzario() {
             )}
           </>
         )}
+
+        {/* ════════ TAB RITENUTE ════════ */}
+        {tab === 'ritenute' && (
+          <>
+            {/* KPI ritenute */}
+            <div className="grid grid-cols-4 gap-3 mb-4">
+              <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
+                <p className="text-xs text-amber-600 mb-1">🔒 Garanzia in sospeso</p>
+                <p className="text-lg font-bold text-amber-800">{euro(totGaranziaInSospeso)}</p>
+                <p className="text-xs text-amber-500 mt-0.5">{ritenutaGaranzia.filter(r => r.stato === 'In sospeso').length} ritenute</p>
+              </div>
+              <div className="bg-green-50 rounded-xl p-3 border border-green-100">
+                <p className="text-xs text-green-600 mb-1">✓ Garanzia svincolata</p>
+                <p className="text-lg font-bold text-green-800">{euro(ritenutaGaranzia.filter(r => r.stato === 'Svincolata').reduce((s, r) => s + (r.importo_svincolato || 0), 0))}</p>
+                <p className="text-xs text-green-500 mt-0.5">{ritenutaGaranzia.filter(r => r.stato === 'Svincolata').length} svincolate</p>
+              </div>
+              <div className="bg-blue-50 rounded-xl p-3 border border-blue-100">
+                <p className="text-xs text-blue-600 mb-1">📋 Acconto {annoCorrente}</p>
+                <p className="text-lg font-bold text-blue-800">{euro(totAccontoAnno)}</p>
+                <p className="text-xs text-blue-500 mt-0.5">Credito fiscale anno corrente</p>
+              </div>
+              <div className="bg-purple-50 rounded-xl p-3 border border-purple-100">
+                <p className="text-xs text-purple-600 mb-1">📋 Acconto totale</p>
+                <p className="text-lg font-bold text-purple-800">{euro(totAccontoTotale)}</p>
+                <p className="text-xs text-purple-500 mt-0.5">{ritenutaAcconto.length} registrazioni</p>
+              </div>
+            </div>
+
+            {/* Sub-tab */}
+            <div className="flex gap-2 mb-4">
+              <button onClick={() => setSubTab('garanzia')} className={`btn ${subTab === 'garanzia' ? 'btn-primary' : ''}`}>🔒 Ritenute a Garanzia</button>
+              <button onClick={() => setSubTab('acconto')} className={`btn ${subTab === 'acconto' ? 'btn-primary' : ''}`}>📋 Ritenute d'Acconto (Condomini)</button>
+            </div>
+
+            {/* ── GARANZIA ── */}
+            {subTab === 'garanzia' && (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm text-gray-600">Ritenute trattenute dai clienti sui SAL/fatture — svincolate a fine lavori con nuova fattura</p>
+                  <button className="btn btn-primary btn-sm" onClick={() => setModalGaranzia(true)}>+ Registra ritenuta</button>
+                </div>
+                {loadingRitenute ? <div className="card text-center py-8 text-gray-400">Caricamento...</div> : (
+                  <div className="card overflow-x-auto">
+                    <table className="table-base">
+                      <thead><tr><th>Cantiere</th><th>Rif. Fattura</th><th>Data</th><th>Importo fattura</th><th>%</th><th>Ritenuta</th><th>Stato</th><th>Svincolo</th><th></th></tr></thead>
+                      <tbody>
+                        {ritenutaGaranzia.length === 0 ? (
+                          <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessuna ritenuta a garanzia registrata.</td></tr>
+                        ) : ritenutaGaranzia.map(r => (
+                          <tr key={r.id} className={r.stato === 'Svincolata' ? 'opacity-60' : ''}>
+                            <td className="text-sm font-medium">{r.progetto_nome || '—'}</td>
+                            <td className="text-xs text-gray-600">{r.fattura_riferimento || '—'}</td>
+                            <td className="text-xs">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                            <td className="text-sm">{euro(r.importo_fattura)}</td>
+                            <td className="text-xs text-center">{r.percentuale}%</td>
+                            <td className="font-semibold text-sm text-amber-700">{euro(r.importo_ritenuta)}</td>
+                            <td>
+                              {r.stato === 'Svincolata'
+                                ? <span className="badge badge-green">✓ Svincolata</span>
+                                : <span className="badge badge-amber">In sospeso</span>}
+                            </td>
+                            <td className="text-xs text-gray-500">
+                              {r.stato === 'Svincolata' && r.data_svincolo
+                                ? new Date(r.data_svincolo).toLocaleDateString('it-IT')
+                                : r.stato === 'In sospeso'
+                                  ? <button className="btn btn-sm text-green-600 border-green-200 hover:bg-green-50"
+                                      onClick={() => { setModalSvincolo(r); setFormSvincolo({ data_svincolo: '', importo_svincolato: String(r.importo_ritenuta) }) }}>
+                                      ✓ Svincola
+                                    </button>
+                                  : '—'}
+                            </td>
+                            <td>
+                              <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={() => eliminaRitenuta('ritenute_garanzia', r.id)}>✕</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* ── ACCONTO ── */}
+            {subTab === 'acconto' && (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm text-gray-600">Ritenute d'acconto trattenute da condomini/PA — credito fiscale da recuperare in dichiarazione dei redditi</p>
+                  <button className="btn btn-primary btn-sm" onClick={() => setModalAcconto(true)}>+ Registra ritenuta</button>
+                </div>
+                {loadingRitenute ? <div className="card text-center py-8 text-gray-400">Caricamento...</div> : (
+                  <div className="card overflow-x-auto">
+                    <table className="table-base">
+                      <thead><tr><th>Cliente</th><th>N° Fattura</th><th>Data</th><th>Anno fiscale</th><th>Importo fattura</th><th>%</th><th>Ritenuta (credito)</th><th>Note</th><th></th></tr></thead>
+                      <tbody>
+                        {ritenutaAcconto.length === 0 ? (
+                          <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessuna ritenuta d'acconto registrata.</td></tr>
+                        ) : ritenutaAcconto.map(r => (
+                          <tr key={r.id}>
+                            <td className="text-sm font-medium">{r.cliente_nome}</td>
+                            <td className="text-xs">{r.fattura_numero || '—'}</td>
+                            <td className="text-xs">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                            <td className="text-xs text-center font-medium">{r.anno_fiscale}</td>
+                            <td className="text-sm">{euro(r.importo_fattura)}</td>
+                            <td className="text-xs text-center">{r.percentuale}%</td>
+                            <td className="font-semibold text-sm text-blue-700">{euro(r.importo_ritenuta)}</td>
+                            <td className="text-xs text-gray-500 max-w-xs truncate">{r.note || '—'}</td>
+                            <td>
+                              <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={() => eliminaRitenuta('ritenute_acconto', r.id)}>✕</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {ritenutaAcconto.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-gray-100">
+                        <p className="text-xs text-gray-500 mb-2 font-medium">Totale credito fiscale per anno:</p>
+                        <div className="flex gap-3 flex-wrap">
+                          {Object.entries(ritenutaAcconto.reduce((acc, r) => {
+                            const a = r.anno_fiscale || 'N/A'
+                            acc[a] = (acc[a] || 0) + (r.importo_ritenuta || 0)
+                            return acc
+                          }, {} as Record<string, number>)).sort(([a], [b]) => String(b).localeCompare(String(a))).map(([anno, tot]) => (
+                            <div key={anno} className={`rounded-lg px-3 py-2 border ${Number(anno) === annoCorrente ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
+                              <p className="text-xs text-gray-500">{anno}</p>
+                              <p className={`font-bold text-sm ${Number(anno) === annoCorrente ? 'text-blue-700' : 'text-gray-700'}`}>{euro(tot as number)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
       </main>
+
+      {/* Modal registra garanzia */}
+      {modalGaranzia && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">🔒 Registra ritenuta a garanzia</h2>
+              <button onClick={() => setModalGaranzia(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="label">Cantiere</label>
+                <select className="input" value={formGaranzia.progetto_id} onChange={e => setFormGaranzia({...formGaranzia, progetto_id: e.target.value})}>
+                  <option value="">-- seleziona --</option>
+                  {progetti.map(p => <option key={p.id} value={p.id}>{p.codice} — {p.nome}</option>)}
+                </select>
+              </div>
+              <div><label className="label">N° / Rif. Fattura</label><input className="input" placeholder="es. FT/2026/042" value={formGaranzia.fattura_riferimento} onChange={e => setFormGaranzia({...formGaranzia, fattura_riferimento: e.target.value})} /></div>
+              <div><label className="label">Data fattura</label><input className="input" type="date" value={formGaranzia.data_fattura} onChange={e => setFormGaranzia({...formGaranzia, data_fattura: e.target.value})} /></div>
+              <div><label className="label">Importo fattura (€)</label><input className="input" type="number" step="0.01" value={formGaranzia.importo_fattura} onChange={e => setFormGaranzia({...formGaranzia, importo_fattura: e.target.value})} /></div>
+              <div><label className="label">% Ritenuta</label><input className="input" type="number" step="0.01" value={formGaranzia.percentuale} onChange={e => setFormGaranzia({...formGaranzia, percentuale: e.target.value})} /></div>
+              {formGaranzia.importo_fattura && formGaranzia.percentuale && (
+                <div className="col-span-2 bg-amber-50 rounded-lg p-3 border border-amber-200">
+                  <p className="text-xs text-amber-600">Ritenuta calcolata</p>
+                  <p className="text-lg font-bold text-amber-800">{euro(parseFloat(formGaranzia.importo_fattura) * parseFloat(formGaranzia.percentuale) / 100)}</p>
+                  <p className="text-xs text-amber-600 mt-0.5">Il cliente pagherà: {euro(parseFloat(formGaranzia.importo_fattura) * (1 - parseFloat(formGaranzia.percentuale) / 100))}</p>
+                </div>
+              )}
+              <div className="col-span-2"><label className="label">Note</label><input className="input" value={formGaranzia.note} onChange={e => setFormGaranzia({...formGaranzia, note: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalGaranzia(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaGaranzia}>Salva ritenuta</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal registra acconto */}
+      {modalAcconto && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">📋 Registra ritenuta d'acconto</h2>
+              <button onClick={() => setModalAcconto(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="label">Cliente (condominio/PA)</label>
+                <input className="input" list="clienti-list" placeholder="Nome cliente..." value={formAcconto.cliente_nome} onChange={e => setFormAcconto({...formAcconto, cliente_nome: e.target.value})} />
+                <datalist id="clienti-list">{clienti.map(c => <option key={c.id} value={c.ragione_sociale} />)}</datalist>
+              </div>
+              <div><label className="label">N° Fattura</label><input className="input" placeholder="es. FT/2026/042" value={formAcconto.fattura_numero} onChange={e => setFormAcconto({...formAcconto, fattura_numero: e.target.value})} /></div>
+              <div><label className="label">Data fattura</label><input className="input" type="date" value={formAcconto.data_fattura} onChange={e => setFormAcconto({...formAcconto, data_fattura: e.target.value})} /></div>
+              <div><label className="label">Importo fattura (€)</label><input className="input" type="number" step="0.01" value={formAcconto.importo_fattura} onChange={e => setFormAcconto({...formAcconto, importo_fattura: e.target.value})} /></div>
+              <div><label className="label">% Ritenuta</label><input className="input" type="number" step="0.01" value={formAcconto.percentuale} onChange={e => setFormAcconto({...formAcconto, percentuale: e.target.value})} /></div>
+              {formAcconto.importo_fattura && formAcconto.percentuale && (
+                <div className="col-span-2 bg-blue-50 rounded-lg p-3 border border-blue-200">
+                  <p className="text-xs text-blue-600">Ritenuta trattenuta (credito fiscale)</p>
+                  <p className="text-lg font-bold text-blue-800">{euro(parseFloat(formAcconto.importo_fattura) * parseFloat(formAcconto.percentuale) / 100)}</p>
+                  <p className="text-xs text-blue-600 mt-0.5">Il condominio pagherà: {euro(parseFloat(formAcconto.importo_fattura) * (1 - parseFloat(formAcconto.percentuale) / 100))}</p>
+                </div>
+              )}
+              <div className="col-span-2"><label className="label">Note</label><input className="input" value={formAcconto.note} onChange={e => setFormAcconto({...formAcconto, note: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalAcconto(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaAcconto}>Salva ritenuta</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal svincolo */}
+      {modalSvincolo && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">✓ Registra svincolo ritenuta</h2>
+              <button onClick={() => setModalSvincolo(null)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="bg-amber-50 rounded-lg p-3 mb-4 border border-amber-200">
+              <p className="text-xs text-amber-600">Ritenuta da svincolare</p>
+              <p className="font-bold text-amber-800">{modalSvincolo.progetto_nome} — {euro(modalSvincolo.importo_ritenuta)}</p>
+              <p className="text-xs text-amber-600 mt-0.5">Rif: {modalSvincolo.fattura_riferimento || '—'}</p>
+            </div>
+            <div className="space-y-3">
+              <div><label className="label">Data svincolo (nuova fattura)</label><input className="input" type="date" value={formSvincolo.data_svincolo} onChange={e => setFormSvincolo({...formSvincolo, data_svincolo: e.target.value})} /></div>
+              <div><label className="label">Importo svincolato (€)</label><input className="input" type="number" step="0.01" value={formSvincolo.importo_svincolato} onChange={e => setFormSvincolo({...formSvincolo, importo_svincolato: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalSvincolo(null)}>Annulla</button>
+              <button className="btn btn-success" onClick={registraSvincolo}>Conferma svincolo</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @media print {
           @page { size: A4; margin: 12mm; }
-
           body * { visibility: hidden; }
           #report-incassare, #report-incassare * { visibility: visible; }
-
-          /* IMPORTANTE: nessun position:fixed/absolute qui. Il contenuto deve restare
-             nel flusso normale del documento perché il browser possa impaginarlo
-             correttamente su più pagine. position:fixed ancorava il blocco alla prima
-             pagina e tagliava via tutto ciò che eccedeva quell'altezza. */
-          #report-incassare {
-            position: static !important;
-            width: 100% !important;
-            height: auto !important;
-            max-height: none !important;
-            overflow: visible !important;
-            padding: 0 !important;
-            font-size: 11px;
-          }
-
-          /* Rimuove i vincoli di scroll/altezza di main e dei contenitori genitori,
-             pensati per lo schermo, che altrimenti tagliano il contenuto in stampa */
-          main {
-            overflow: visible !important;
-            height: auto !important;
-            max-height: none !important;
-            width: 100% !important;
-            max-width: 100% !important;
-            flex: none !important;
-            padding: 0 !important;
-            margin: 0 !important;
-          }
-
-          /* La Sidebar resta nel DOM con visibility:hidden ma il layout flex le riserva
-             comunque spazio fisico, lasciando un vuoto a destra del contenuto stampato.
-             Annullando il flex sul contenitore esterno, il main torna a occupare
-             tutta la larghezza del foglio invece di restare schiacciato a sinistra. */
-          .flex.min-h-screen {
-            display: block !important;
-          }
-
-          /* Ogni blocco cliente non si spezza a metà tra due pagine */
-          div[style*="page-break-inside"] {
-            break-inside: avoid !important;
-          }
-
-          /* L'intestazione formale (logo + dati aziendali) non si spezza tra due pagine */
-          .report-header {
-            break-inside: avoid !important;
-            break-after: avoid !important;
-          }
-
+          #report-incassare { position: static !important; width: 100% !important; height: auto !important; max-height: none !important; overflow: visible !important; padding: 0 !important; font-size: 11px; }
+          main { overflow: visible !important; height: auto !important; max-height: none !important; width: 100% !important; flex: none !important; padding: 0 !important; margin: 0 !important; }
+          .flex.min-h-screen { display: block !important; }
           .print\\:hidden { display: none !important; }
         }
       `}</style>
