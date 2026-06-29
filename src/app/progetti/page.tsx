@@ -177,9 +177,8 @@ export default function Progetti() {
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true),
       supabase.from('utenti').select('id,nome,ruolo,capo_geometra'),
     ])
-    const [{ data: sal }, { data: ff }, { data: ddt }, { data: fde }, { data: costiManuali }] = await Promise.all([
+    const [{ data: sal }, { data: ddt }, { data: fde }, { data: costiManuali }] = await Promise.all([
       supabase.from('sal_cantiere').select('progetto_id,importo_lavori'),
-      supabase.from('fatture_fornitori').select('progetto_id,imponibile'),
       supabase.from('ddt').select('progetto_id,importo,stato'),
       supabase.from('fatture_da_emettere').select('progetto_id,stato,importo_emesso'),
       supabase.from('costi_cantiere').select('progetto_id,importo'),
@@ -187,10 +186,12 @@ export default function Progetti() {
     const enhanced = (p || []).map(proj => {
       const ric = (sal || []).filter(s => s.progetto_id === proj.id).reduce((s, x) => s + (x.importo_lavori || 0), 0)
       const fatturato = (fde || []).filter(f => f.progetto_id === proj.id && f.stato === 'Emessa').reduce((s, f) => s + (f.importo_emesso || 0), 0)
-      const cosFF = (ff || []).filter(f => f.progetto_id === proj.id).reduce((s, f) => s + (f.imponibile || 0), 0)
+      // Costi = DDT/Bolle + costi manuali geometra.
+      // Fatture fornitori ESCLUSE: servono solo per scadenzario/pagamenti.
+      // Includerle causerebbe doppio conteggio con i DDT (la bolla precede sempre la fattura).
       const cosDDT = (ddt || []).filter(d => d.progetto_id === proj.id).reduce((s, d) => s + (d.importo || 0), 0)
       const cosManuali = (costiManuali || []).filter(c => c.progetto_id === proj.id).reduce((s, c) => s + (c.importo || 0), 0)
-      const cos = cosFF + cosDDT + cosManuali
+      const cos = cosDDT + cosManuali
       const margPerc = ric > 0 ? Math.round((ric - cos) / ric * 100) : 0
       const budgetPerc = proj.budget_costi > 0 ? Math.round(cos / proj.budget_costi * 100) : 0
       const avanzamentoMedio = Math.round(FASI.reduce((s, f) => s + (proj[f.key] || 0), 0) / FASI.length)
