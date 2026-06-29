@@ -29,7 +29,7 @@ const CAT_COLORS: Record<string, string> = {
 
 export default function Dashboard() {
   const [kpi, setKpi] = useState({
-    saldo: 0, ricavi: 0, costi: 0, margine: 0, ddt_aperti: 0, rate_scadute: 0
+    ricavi: 0, costi: 0, margine: 0, ddt_aperti: 0, da_pagare_15: 0, da_incassare_15: 0
   })
   const [scadenze, setScadenze] = useState<any[]>([])
   const [cantieri, setCantieri] = useState<any[]>([])
@@ -47,16 +47,20 @@ export default function Dashboard() {
     const annoCorrente = new Date().getFullYear()
 
     // ── Dati grezzi da tutte le fonti coinvolte nei calcoli di costo/ricavo ──
+    const fra15gg = new Date()
+    fra15gg.setDate(fra15gg.getDate() + 15)
+    const fra15str = fra15gg.toISOString().split('T')[0]
+
     const [
-      { data: ff }, { data: ddt }, { data: cf }, { data: sal },
-      { data: costiManuali }, { data: ddtVoci },
+      { data: ff }, { data: ddt }, { data: sal },
+      { data: costiManuali }, { data: ddtVoci }, { data: fc },
     ] = await Promise.all([
-      supabase.from('fatture_fornitori').select('imponibile,rata1_importo,rata1_stato,rata2_importo,rata2_stato,rata3_importo,rata3_stato,rata1_scadenza,rata2_scadenza,rata3_scadenza'),
+      supabase.from('fatture_fornitori').select('rata1_importo,rata1_stato,rata1_scadenza,rata2_importo,rata2_stato,rata2_scadenza,rata3_importo,rata3_stato,rata3_scadenza,tipo'),
       supabase.from('ddt').select('progetto_id,importo,stato,data'),
-      supabase.from('cash_flow').select('entrata,uscita'),
       supabase.from('sal_cantiere').select('progetto_id,importo_lavori,data'),
       supabase.from('costi_cantiere').select('progetto_id,importo,categoria,data'),
       supabase.from('ddt_voci').select('macro_categoria,importo_totale,data_ddt'),
+      supabase.from('fatture_clienti').select('rata1_importo,rata1_stato,rata1_scadenza,rata2_importo,rata2_stato,rata2_scadenza,tipo'),
     ])
 
     // Ricavi YTD = SAL maturati nell'anno corrente
@@ -74,16 +78,25 @@ export default function Dashboard() {
     const costi = costiDDT + costiManualiYTD
 
     const ddtAperti = (ddt || []).filter((d: any) => d.stato === 'Da Fatturare').reduce((s: number, d: any) => s + (d.importo || 0), 0)
-    const saldo = (cf || []).reduce((s: number, m: any) => s + (m.entrata || 0) - (m.uscita || 0), 0)
 
-    let rateScadute = 0
-    ;(ff || []).forEach((f: any) => {
-      if (f.rata1_stato === 'Da Pagare' && f.rata1_scadenza < oggi) rateScadute += f.rata1_importo || 0
-      if (f.rata2_stato === 'Da Pagare' && f.rata2_scadenza < oggi) rateScadute += f.rata2_importo || 0
-      if (f.rata3_stato === 'Da Pagare' && f.rata3_scadenza < oggi) rateScadute += f.rata3_importo || 0
+    // ── Fatture da PAGARE entro 15gg (scadute incluse) ──
+    // Esclude NC (tipo = 'Nota di credito')
+    let daPagare15 = 0
+    ;(ff || []).filter((f: any) => f.tipo !== 'Nota di credito').forEach((f: any) => {
+      if (f.rata1_stato === 'Da Pagare' && f.rata1_scadenza && f.rata1_scadenza <= fra15str) daPagare15 += f.rata1_importo || 0
+      if (f.rata2_stato === 'Da Pagare' && f.rata2_scadenza && f.rata2_scadenza <= fra15str) daPagare15 += f.rata2_importo || 0
+      if (f.rata3_stato === 'Da Pagare' && f.rata3_scadenza && f.rata3_scadenza <= fra15str) daPagare15 += f.rata3_importo || 0
     })
 
-    setKpi({ saldo, ricavi, costi, margine: ricavi - costi, ddt_aperti: ddtAperti, rate_scadute: rateScadute })
+    // ── Fatture da INCASSARE entro 15gg (scadute incluse) ──
+    // Esclude NC (tipo = 'Nota di credito')
+    let daIncassare15 = 0
+    ;(fc || []).filter((f: any) => f.tipo !== 'Nota di credito').forEach((f: any) => {
+      if (f.rata1_stato !== 'Incassata' && f.rata1_scadenza && f.rata1_scadenza <= fra15str) daIncassare15 += f.rata1_importo || 0
+      if (f.rata2_stato !== 'Incassata' && f.rata2_scadenza && f.rata2_scadenza <= fra15str) daIncassare15 += f.rata2_importo || 0
+    })
+
+    setKpi({ ricavi, costi, margine: ricavi - costi, ddt_aperti: ddtAperti, da_pagare_15: daPagare15, da_incassare_15: daIncassare15 })
 
     // ── Cantieri con margine: DDT + costi manuali (no fatture fornitori) ──
     const { data: proj } = await supabase.from('progetti').select('id,nome,valore_contratto,stato').eq('stato', 'In Corso').limit(8)
@@ -169,18 +182,19 @@ export default function Dashboard() {
         </div>
 
         {/* KPI */}
-        <div className="grid grid-cols-6 gap-3 mb-6">
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-3 mb-6">
           {[
-            { label: 'Saldo banca', value: euro(kpi.saldo), color: 'text-blue-700' },
-            { label: 'Ricavi YTD (SAL)', value: euro(kpi.ricavi), color: 'text-green-700' },
-            { label: 'Costi YTD', value: euro(kpi.costi), color: 'text-red-700' },
-            { label: 'Margine', value: euro(kpi.margine), color: kpi.margine >= 0 ? 'text-green-700' : 'text-red-700' },
-            { label: 'DDT aperti', value: euro(kpi.ddt_aperti), color: 'text-amber-700' },
-            { label: 'Rate scadute', value: euro(kpi.rate_scadute), color: 'text-red-700' },
+            { label: 'Da incassare (15gg)', value: euro(kpi.da_incassare_15), color: kpi.da_incassare_15 > 0 ? 'text-blue-700' : 'text-gray-400', sub: 'Scadute + prossime 15 giorni' },
+            { label: 'Da pagare (15gg)', value: euro(kpi.da_pagare_15), color: kpi.da_pagare_15 > 0 ? 'text-red-700' : 'text-gray-400', sub: 'Scadute + prossime 15 giorni' },
+            { label: 'Ricavi YTD (SAL)', value: euro(kpi.ricavi), color: 'text-green-700', sub: 'SAL maturati anno corrente' },
+            { label: 'Costi YTD', value: euro(kpi.costi), color: 'text-red-700', sub: 'DDT + costi manuali' },
+            { label: 'Margine totale', value: euro(kpi.margine), color: kpi.margine >= 0 ? 'text-green-700' : 'text-red-700', sub: kpi.ricavi > 0 ? `${Math.round((kpi.margine / kpi.ricavi) * 100)}% sui ricavi` : '—' },
+            { label: 'DDT aperti', value: euro(kpi.ddt_aperti), color: 'text-amber-700', sub: 'Da fatturare ai fornitori' },
           ].map(k => (
             <div key={k.label} className="bg-gray-50 rounded-xl p-3">
               <p className="text-xs text-gray-500 mb-1">{k.label}</p>
               <p className={`text-lg font-semibold ${k.color}`}>{k.value}</p>
+              {k.sub && <p className="text-xs text-gray-400 mt-0.5">{k.sub}</p>}
             </div>
           ))}
         </div>
