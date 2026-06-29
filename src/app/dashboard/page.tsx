@@ -38,6 +38,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadDashboard()
+    window.addEventListener('gestionale:refresh', loadDashboard)
+    return () => window.removeEventListener('gestionale:refresh', loadDashboard)
   }, [])
 
   async function loadDashboard() {
@@ -47,7 +49,7 @@ export default function Dashboard() {
     // ── Dati grezzi da tutte le fonti coinvolte nei calcoli di costo/ricavo ──
     const [
       { data: ff }, { data: ddt }, { data: cf }, { data: sal },
-      { data: costiManuali }, { data: ddtVoci }, { data: ffConProgetto },
+      { data: costiManuali }, { data: ddtVoci },
     ] = await Promise.all([
       supabase.from('fatture_fornitori').select('imponibile,rata1_importo,rata1_stato,rata2_importo,rata2_stato,rata3_importo,rata3_stato,rata1_scadenza,rata2_scadenza,rata3_scadenza'),
       supabase.from('ddt').select('progetto_id,importo,stato,data'),
@@ -55,23 +57,21 @@ export default function Dashboard() {
       supabase.from('sal_cantiere').select('progetto_id,importo_lavori,data'),
       supabase.from('costi_cantiere').select('progetto_id,importo,categoria,data'),
       supabase.from('ddt_voci').select('macro_categoria,importo_totale,data_ddt'),
-      supabase.from('fatture_fornitori').select('progetto_id,imponibile'),
     ])
 
-    // Ricavi YTD = SAL maturati nell'anno corrente (coerente con Progetti e Costi Cantiere)
+    // Ricavi YTD = SAL maturati nell'anno corrente
     const ricavi = (sal || [])
       .filter((s: any) => s.data?.startsWith(String(annoCorrente)))
       .reduce((s: number, r: any) => s + (r.importo_lavori || 0), 0)
 
-    // Costi YTD = fatture fornitori + DDT + costi manuali, tutti dell'anno corrente
-    const costiFF = (ff || []).reduce((s: number, r: any) => s + (r.imponibile || 0), 0)
+    // Costi YTD = DDT + costi manuali (fatture fornitori ESCLUSE: doppio conteggio con DDT)
     const costiDDT = (ddt || [])
       .filter((d: any) => d.data?.startsWith(String(annoCorrente)))
       .reduce((s: number, d: any) => s + (d.importo || 0), 0)
     const costiManualiYTD = (costiManuali || [])
       .filter((c: any) => c.data?.startsWith(String(annoCorrente)))
       .reduce((s: number, c: any) => s + (c.importo || 0), 0)
-    const costi = costiFF + costiDDT + costiManualiYTD
+    const costi = costiDDT + costiManualiYTD
 
     const ddtAperti = (ddt || []).filter((d: any) => d.stato === 'Da Fatturare').reduce((s: number, d: any) => s + (d.importo || 0), 0)
     const saldo = (cf || []).reduce((s: number, m: any) => s + (m.entrata || 0) - (m.uscita || 0), 0)
@@ -85,15 +85,14 @@ export default function Dashboard() {
 
     setKpi({ saldo, ricavi, costi, margine: ricavi - costi, ddt_aperti: ddtAperti, rate_scadute: rateScadute })
 
-    // ── Cantieri con margine: stessa logica di Progetti (SAL + tutte le fonti di costo) ──
+    // ── Cantieri con margine: DDT + costi manuali (no fatture fornitori) ──
     const { data: proj } = await supabase.from('progetti').select('id,nome,valore_contratto,stato').eq('stato', 'In Corso').limit(8)
-    if (proj && ffConProgetto) {
+    if (proj) {
       const cantieriData = proj.map((p: any) => {
         const ricP = (sal || []).filter((s: any) => s.progetto_id === p.id).reduce((s: number, x: any) => s + (x.importo_lavori || 0), 0)
-        const cosFFp = ffConProgetto.filter((f: any) => f.progetto_id === p.id).reduce((s: number, f: any) => s + (f.imponibile || 0), 0)
         const cosDDTp = (ddt || []).filter((d: any) => d.progetto_id === p.id).reduce((s: number, d: any) => s + (d.importo || 0), 0)
         const cosManualip = (costiManuali || []).filter((c: any) => c.progetto_id === p.id).reduce((s: number, c: any) => s + (c.importo || 0), 0)
-        const cosP = cosFFp + cosDDTp + cosManualip
+        const cosP = cosDDTp + cosManualip
         const marg = ricP > 0 ? Math.round((ricP - cosP) / ricP * 100) : 0
         return { nome: p.nome.substring(0, 18), margine: marg, ricavi: ricP, costi: cosP }
       }).sort((a: any, b: any) => b.margine - a.margine)
@@ -140,13 +139,11 @@ export default function Dashboard() {
       const meseStr = `${annoCorrente}-${String(i+1).padStart(2,'0')}`
       const ric = (sal || []).filter((s: any) => s.data?.startsWith(meseStr))
         .reduce((s: number, x: any) => s + (x.importo_lavori || 0), 0)
-      const cosFFmese = (ff || []).filter((f: any) => f.rata1_scadenza?.startsWith(meseStr))
-        .reduce((s: number, f: any) => s + (f.rata1_importo || 0), 0)
       const cosDDTmese = (ddt || []).filter((d: any) => d.data?.startsWith(meseStr))
         .reduce((s: number, d: any) => s + (d.importo || 0), 0)
       const cosManualiMese = (costiManuali || []).filter((c: any) => c.data?.startsWith(meseStr))
         .reduce((s: number, c: any) => s + (c.importo || 0), 0)
-      const cos = cosFFmese + cosDDTmese + cosManualiMese
+      const cos = cosDDTmese + cosManualiMese
       return { mese: m, ricavi: ric, costi: cos, margine: ric - cos }
     })
     setMensile(mensileData)
