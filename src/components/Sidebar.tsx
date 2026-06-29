@@ -5,14 +5,15 @@ import { usePathname } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
 const ADMIN_EMAIL = 'bonarrigogiuseppe05@gmail.com'
-const PREAVVISO_VISITA = 60   // giorni, stessa logica di dipendenti/page.tsx
-const PREAVVISO_CONTRATTO = 25 // giorni, stessa logica di dipendenti/page.tsx
+const PREAVVISO_VISITA = 60
+const PREAVVISO_CONTRATTO = 25
 
 const nav = [
   { section: 'Principale', items: [
     { href: '/dashboard', label: 'Dashboard', icon: '▦', perm: 'perm_dashboard' },
     { href: '/progetti', label: 'Progetti', icon: '🏗', perm: 'perm_progetti' },
     { href: '/costi-cantiere', label: 'Costi cantiere', icon: '💰', perm: 'perm_costi_cantiere' },
+    { href: '/programmi', label: 'Programmi', icon: '📋', perm: 'perm_programmi' },
   ]},
   { section: 'Ciclo Passivo', items: [
     { href: '/ddt', label: 'DDT / Bolle', icon: '📋', perm: 'perm_ddt' },
@@ -40,10 +41,8 @@ const nav = [
 
 function giorniAllaScadenza(data: string | null): number | null {
   if (!data) return null
-  const oggi = new Date()
-  oggi.setHours(0, 0, 0, 0)
-  const d = new Date(data)
-  d.setHours(0, 0, 0, 0)
+  const oggi = new Date(); oggi.setHours(0,0,0,0)
+  const d = new Date(data); d.setHours(0,0,0,0)
   return Math.ceil((d.getTime() - oggi.getTime()) / 86400000)
 }
 
@@ -56,11 +55,6 @@ function inAllertaConPreavviso(data: string | null, giorniPreavviso: number): bo
 export default function Sidebar() {
   const path = usePathname()
 
-  // ── Aggiornamento automatico dati: quando si torna a guardare il gestionale
-  // (cambio tab del browser, o si torna a questa finestra), emette un evento globale
-  // "gestionale:refresh" che ogni pagina può ascoltare per ricaricare i propri dati.
-  // Centralizzato qui (Sidebar è presente in ogni pagina) invece che duplicato:
-  // un solo punto che emette il segnale, le pagine si limitano ad ascoltarlo. ──
   useEffect(() => {
     function onTornaVisibile() {
       if (document.visibilityState === 'visible') {
@@ -74,6 +68,7 @@ export default function Sidebar() {
       window.removeEventListener('focus', onTornaVisibile)
     }
   }, [])
+
   const [permessi, setPermessi] = useState<Record<string, boolean> | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -83,21 +78,9 @@ export default function Sidebar() {
     async function loadPermessi() {
       const { data: authData } = await supabase.auth.getUser()
       const email = authData.user?.email
-
-      if (email === ADMIN_EMAIL) {
-        setIsAdmin(true)
-        setLoaded(true)
-        return
-      }
-
+      if (email === ADMIN_EMAIL) { setIsAdmin(true); setLoaded(true); return }
       if (!authData.user?.id) { setLoaded(true); return }
-
-      const { data: utente } = await supabase
-        .from('utenti')
-        .select('*')
-        .eq('id', authData.user.id)
-        .single()
-
+      const { data: utente } = await supabase.from('utenti').select('*').eq('id', authData.user.id).single()
       setPermessi(utente || {})
       setLoaded(true)
     }
@@ -106,34 +89,22 @@ export default function Sidebar() {
 
   useEffect(() => {
     async function loadBadges() {
-      // Fatture da emettere: conta righe in stato "Da Emettere"
       const { count: countFde } = await supabase
-        .from('fatture_da_emettere')
-        .select('id', { count: 'exact', head: true })
-        .eq('stato', 'Da Emettere')
-
-      // Dipendenti: conta attivi con visita medica o contratto scaduti/in preavviso
+        .from('fatture_da_emettere').select('id', { count: 'exact', head: true }).eq('stato', 'Da Emettere')
       const { data: dip } = await supabase
-        .from('dipendenti')
-        .select('id,attivo,scadenza_visita_medica,data_fine_contratto')
-        .eq('attivo', true)
-
+        .from('dipendenti').select('id,attivo,scadenza_visita_medica,data_fine_contratto').eq('attivo', true)
       const dipendentiInAllerta = (dip || []).filter(d =>
         inAllertaConPreavviso(d.scadenza_visita_medica, PREAVVISO_VISITA) ||
         inAllertaConPreavviso(d.data_fine_contratto, PREAVVISO_CONTRATTO)
       ).length
-
-      setBadges({
-        fattureDaEmettere: countFde || 0,
-        dipendentiScadenze: dipendentiInAllerta,
-      })
+      setBadges({ fattureDaEmettere: countFde || 0, dipendentiScadenze: dipendentiInAllerta })
     }
     loadBadges()
   }, [])
 
   function hasPerm(permKey: string) {
     if (isAdmin) return true
-    if (!loaded) return false // nasconde finché non carica, evita flash
+    if (!loaded) return false
     if (!permessi) return false
     return !!permessi[permKey]
   }
@@ -160,9 +131,7 @@ export default function Sidebar() {
           if (visibleItems.length === 0) return null
           return (
             <div key={group.section} className="mb-1">
-              <p className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wide">
-                {group.section}
-              </p>
+              <p className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wide">{group.section}</p>
               {visibleItems.map(item => {
                 const badgeCount = item.badgeKey ? (badges[item.badgeKey] || 0) : 0
                 return (
@@ -186,10 +155,7 @@ export default function Sidebar() {
         })}
       </nav>
       <div className="p-4 border-t border-gray-200">
-        <button onClick={logout}
-          className="w-full text-left text-sm text-gray-500 hover:text-red-600 transition-colors">
-          Esci
-        </button>
+        <button onClick={logout} className="w-full text-left text-sm text-gray-500 hover:text-red-600 transition-colors">Esci</button>
       </div>
     </aside>
   )
