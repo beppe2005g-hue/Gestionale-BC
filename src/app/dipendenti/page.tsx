@@ -1,24 +1,20 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 
 const formatData = (d: string) => d ? new Date(d).toLocaleDateString('it-IT') : '—'
-
-const PREAVVISO_VISITA = 60  // giorni
-const PREAVVISO_CONTRATTO = 25  // giorni
+const PREAVVISO_VISITA = 60
+const PREAVVISO_CONTRATTO = 25
 
 function giorniAllaScadenza(data: string | null): number | null {
   if (!data) return null
-  const oggi = new Date()
-  oggi.setHours(0, 0, 0, 0)
-  const d = new Date(data)
-  d.setHours(0, 0, 0, 0)
+  const oggi = new Date(); oggi.setHours(0,0,0,0)
+  const d = new Date(data); d.setHours(0,0,0,0)
   return Math.ceil((d.getTime() - oggi.getTime()) / 86400000)
 }
 
-// Stato generico per i corsi (invariato)
-function statoScadenza(data: string | null): 'scaduta' | 'anno_corrente' | 'prossimo_anno' | 'ok' | 'nessuna' {
+function statoScadenza(data: string | null): 'scaduta'|'anno_corrente'|'prossimo_anno'|'ok'|'nessuna' {
   if (!data) return 'nessuna'
   const anno = new Date().getFullYear()
   const d = new Date(data)
@@ -28,14 +24,21 @@ function statoScadenza(data: string | null): 'scaduta' | 'anno_corrente' | 'pros
   return 'ok'
 }
 
-// Stato con preavviso configurabile (per visita e contratto)
-function statoConPreavviso(data: string | null, giorniPreavviso: number): 'scaduta' | 'in_preavviso' | 'ok' | 'nessuna' {
+function statoConPreavviso(data: string | null, giorniPreavviso: number): 'scaduta'|'in_preavviso'|'ok'|'nessuna' {
   if (!data) return 'nessuna'
   const giorni = giorniAllaScadenza(data)
   if (giorni === null) return 'nessuna'
   if (giorni < 0) return 'scaduta'
   if (giorni <= giorniPreavviso) return 'in_preavviso'
   return 'ok'
+}
+
+function labelGiorni(data: string | null, preavviso: number): string {
+  const giorni = giorniAllaScadenza(data)
+  if (giorni === null) return ''
+  if (giorni < 0) return `Scaduta da ${Math.abs(giorni)}gg`
+  if (giorni === 0) return 'Scade oggi!'
+  return `${giorni}gg`
 }
 
 function CellaCorso({ data, onClick }: { data: string | null, onClick: () => void }) {
@@ -46,9 +49,9 @@ function CellaCorso({ data, onClick }: { data: string | null, onClick: () => voi
     </td>
   )
   const cls = stato === 'scaduta' ? 'bg-red-100 text-red-700' :
-               stato === 'anno_corrente' ? 'bg-amber-100 text-amber-700' :
-               stato === 'prossimo_anno' ? 'bg-yellow-50 text-yellow-700' :
-               'bg-green-50 text-green-700'
+              stato === 'anno_corrente' ? 'bg-amber-100 text-amber-700' :
+              stato === 'prossimo_anno' ? 'bg-yellow-50 text-yellow-700' :
+              'bg-green-50 text-green-700'
   return (
     <td className="px-2 py-1.5 text-center border-b border-gray-100 cursor-pointer hover:opacity-80" onClick={onClick}>
       <span className={`text-xs font-medium px-1 py-0.5 rounded ${cls}`}>
@@ -56,6 +59,25 @@ function CellaCorso({ data, onClick }: { data: string | null, onClick: () => voi
         {new Date(data!).toLocaleDateString('it-IT', { month: '2-digit', year: '2-digit' })}
       </span>
     </td>
+  )
+}
+
+// ── Avatar dipendente ──
+function AvatarDipendente({ dipendente, size = 'md', onClick }: { dipendente: any, size?: 'sm'|'md'|'lg', onClick?: () => void }) {
+  const sizes = { sm: 'w-8 h-8 text-xs', md: 'w-12 h-12 text-sm', lg: 'w-24 h-24 text-2xl' }
+  const initiali = `${dipendente.nome?.charAt(0) || ''}${dipendente.cognome?.charAt(0) || ''}`.toUpperCase()
+  if (dipendente.foto_url) {
+    return (
+      <img src={dipendente.foto_url} alt={`${dipendente.nome} ${dipendente.cognome}`}
+        className={`${sizes[size]} rounded-full object-cover cursor-pointer flex-shrink-0 border-2 border-white shadow-sm`}
+        onClick={onClick} />
+    )
+  }
+  return (
+    <div className={`${sizes[size]} rounded-full bg-gray-700 text-white flex items-center justify-center font-semibold flex-shrink-0 cursor-pointer`}
+      onClick={onClick}>
+      {initiali || '?'}
+    </div>
   )
 }
 
@@ -72,16 +94,16 @@ export default function Dipendenti() {
   const [filtroAzienda, setFiltroAzienda] = useState('')
   const [mostraExDipendenti, setMostraExDipendenti] = useState(false)
   const [aziende, setAziende] = useState<string[]>([])
+  const [uploadingFoto, setUploadingFoto] = useState(false)
+  const fotoInputRef = useRef<HTMLInputElement>(null)
 
   const [form, setForm] = useState({
-    nome: '', cognome: '', azienda: '', mansione: '',
-    data_nascita: '', luogo_nascita: '', codice_fiscale: '',
-    data_inizio_contratto: '', data_fine_contratto: '', tipo_contratto: '',
-    scadenza_visita_medica: '', note: ''
+    nome:'',cognome:'',azienda:'',mansione:'',data_nascita:'',luogo_nascita:'',
+    codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',
+    tipo_contratto:'',scadenza_visita_medica:'',note:''
   })
-
   const [formCorso, setFormCorso] = useState({
-    nome_corso: '', ente_erogatore: '', data_conseguimento: '', scadenza: '', note: ''
+    nome_corso:'',ente_erogatore:'',data_conseguimento:'',scadenza:'',note:''
   })
 
   useEffect(() => { load() }, [])
@@ -91,8 +113,7 @@ export default function Dipendenti() {
     const dipOrdinati = (dip || []).sort((a: any, b: any) => {
       const aBC = a.azienda.toUpperCase().startsWith('BC')
       const bBC = b.azienda.toUpperCase().startsWith('BC')
-      if (aBC && !bBC) return -1
-      if (!aBC && bBC) return 1
+      if (aBC && !bBC) return -1; if (!aBC && bBC) return 1
       const cmpAz = a.azienda.localeCompare(b.azienda)
       if (cmpAz !== 0) return cmpAz
       const cmpCog = a.cognome.localeCompare(b.cognome)
@@ -119,21 +140,53 @@ export default function Dipendenti() {
     setCorsiDip(data || [])
   }
 
+  // ── Upload foto ──
+  async function uploadFoto(file: File, dipId: string) {
+    setUploadingFoto(true)
+    try {
+      const ext = file.name.split('.').pop()
+      const path = `${dipId}.${ext}`
+      // Rimuovi vecchia foto se esiste
+      await supabase.storage.from('dipendenti-foto').remove([path])
+      const { error: upErr } = await supabase.storage.from('dipendenti-foto').upload(path, file, { upsert: true })
+      if (upErr) { alert('Errore upload: ' + upErr.message); return }
+      const { data: urlData } = supabase.storage.from('dipendenti-foto').getPublicUrl(path)
+      const foto_url = urlData.publicUrl + '?t=' + Date.now() // cache bust
+      await supabase.from('dipendenti').update({ foto_url }).eq('id', dipId)
+      // Aggiorna stato locale
+      const aggiornato = { ...selezionato, foto_url }
+      setSelezionato(aggiornato)
+      setDipendenti(prev => prev.map(d => d.id === dipId ? aggiornato : d))
+    } finally {
+      setUploadingFoto(false)
+    }
+  }
+
+  async function rimuoviFoto(dipId: string) {
+    if (!confirm('Rimuovere la foto?')) return
+    const dip = dipendenti.find(d => d.id === dipId)
+    if (dip?.foto_url) {
+      const path = dip.foto_url.split('/').pop()?.split('?')[0]
+      if (path) await supabase.storage.from('dipendenti-foto').remove([path])
+    }
+    await supabase.from('dipendenti').update({ foto_url: null }).eq('id', dipId)
+    const aggiornato = { ...selezionato, foto_url: null }
+    setSelezionato(aggiornato)
+    setDipendenti(prev => prev.map(d => d.id === dipId ? aggiornato : d))
+  }
+
   async function salva() {
-    if (!form.nome || !form.cognome || !form.azienda) { alert('Nome, cognome e azienda sono obbligatori'); return }
+    if (!form.nome || !form.cognome || !form.azienda) { alert('Nome, cognome e azienda obbligatori'); return }
     setLoading(true)
     await supabase.from('dipendenti').insert({
-      nome: form.nome, cognome: form.cognome, azienda: form.azienda,
-      mansione: form.mansione, data_nascita: form.data_nascita || null,
-      luogo_nascita: form.luogo_nascita, codice_fiscale: form.codice_fiscale,
-      data_inizio_contratto: form.data_inizio_contratto || null,
-      data_fine_contratto: form.data_fine_contratto || null,
-      tipo_contratto: form.tipo_contratto,
-      scadenza_visita_medica: form.scadenza_visita_medica || null,
-      note: form.note, attivo: true
+      nome:form.nome, cognome:form.cognome, azienda:form.azienda, mansione:form.mansione,
+      data_nascita:form.data_nascita||null, luogo_nascita:form.luogo_nascita,
+      codice_fiscale:form.codice_fiscale, data_inizio_contratto:form.data_inizio_contratto||null,
+      data_fine_contratto:form.data_fine_contratto||null, tipo_contratto:form.tipo_contratto,
+      scadenza_visita_medica:form.scadenza_visita_medica||null, note:form.note, attivo:true
     })
     setModal(false)
-    setForm({ nome:'',cognome:'',azienda:'',mansione:'',data_nascita:'',luogo_nascita:'',codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',tipo_contratto:'',scadenza_visita_medica:'',note:'' })
+    setForm({nome:'',cognome:'',azienda:'',mansione:'',data_nascita:'',luogo_nascita:'',codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',tipo_contratto:'',scadenza_visita_medica:'',note:''})
     setLoading(false); load()
   }
 
@@ -141,34 +194,27 @@ export default function Dipendenti() {
     if (!modalModifica) return
     setLoading(true)
     await supabase.from('dipendenti').update({
-      nome: modalModifica.nome, cognome: modalModifica.cognome,
-      azienda: modalModifica.azienda, mansione: modalModifica.mansione,
-      data_nascita: modalModifica.data_nascita || null,
-      luogo_nascita: modalModifica.luogo_nascita,
-      codice_fiscale: modalModifica.codice_fiscale,
-      data_inizio_contratto: modalModifica.data_inizio_contratto || null,
-      data_fine_contratto: modalModifica.data_fine_contratto || null,
-      tipo_contratto: modalModifica.tipo_contratto,
-      scadenza_visita_medica: modalModifica.scadenza_visita_medica || null,
-      note: modalModifica.note
+      nome:modalModifica.nome, cognome:modalModifica.cognome, azienda:modalModifica.azienda,
+      mansione:modalModifica.mansione, data_nascita:modalModifica.data_nascita||null,
+      luogo_nascita:modalModifica.luogo_nascita, codice_fiscale:modalModifica.codice_fiscale,
+      data_inizio_contratto:modalModifica.data_inizio_contratto||null,
+      data_fine_contratto:modalModifica.data_fine_contratto||null,
+      tipo_contratto:modalModifica.tipo_contratto,
+      scadenza_visita_medica:modalModifica.scadenza_visita_medica||null, note:modalModifica.note
     }).eq('id', modalModifica.id)
-    setModalModifica(null); setLoading(false)
-    load()
+    setModalModifica(null); setLoading(false); load()
     if (selezionato?.id === modalModifica.id) apriDipendente(modalModifica)
   }
 
   async function salvaCorso() {
     if (!formCorso.nome_corso || !selezionato) { alert('Inserisci il nome del corso'); return }
     await supabase.from('corsi_dipendente').insert({
-      dipendente_id: selezionato.id,
-      nome_corso: formCorso.nome_corso,
-      ente_erogatore: formCorso.ente_erogatore,
-      data_conseguimento: formCorso.data_conseguimento || null,
-      scadenza: formCorso.scadenza || null,
-      note: formCorso.note
+      dipendente_id:selezionato.id, nome_corso:formCorso.nome_corso,
+      ente_erogatore:formCorso.ente_erogatore, data_conseguimento:formCorso.data_conseguimento||null,
+      scadenza:formCorso.scadenza||null, note:formCorso.note
     })
     setModalCorso(false)
-    setFormCorso({ nome_corso:'',ente_erogatore:'',data_conseguimento:'',scadenza:'',note:'' })
+    setFormCorso({nome_corso:'',ente_erogatore:'',data_conseguimento:'',scadenza:'',note:''})
     apriDipendente(selezionato); load()
   }
 
@@ -179,7 +225,7 @@ export default function Dipendenti() {
   }
 
   async function eliminaDipendente(id: string) {
-    if (!confirm('Eliminare definitivamente questo dipendente? Verranno eliminati anche tutti i suoi corsi.')) return
+    if (!confirm('Eliminare definitivamente? Verranno eliminati anche tutti i corsi.')) return
     await supabase.from('dipendenti').delete().eq('id', id)
     setSelezionato(null); load()
   }
@@ -190,17 +236,15 @@ export default function Dipendenti() {
     if (selezionato?.id === id) setSelezionato({ ...selezionato, attivo: !attivo })
   }
 
-  // Alert con preavvisi configurati
   const alertVisita = dipendenti.filter(d => {
     if (!d.attivo) return false
-    const stato = statoConPreavviso(d.scadenza_visita_medica, PREAVVISO_VISITA)
-    return stato === 'scaduta' || stato === 'in_preavviso'
+    const s = statoConPreavviso(d.scadenza_visita_medica, PREAVVISO_VISITA)
+    return s === 'scaduta' || s === 'in_preavviso'
   })
-
   const alertContratto = dipendenti.filter(d => {
     if (!d.attivo) return false
-    const stato = statoConPreavviso(d.data_fine_contratto, PREAVVISO_CONTRATTO)
-    return stato === 'scaduta' || stato === 'in_preavviso'
+    const s = statoConPreavviso(d.data_fine_contratto, PREAVVISO_CONTRATTO)
+    return s === 'scaduta' || s === 'in_preavviso'
   })
 
   const dipFiltrati = dipendenti.filter(d => {
@@ -243,7 +287,6 @@ export default function Dipendenti() {
     return a.localeCompare(b)
   })
 
-  // Badge per visita/contratto nella lista laterale
   function hasVisitaAlert(d: any) {
     const s = statoConPreavviso(d.scadenza_visita_medica, PREAVVISO_VISITA)
     return s === 'scaduta' || s === 'in_preavviso'
@@ -251,15 +294,6 @@ export default function Dipendenti() {
   function hasContrattoAlert(d: any) {
     const s = statoConPreavviso(d.data_fine_contratto, PREAVVISO_CONTRATTO)
     return s === 'scaduta' || s === 'in_preavviso'
-  }
-
-  // Etichetta giorni rimanenti
-  function labelGiorni(data: string | null, preavviso: number): string {
-    const giorni = giorniAllaScadenza(data)
-    if (giorni === null) return ''
-    if (giorni < 0) return `Scaduta da ${Math.abs(giorni)}gg`
-    if (giorni === 0) return 'Scade oggi!'
-    return `${giorni}gg`
   }
 
   return (
@@ -271,25 +305,20 @@ export default function Dipendenti() {
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuovo dipendente</button>
         </div>
 
-        {/* Alert globali con preavvisi */}
         {(alertVisita.length > 0 || alertContratto.length > 0) && (
           <div className="space-y-2 mb-4">
             {alertVisita.length > 0 && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                <p className="text-sm font-medium text-amber-800 mb-1">
-                  ⚕️ Visite mediche in scadenza ({alertVisita.length}) — avviso {PREAVVISO_VISITA} giorni prima
-                </p>
+                <p className="text-sm font-medium text-amber-800 mb-1">⚕️ Visite mediche in scadenza ({alertVisita.length}) — avviso {PREAVVISO_VISITA} giorni prima</p>
                 <div className="flex flex-wrap gap-2">
                   {alertVisita.map(d => {
                     const stato = statoConPreavviso(d.scadenza_visita_medica, PREAVVISO_VISITA)
-                    const giorni = labelGiorni(d.scadenza_visita_medica, PREAVVISO_VISITA)
                     return (
-                      <span key={d.id}
-                        className={`text-xs px-2 py-1 rounded-full cursor-pointer flex items-center gap-1 ${stato === 'scaduta' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}
+                      <span key={d.id} className={`text-xs px-2 py-1 rounded-full cursor-pointer flex items-center gap-1 ${stato === 'scaduta' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}
                         onClick={() => { apriDipendente(d); setTab('lista') }}>
                         <strong>{d.cognome} {d.nome}</strong>
                         <span>— {formatData(d.scadenza_visita_medica)}</span>
-                        <span className="opacity-70">({giorni})</span>
+                        <span className="opacity-70">({labelGiorni(d.scadenza_visita_medica, PREAVVISO_VISITA)})</span>
                       </span>
                     )
                   })}
@@ -298,20 +327,16 @@ export default function Dipendenti() {
             )}
             {alertContratto.length > 0 && (
               <div className="bg-red-50 border border-red-200 rounded-xl p-3">
-                <p className="text-sm font-medium text-red-800 mb-1">
-                  📋 Contratti in scadenza ({alertContratto.length}) — avviso {PREAVVISO_CONTRATTO} giorni prima
-                </p>
+                <p className="text-sm font-medium text-red-800 mb-1">📋 Contratti in scadenza ({alertContratto.length}) — avviso {PREAVVISO_CONTRATTO} giorni prima</p>
                 <div className="flex flex-wrap gap-2">
                   {alertContratto.map(d => {
                     const stato = statoConPreavviso(d.data_fine_contratto, PREAVVISO_CONTRATTO)
-                    const giorni = labelGiorni(d.data_fine_contratto, PREAVVISO_CONTRATTO)
                     return (
-                      <span key={d.id}
-                        className={`text-xs px-2 py-1 rounded-full cursor-pointer flex items-center gap-1 ${stato === 'scaduta' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}
+                      <span key={d.id} className={`text-xs px-2 py-1 rounded-full cursor-pointer flex items-center gap-1 ${stato === 'scaduta' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}
                         onClick={() => { apriDipendente(d); setTab('lista') }}>
                         <strong>{d.cognome} {d.nome}</strong>
                         <span>— {formatData(d.data_fine_contratto)}</span>
-                        <span className="opacity-70">({giorni})</span>
+                        <span className="opacity-70">({labelGiorni(d.data_fine_contratto, PREAVVISO_CONTRATTO)})</span>
                       </span>
                     )
                   })}
@@ -321,7 +346,6 @@ export default function Dipendenti() {
           </div>
         )}
 
-        {/* Tab e filtri */}
         <div className="flex items-center gap-3 mb-4 flex-wrap">
           <button onClick={() => setTab('lista')} className={`btn ${tab === 'lista' ? 'btn-primary' : ''}`}>👷 Lista dipendenti</button>
           <button onClick={() => setTab('matrice')} className={`btn ${tab === 'matrice' ? 'btn-primary' : ''}`}>📊 Matrice corsi</button>
@@ -337,9 +361,9 @@ export default function Dipendenti() {
           )}
         </div>
 
-        {/* TAB LISTA */}
         {tab === 'lista' && (
           <div className="flex gap-3">
+            {/* Lista laterale */}
             <div className="w-64 flex-shrink-0 space-y-1">
               {Object.entries(perAzienda).map(([azienda, dipList]) => (
                 <div key={azienda}>
@@ -349,15 +373,18 @@ export default function Dipendenti() {
                   </div>
                   {dipList.map(d => (
                     <div key={d.id} onClick={() => apriDipendente(d)}
-                      className={`px-3 py-2 rounded-lg cursor-pointer mb-0.5 border transition-all ${selezionato?.id === d.id ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-100 hover:bg-gray-50'}`}>
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-medium">{d.cognome} {d.nome}</p>
-                        <div className="flex gap-1">
-                          {hasVisitaAlert(d) && <span title={`Visita: ${formatData(d.scadenza_visita_medica)}`}>⚕️</span>}
-                          {hasContrattoAlert(d) && <span title={`Contratto: ${formatData(d.data_fine_contratto)}`}>📋</span>}
+                      className={`px-3 py-2 rounded-lg cursor-pointer mb-0.5 border transition-all flex items-center gap-2 ${selezionato?.id === d.id ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-100 hover:bg-gray-50'}`}>
+                      <AvatarDipendente dipendente={d} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium truncate">{d.cognome} {d.nome}</p>
+                          <div className="flex gap-1 flex-shrink-0">
+                            {hasVisitaAlert(d) && <span title={`Visita: ${formatData(d.scadenza_visita_medica)}`}>⚕️</span>}
+                            {hasContrattoAlert(d) && <span title={`Contratto: ${formatData(d.data_fine_contratto)}`}>📋</span>}
+                          </div>
                         </div>
+                        <p className="text-xs text-gray-500 truncate">{d.mansione || '—'}</p>
                       </div>
-                      <p className="text-xs text-gray-500">{d.mansione || '—'}</p>
                     </div>
                   ))}
                 </div>
@@ -372,11 +399,41 @@ export default function Dipendenti() {
             {selezionato ? (
               <div className="flex-1 space-y-4">
                 <div className="card bg-gray-900 text-white">
-                  <div className="flex items-start justify-between">
-                    <div>
+                  <div className="flex items-start gap-4">
+                    {/* Foto grande con upload */}
+                    <div className="flex-shrink-0 relative group">
+                      {selezionato.foto_url ? (
+                        <img src={selezionato.foto_url} alt=""
+                          className="w-24 h-24 rounded-xl object-cover border-2 border-gray-700" />
+                      ) : (
+                        <div className="w-24 h-24 rounded-xl bg-gray-700 flex items-center justify-center text-2xl font-bold text-white border-2 border-gray-600">
+                          {`${selezionato.nome?.charAt(0)||''}${selezionato.cognome?.charAt(0)||''}`.toUpperCase() || '?'}
+                        </div>
+                      )}
+                      {/* Overlay upload */}
+                      <div className="absolute inset-0 rounded-xl bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1 cursor-pointer"
+                        onClick={() => fotoInputRef.current?.click()}>
+                        <span className="text-white text-xs font-medium">
+                          {uploadingFoto ? '⏳' : selezionato.foto_url ? '✏️ Cambia' : '📷 Aggiungi'}
+                        </span>
+                      </div>
+                      <input ref={fotoInputRef} type="file" accept="image/*" className="hidden"
+                        onChange={e => {
+                          const file = e.target.files?.[0]
+                          if (file) uploadFoto(file, selezionato.id)
+                          e.target.value = ''
+                        }} />
+                    </div>
+                    <div className="flex-1">
                       <h2 className="text-xl font-semibold">{selezionato.cognome} {selezionato.nome}</h2>
                       <p className="text-gray-300 text-sm">{selezionato.mansione || '—'} · {selezionato.azienda}</p>
                       {!selezionato.attivo && <span className="text-xs bg-red-700 px-2 py-0.5 rounded-full mt-1 inline-block">Ex dipendente</span>}
+                      {selezionato.foto_url && (
+                        <button onClick={() => rimuoviFoto(selezionato.id)}
+                          className="text-xs text-red-400 hover:text-red-300 mt-1 block">
+                          🗑 Rimuovi foto
+                        </button>
+                      )}
                     </div>
                     <div className="flex gap-2 flex-wrap">
                       <button onClick={() => setModalModifica({...selezionato})} className="btn btn-sm bg-blue-700 text-white border-blue-600">✏️ Modifica</button>
@@ -403,13 +460,8 @@ export default function Dipendenti() {
                         <p className={`font-medium ${statoConPreavviso(selezionato.data_fine_contratto, PREAVVISO_CONTRATTO) === 'scaduta' ? 'text-red-600' : statoConPreavviso(selezionato.data_fine_contratto, PREAVVISO_CONTRATTO) === 'in_preavviso' ? 'text-orange-600' : ''}`}>
                           {formatData(selezionato.data_fine_contratto)}
                         </p>
-                        {statoConPreavviso(selezionato.data_fine_contratto, PREAVVISO_CONTRATTO) === 'in_preavviso' && (
+                        {statoConPreavviso(selezionato.data_fine_contratto, PREAVVISO_CONTRATTO) !== 'ok' && statoConPreavviso(selezionato.data_fine_contratto, PREAVVISO_CONTRATTO) !== 'nessuna' && (
                           <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full">
-                            {labelGiorni(selezionato.data_fine_contratto, PREAVVISO_CONTRATTO)}
-                          </span>
-                        )}
-                        {statoConPreavviso(selezionato.data_fine_contratto, PREAVVISO_CONTRATTO) === 'scaduta' && (
-                          <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
                             {labelGiorni(selezionato.data_fine_contratto, PREAVVISO_CONTRATTO)}
                           </span>
                         )}
@@ -421,13 +473,8 @@ export default function Dipendenti() {
                         <p className={`font-medium ${statoConPreavviso(selezionato.scadenza_visita_medica, PREAVVISO_VISITA) === 'scaduta' ? 'text-red-600' : statoConPreavviso(selezionato.scadenza_visita_medica, PREAVVISO_VISITA) === 'in_preavviso' ? 'text-amber-600' : ''}`}>
                           {formatData(selezionato.scadenza_visita_medica)}
                         </p>
-                        {statoConPreavviso(selezionato.scadenza_visita_medica, PREAVVISO_VISITA) === 'in_preavviso' && (
+                        {statoConPreavviso(selezionato.scadenza_visita_medica, PREAVVISO_VISITA) !== 'ok' && statoConPreavviso(selezionato.scadenza_visita_medica, PREAVVISO_VISITA) !== 'nessuna' && (
                           <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
-                            {labelGiorni(selezionato.scadenza_visita_medica, PREAVVISO_VISITA)}
-                          </span>
-                        )}
-                        {statoConPreavviso(selezionato.scadenza_visita_medica, PREAVVISO_VISITA) === 'scaduta' && (
-                          <span className="text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
                             {labelGiorni(selezionato.scadenza_visita_medica, PREAVVISO_VISITA)}
                           </span>
                         )}
@@ -479,7 +526,6 @@ export default function Dipendenti() {
           </div>
         )}
 
-        {/* TAB MATRICE CORSI */}
         {tab === 'matrice' && (
           <div className="overflow-x-auto">
             <div className="mb-4 flex items-center justify-between flex-wrap gap-3">
@@ -495,14 +541,14 @@ export default function Dipendenti() {
                 if (nome && nome.trim()) setTuttiCorsi(prev => [...prev, nome.trim()].sort())
               }}>+ Nuovo tipo corso</button>
             </div>
-            <div style={{borderRadius: 12, overflow: 'hidden', border: '1px solid #dbeafe'}}>
-              <table className="border-collapse w-full" style={{fontSize: 12}}>
+            <div style={{borderRadius:12,overflow:'hidden',border:'1px solid #dbeafe'}}>
+              <table className="border-collapse w-full" style={{fontSize:12}}>
                 <thead>
                   <tr>
-                    <th style={{background:'linear-gradient(135deg,#1e40af,#1d4ed8)',color:'white',textAlign:'left',padding:'12px 14px',position:'sticky',left:0,zIndex:10,minWidth:160,fontWeight:600,fontSize:13,letterSpacing:'0.02em'}}>Dipendente</th>
+                    <th style={{background:'linear-gradient(135deg,#1e40af,#1d4ed8)',color:'white',textAlign:'left',padding:'12px 14px',position:'sticky',left:0,zIndex:10,minWidth:160,fontWeight:600,fontSize:13}}>Dipendente</th>
                     {tuttiCorsi.map((corso, idx) => (
                       <th key={corso} style={{background:idx%2===0?'linear-gradient(180deg,#1e40af,#1d4ed8)':'linear-gradient(180deg,#1e3a8a,#1e40af)',color:'white',padding:'8px 6px',minWidth:110,maxWidth:130,verticalAlign:'bottom'}}>
-                        <div style={{writingMode:'vertical-rl',transform:'rotate(180deg)',height:140,display:'flex',alignItems:'center',fontSize:11,fontWeight:500,letterSpacing:'0.01em',lineHeight:1.3,padding:'4px 0'}}>{corso}</div>
+                        <div style={{writingMode:'vertical-rl',transform:'rotate(180deg)',height:140,display:'flex',alignItems:'center',fontSize:11,fontWeight:500,lineHeight:1.3,padding:'4px 0'}}>{corso}</div>
                       </th>
                     ))}
                   </tr>
@@ -513,7 +559,7 @@ export default function Dipendenti() {
                     return (
                       <>
                         <tr key={azienda}>
-                          <td colSpan={tuttiCorsi.length+1} style={{background:'linear-gradient(90deg,#1e3a8a,#1e40af)',color:'white',padding:'8px 14px',fontSize:12,fontWeight:600,letterSpacing:'0.03em',position:'sticky',left:0}}>
+                          <td colSpan={tuttiCorsi.length+1} style={{background:'linear-gradient(90deg,#1e3a8a,#1e40af)',color:'white',padding:'8px 14px',fontSize:12,fontWeight:600,position:'sticky',left:0}}>
                             ▸ {azienda} — {dipList.length} dipendenti
                           </td>
                         </tr>
@@ -524,22 +570,22 @@ export default function Dipendenti() {
                             <tr key={d.id} style={{background:rowBg}}
                               onMouseEnter={e=>(e.currentTarget.style.background='#dbeafe')}
                               onMouseLeave={e=>(e.currentTarget.style.background=rowBg)}>
-                              <td style={{padding:'8px 14px',fontWeight:500,borderBottom:'1px solid #e0effe',position:'sticky',left:0,background:'inherit',cursor:'pointer',color:'#1e40af',fontSize:12}}
+                              <td style={{padding:'6px 14px',fontWeight:500,borderBottom:'1px solid #e0effe',position:'sticky',left:0,background:'inherit',cursor:'pointer',color:'#1e40af',fontSize:12}}
                                 onClick={()=>{apriDipendente(d);setTab('lista')}}>
-                                {d.cognome} {d.nome}
-                                <span style={{color:'#93c5fd',marginLeft:4,fontSize:10}}>→</span>
+                                <div className="flex items-center gap-2">
+                                  <AvatarDipendente dipendente={d} size="sm" />
+                                  <span>{d.cognome} {d.nome}</span>
+                                  <span style={{color:'#93c5fd',fontSize:10}}>→</span>
+                                </div>
                               </td>
                               {tuttiCorsi.map((corso, colIdx) => {
                                 const corsoTrovato = corsiDipendente.find((c:any)=>c.nome_corso===corso)
                                 const scad = corsoTrovato?.scadenza||null
                                 const stato = statoScadenza(scad)
-                                const colBg = colIdx%2===0?'rgba(219,234,254,0.2)':'transparent'
                                 return (
-                                  <td key={corso} style={{padding:'6px 4px',textAlign:'center',borderBottom:'1px solid #e0effe',borderLeft:`1px solid ${colIdx%2===0?'#dbeafe':'#e0effe'}`,background:colBg,cursor:'pointer'}}
+                                  <td key={corso} style={{padding:'6px 4px',textAlign:'center',borderBottom:'1px solid #e0effe',borderLeft:`1px solid ${colIdx%2===0?'#dbeafe':'#e0effe'}`,cursor:'pointer'}}
                                     onClick={()=>{apriDipendente(d);setTab('lista')}}>
-                                    {!scad?(
-                                      <span style={{color:'#cbd5e1',fontSize:11}}>—</span>
-                                    ):(
+                                    {!scad?<span style={{color:'#cbd5e1',fontSize:11}}>—</span>:(
                                       <span style={{display:'inline-block',padding:'2px 5px',borderRadius:6,fontSize:10,fontWeight:600,
                                         background:stato==='scaduta'?'#fee2e2':stato==='anno_corrente'?'#fef3c7':stato==='prossimo_anno'?'#ffedd5':'#dcfce7',
                                         color:stato==='scaduta'?'#b91c1c':stato==='anno_corrente'?'#92400e':stato==='prossimo_anno'?'#9a3412':'#166534',
