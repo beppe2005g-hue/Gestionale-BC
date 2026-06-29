@@ -6,38 +6,34 @@ import { supabase } from '@/lib/supabase'
 const ADMIN_EMAIL = 'bonarrigogiuseppe05@gmail.com'
 
 const SEZIONI = [
-  // Principale
   { key: 'perm_dashboard',               label: 'Dashboard',              icon: '▦',  section: 'Principale' },
   { key: 'perm_progetti',                label: 'Progetti',               icon: '🏗', section: 'Principale' },
   { key: 'perm_archivia_progetti',       label: 'Archivia Cantieri',      icon: '📦', section: 'Principale' },
   { key: 'perm_costi_cantiere',          label: 'Costi Cantiere',         icon: '💰', section: 'Principale' },
-  // Ciclo Passivo
+  { key: 'perm_programmi',               label: 'Programmi',              icon: '📋', section: 'Principale' },
   { key: 'perm_ddt',                     label: 'DDT / Bolle',            icon: '📋', section: 'Ciclo Passivo' },
   { key: 'perm_import_ddt',             label: 'Import DDT con AI',      icon: '🤖', section: 'Ciclo Passivo' },
   { key: 'perm_da_ricevere',             label: 'Da Ricevere',            icon: '⏳', section: 'Ciclo Passivo' },
   { key: 'perm_fatture_fornitori',       label: 'Fatt. Fornitori',        icon: '📄', section: 'Ciclo Passivo' },
   { key: 'perm_import_sdi',             label: 'Import SDI',             icon: '📥', section: 'Ciclo Passivo' },
   { key: 'perm_prezzario',              label: 'Prezzario',              icon: '💹', section: 'Ciclo Passivo' },
-  // Ciclo Attivo
   { key: 'perm_fatture_clienti',         label: 'Fatt. Clienti',          icon: '🧾', section: 'Ciclo Attivo' },
   { key: 'perm_fatture_da_emettere',    label: 'Fatture da Emettere',    icon: '🔔', section: 'Ciclo Attivo' },
-  // Controllo
   { key: 'perm_scadenzario',             label: 'Scadenzario',            icon: '📅', section: 'Controllo' },
   { key: 'perm_cashflow',               label: 'Cash Flow',              icon: '📈', section: 'Controllo' },
   { key: 'perm_budget',                  label: 'Budget vs Consuntivo',   icon: '⚖', section: 'Controllo' },
-  // Impostazioni
   { key: 'perm_anagrafiche',             label: 'Anagrafiche',            icon: '👥', section: 'Impostazioni' },
   { key: 'perm_dipendenti',              label: 'Dipendenti',             icon: '👷', section: 'Impostazioni' },
   { key: 'perm_utenti',                  label: 'Utenti e Permessi',      icon: '🔒', section: 'Impostazioni' },
-  // Speciale
   { key: 'perm_solo_cantieri_assegnati', label: '🔒 Solo cant. assegnati', icon: '', section: 'Speciale' },
 ]
 
 const TUTTI_I_PERMESSI_FALSE: Record<string, boolean> = {
   perm_dashboard: false, perm_progetti: false, perm_archivia_progetti: false,
-  perm_costi_cantiere: false, perm_ddt: false, perm_import_ddt: false,
-  perm_da_ricevere: false, perm_fatture_fornitori: false, perm_import_sdi: false,
-  perm_prezzario: false, perm_fatture_clienti: false, perm_fatture_da_emettere: false,
+  perm_costi_cantiere: false, perm_programmi: false,
+  perm_ddt: false, perm_import_ddt: false, perm_da_ricevere: false,
+  perm_fatture_fornitori: false, perm_import_sdi: false, perm_prezzario: false,
+  perm_fatture_clienti: false, perm_fatture_da_emettere: false,
   perm_scadenzario: false, perm_cashflow: false, perm_budget: false,
   perm_anagrafiche: false, perm_dipendenti: false, perm_utenti: false,
   perm_solo_cantieri_assegnati: false,
@@ -47,7 +43,7 @@ const PRESETS: Record<string, Record<string, boolean>> = {
   nessuno: { ...TUTTI_I_PERMESSI_FALSE },
   geometra: {
     ...TUTTI_I_PERMESSI_FALSE,
-    perm_progetti: true, perm_costi_cantiere: true,
+    perm_progetti: true, perm_costi_cantiere: true, perm_programmi: true,
     perm_ddt: true, perm_import_ddt: true, perm_prezzario: true,
     perm_anagrafiche: true, perm_dipendenti: true,
     perm_solo_cantieri_assegnati: true,
@@ -55,41 +51,37 @@ const PRESETS: Record<string, Record<string, boolean>> = {
   capo_geometra: {
     ...TUTTI_I_PERMESSI_FALSE,
     perm_dashboard: true, perm_progetti: true, perm_archivia_progetti: true,
-    perm_costi_cantiere: true, perm_ddt: true, perm_import_ddt: true,
-    perm_da_ricevere: true, perm_prezzario: true,
+    perm_costi_cantiere: true, perm_programmi: true,
+    perm_ddt: true, perm_import_ddt: true, perm_da_ricevere: true, perm_prezzario: true,
     perm_fatture_da_emettere: true, perm_scadenzario: true, perm_budget: true,
     perm_anagrafiche: true, perm_dipendenti: true,
   },
   admin: {
     ...TUTTI_I_PERMESSI_FALSE,
     perm_dashboard: true, perm_progetti: true, perm_archivia_progetti: true,
-    perm_costi_cantiere: true, perm_ddt: true, perm_import_ddt: true,
-    perm_da_ricevere: true, perm_fatture_fornitori: true, perm_import_sdi: true,
-    perm_prezzario: true, perm_fatture_clienti: true, perm_fatture_da_emettere: true,
+    perm_costi_cantiere: true, perm_programmi: true,
+    perm_ddt: true, perm_import_ddt: true, perm_da_ricevere: true,
+    perm_fatture_fornitori: true, perm_import_sdi: true, perm_prezzario: true,
+    perm_fatture_clienti: true, perm_fatture_da_emettere: true,
     perm_scadenzario: true, perm_cashflow: true, perm_budget: true,
     perm_anagrafiche: true, perm_dipendenti: true, perm_utenti: true,
   },
 }
 
 const TABELLA_LABEL: Record<string, string> = {
-  fatture_fornitori: '📄 Fatt. Ricevute',
-  fatture_clienti:   '🧾 Fatt. Emesse',
-  ddt:               '📋 DDT',
-  progetti:          '🏗 Cantieri',
-  costi_cantiere:    '💰 Costi Cantiere',
-  dipendenti:        '👷 Dipendenti',
-  clienti:           '👥 Clienti',
-  fornitori:         '👥 Fornitori',
+  fatture_fornitori: '📄 Fatt. Ricevute', fatture_clienti: '🧾 Fatt. Emesse',
+  ddt: '📋 DDT', progetti: '🏗 Cantieri', costi_cantiere: '💰 Costi Cantiere',
+  dipendenti: '👷 Dipendenti', clienti: '👥 Clienti', fornitori: '👥 Fornitori',
 }
 
 const AZIONE_BADGE: Record<string, { label: string, cls: string }> = {
-  inserimento: { label: '+ Inserito',   cls: 'bg-green-100 text-green-700' },
-  modifica:    { label: '✏️ Modificato', cls: 'bg-blue-100 text-blue-700' },
-  eliminazione:{ label: '✕ Eliminato',  cls: 'bg-red-100 text-red-700' },
+  inserimento: { label: '+ Inserito', cls: 'bg-green-100 text-green-700' },
+  modifica: { label: '✏️ Modificato', cls: 'bg-blue-100 text-blue-700' },
+  eliminazione: { label: '✕ Eliminato', cls: 'bg-red-100 text-red-700' },
 }
 
 type Utente = { id: string; nome: string; ruolo: string; [key: string]: any }
-type LogRow  = { id: string; created_at: string; utente_nome: string; azione: string; tabella: string; descrizione: string }
+type LogRow = { id: string; created_at: string; utente_nome: string; azione: string; tabella: string; descrizione: string }
 
 export default function Utenti() {
   const [tab, setTab] = useState<'permessi' | 'log'>('permessi')
@@ -98,7 +90,6 @@ export default function Utenti() {
   const [saving, setSaving] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
-
   const [logs, setLogs] = useState<LogRow[]>([])
   const [loadingLog, setLoadingLog] = useState(false)
   const [filtroUtente, setFiltroUtente] = useState('')
@@ -112,9 +103,7 @@ export default function Utenti() {
     loadUtenti()
   }, [])
 
-  useEffect(() => {
-    if (tab === 'log') loadLog()
-  }, [tab])
+  useEffect(() => { if (tab === 'log') loadLog() }, [tab])
 
   async function loadUtenti() {
     setLoading(true)
@@ -146,9 +135,7 @@ export default function Utenti() {
     if (error) {
       showToast('Errore: ' + error.message, 'err')
       setUtenti(prev => prev.map(u => u.id === utenteId ? { ...u, [key]: currentVal } : u))
-    } else {
-      showToast('Permesso aggiornato', 'ok')
-    }
+    } else showToast('Permesso aggiornato', 'ok')
   }
 
   async function applicaPreset(utenteId: string, preset: keyof typeof PRESETS) {
@@ -175,20 +162,17 @@ export default function Utenti() {
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar />
       <main className="flex-1 p-6 overflow-auto">
-
         {toast && (
           <div className={`fixed top-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-white text-sm font-medium ${toast.type === 'ok' ? 'bg-green-600' : 'bg-red-600'}`}>
             {toast.msg}
           </div>
         )}
-
         <div className="mb-4">
           <h1 className="text-xl font-semibold text-gray-900">Utenti e permessi</h1>
           <p className="text-sm text-gray-500 mt-1">
             {isAdmin ? 'Sei loggato come amministratore — puoi modificare tutti i permessi.' : 'Solo l\'amministratore può modificare i permessi.'}
           </p>
         </div>
-
         <div className="flex gap-1 mb-5 border-b border-gray-200">
           <button onClick={() => setTab('permessi')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'permessi' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
@@ -203,12 +187,9 @@ export default function Utenti() {
         {tab === 'permessi' && (
           <>
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm text-blue-800">
-              <strong>Come aggiungere un utente:</strong> vai su{' '}
-              <strong>supabase.com → Authentication → Users → Add user</strong>.
-              Poi esegui nel SQL Editor:{' '}
-              <code className="bg-blue-100 px-1 rounded">INSERT INTO utenti (id, nome, ruolo) VALUES ('UUID', 'Nome', 'geometra');</code>
+              <strong>Come aggiungere un utente:</strong> vai su <strong>supabase.com → Authentication → Users → Add user</strong>.
+              Poi esegui nel SQL Editor: <code className="bg-blue-100 px-1 rounded">INSERT INTO utenti (id, nome, ruolo) VALUES ('UUID', 'Nome', 'geometra');</code>
             </div>
-
             {loading ? (
               <div className="text-center py-12 text-gray-400">Caricamento utenti...</div>
             ) : utenti.length === 0 ? (
@@ -247,7 +228,7 @@ export default function Utenti() {
                       <div className="p-5">
                         {isSelf ? (
                           <p className="text-sm text-blue-700 font-medium">✓ Accesso completo a tutto — account host</p>
-                      ) : (
+                        ) : (
                           <div className="space-y-3">
                             {['Principale', 'Ciclo Passivo', 'Ciclo Attivo', 'Controllo', 'Impostazioni', 'Speciale'].map(sez => {
                               const voci = SEZIONI.filter(s => s.section === sez)
@@ -259,6 +240,7 @@ export default function Utenti() {
                                       const active = !!u[s.key]
                                       const isSpecial = s.key === 'perm_solo_cantieri_assegnati'
                                       const isArchivia = s.key === 'perm_archivia_progetti'
+                                      const isProgr = s.key === 'perm_programmi'
                                       return (
                                         <button key={s.key}
                                           onClick={() => togglePermesso(u.id, s.key, active)}
@@ -268,7 +250,9 @@ export default function Utenti() {
                                               ? active ? 'bg-orange-50 border-orange-400 text-orange-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
                                               : isArchivia
                                                 ? active ? 'bg-amber-50 border-amber-400 text-amber-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
-                                                : active ? 'bg-green-50 border-green-400 text-green-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
+                                                : isProgr
+                                                  ? active ? 'bg-purple-50 border-purple-400 text-purple-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
+                                                  : active ? 'bg-green-50 border-green-400 text-green-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
                                             } ${isAdmin ? 'cursor-pointer hover:shadow-sm' : 'cursor-default'}`}>
                                           <span className="mr-1">{active ? '✓' : '×'}</span>
                                           {s.icon && <span className="mr-1">{s.icon}</span>}
@@ -329,7 +313,6 @@ export default function Utenti() {
                 <p className="text-xs text-gray-500 mt-2">{logsFiltrati.length} eventi su {logs.length}</p>
               )}
             </div>
-
             {loadingLog ? (
               <div className="text-center py-12 text-gray-400">Caricamento log...</div>
             ) : logsFiltrati.length === 0 ? (
@@ -339,11 +322,7 @@ export default function Utenti() {
             ) : (
               <div className="card overflow-x-auto">
                 <table className="table-base">
-                  <thead>
-                    <tr>
-                      <th>Data e ora</th><th>Utente</th><th>Azione</th><th>Sezione</th><th>Dettaglio</th>
-                    </tr>
-                  </thead>
+                  <thead><tr><th>Data e ora</th><th>Utente</th><th>Azione</th><th>Sezione</th><th>Dettaglio</th></tr></thead>
                   <tbody>
                     {logsFiltrati.map(l => {
                       const badge = AZIONE_BADGE[l.azione] || { label: l.azione, cls: 'bg-gray-100 text-gray-600' }
@@ -351,8 +330,7 @@ export default function Utenti() {
                         <tr key={l.id}>
                           <td className="text-xs text-gray-500 whitespace-nowrap">
                             {new Date(l.created_at).toLocaleDateString('it-IT')}
-                            {' '}
-                            <span className="text-gray-400">{new Date(l.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</span>
+                            {' '}<span className="text-gray-400">{new Date(l.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</span>
                           </td>
                           <td className="text-sm font-medium">{l.utente_nome || '—'}</td>
                           <td><span className={`text-xs px-2 py-0.5 rounded-full font-medium ${badge.cls}`}>{badge.label}</span></td>
