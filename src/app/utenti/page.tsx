@@ -24,6 +24,7 @@ const SEZIONI = [
   { key: 'perm_budget',                  label: 'Budget vs Consuntivo',   icon: '⚖', section: 'Controllo' },
   { key: 'perm_anagrafiche',             label: 'Anagrafiche',            icon: '👥', section: 'Impostazioni' },
   { key: 'perm_dipendenti',              label: 'Dipendenti',             icon: '👷', section: 'Impostazioni' },
+  { key: 'perm_mezzi',                   label: 'Mezzi',                  icon: '🚐', section: 'Impostazioni' },
   { key: 'perm_utenti',                  label: 'Utenti e Permessi',      icon: '🔒', section: 'Impostazioni' },
   { key: 'perm_solo_cantieri_assegnati', label: '🔒 Solo cant. assegnati', icon: '', section: 'Speciale' },
 ]
@@ -35,7 +36,7 @@ const TUTTI_I_PERMESSI_FALSE: Record<string, boolean> = {
   perm_fatture_fornitori: false, perm_import_sdi: false, perm_prezzario: false,
   perm_fatture_clienti: false, perm_fatture_da_emettere: false,
   perm_scadenzario: false, perm_cashflow: false, perm_budget: false,
-  perm_anagrafiche: false, perm_dipendenti: false, perm_utenti: false,
+  perm_anagrafiche: false, perm_dipendenti: false, perm_mezzi: false, perm_utenti: false,
   perm_solo_cantieri_assegnati: false,
 }
 
@@ -45,7 +46,7 @@ const PRESETS: Record<string, Record<string, boolean>> = {
     ...TUTTI_I_PERMESSI_FALSE,
     perm_progetti: true, perm_costi_cantiere: true, perm_programmi: true,
     perm_ddt: true, perm_import_ddt: true, perm_prezzario: true,
-    perm_anagrafiche: true, perm_dipendenti: true,
+    perm_anagrafiche: true, perm_dipendenti: true, perm_mezzi: true,
     perm_solo_cantieri_assegnati: true,
   },
   capo_geometra: {
@@ -54,7 +55,7 @@ const PRESETS: Record<string, Record<string, boolean>> = {
     perm_costi_cantiere: true, perm_programmi: true,
     perm_ddt: true, perm_import_ddt: true, perm_da_ricevere: true, perm_prezzario: true,
     perm_fatture_da_emettere: true, perm_scadenzario: true, perm_budget: true,
-    perm_anagrafiche: true, perm_dipendenti: true,
+    perm_anagrafiche: true, perm_dipendenti: true, perm_mezzi: true,
   },
   admin: {
     ...TUTTI_I_PERMESSI_FALSE,
@@ -64,7 +65,7 @@ const PRESETS: Record<string, Record<string, boolean>> = {
     perm_fatture_fornitori: true, perm_import_sdi: true, perm_prezzario: true,
     perm_fatture_clienti: true, perm_fatture_da_emettere: true,
     perm_scadenzario: true, perm_cashflow: true, perm_budget: true,
-    perm_anagrafiche: true, perm_dipendenti: true, perm_utenti: true,
+    perm_anagrafiche: true, perm_dipendenti: true, perm_mezzi: true, perm_utenti: true,
   },
 }
 
