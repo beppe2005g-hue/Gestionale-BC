@@ -98,7 +98,7 @@ export default function Dipendenti() {
   const fotoInputRef = useRef<HTMLInputElement>(null)
 
   const [form, setForm] = useState({
-    nome:'',cognome:'',azienda:'',mansione:'',data_nascita:'',luogo_nascita:'',
+    nome:'',cognome:'',azienda:'',mansione:'',nome_programma:'',data_nascita:'',luogo_nascita:'',
     codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',
     tipo_contratto:'',scadenza_visita_medica:'',note:''
   })
@@ -180,13 +180,14 @@ export default function Dipendenti() {
     setLoading(true)
     await supabase.from('dipendenti').insert({
       nome:form.nome, cognome:form.cognome, azienda:form.azienda, mansione:form.mansione,
+      nome_programma:form.nome_programma||null,
       data_nascita:form.data_nascita||null, luogo_nascita:form.luogo_nascita,
       codice_fiscale:form.codice_fiscale, data_inizio_contratto:form.data_inizio_contratto||null,
       data_fine_contratto:form.data_fine_contratto||null, tipo_contratto:form.tipo_contratto,
       scadenza_visita_medica:form.scadenza_visita_medica||null, note:form.note, attivo:true
     })
     setModal(false)
-    setForm({nome:'',cognome:'',azienda:'',mansione:'',data_nascita:'',luogo_nascita:'',codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',tipo_contratto:'',scadenza_visita_medica:'',note:''})
+    setForm({nome:'',cognome:'',azienda:'',mansione:'',nome_programma:'',data_nascita:'',luogo_nascita:'',codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',tipo_contratto:'',scadenza_visita_medica:'',note:''})
     setLoading(false); load()
   }
 
@@ -195,7 +196,7 @@ export default function Dipendenti() {
     setLoading(true)
     await supabase.from('dipendenti').update({
       nome:modalModifica.nome, cognome:modalModifica.cognome, azienda:modalModifica.azienda,
-      mansione:modalModifica.mansione, data_nascita:modalModifica.data_nascita||null,
+      mansione:modalModifica.mansione, nome_programma:modalModifica.nome_programma||null, data_nascita:modalModifica.data_nascita||null,
       luogo_nascita:modalModifica.luogo_nascita, codice_fiscale:modalModifica.codice_fiscale,
       data_inizio_contratto:modalModifica.data_inizio_contratto||null,
       data_fine_contratto:modalModifica.data_fine_contratto||null,
@@ -453,6 +454,7 @@ export default function Dipendenti() {
                     <div><p className="text-xs text-gray-400">Luogo di nascita</p><p className="font-medium">{selezionato.luogo_nascita || '—'}</p></div>
                     <div><p className="text-xs text-gray-400">Codice fiscale</p><p className="font-medium font-mono text-xs">{selezionato.codice_fiscale || '—'}</p></div>
                     <div><p className="text-xs text-gray-400">Tipo contratto</p><p className="font-medium">{selezionato.tipo_contratto || '—'}</p></div>
+                    <div><p className="text-xs text-gray-400">Nome da programma</p><p className="font-medium text-purple-700">{selezionato.nome_programma || '—'}</p></div>
                     <div><p className="text-xs text-gray-400">Inizio contratto</p><p className="font-medium">{formatData(selezionato.data_inizio_contratto)}</p></div>
                     <div>
                       <p className="text-xs text-gray-400">Fine contratto</p>
@@ -625,6 +627,7 @@ export default function Dipendenti() {
                 <datalist id="aziende-list">{aziende.map(a=><option key={a} value={a}/>)}</datalist>
               </div>
               <div><label className="label">Mansione</label><input className="input" value={form.mansione} onChange={e=>setForm({...form,mansione:e.target.value})} /></div>
+              <div><label className="label">Nome da programma</label><input className="input" placeholder="es. Mimmo, Gigio..." value={form.nome_programma} onChange={e=>setForm({...form,nome_programma:e.target.value})} /></div>
               <div><label className="label">Data di nascita</label><input className="input" type="date" value={form.data_nascita} onChange={e=>setForm({...form,data_nascita:e.target.value})} /></div>
               <div><label className="label">Luogo di nascita</label><input className="input" value={form.luogo_nascita} onChange={e=>setForm({...form,luogo_nascita:e.target.value})} /></div>
               <div className="col-span-2"><label className="label">Codice fiscale</label><input className="input font-mono uppercase" value={form.codice_fiscale} onChange={e=>setForm({...form,codice_fiscale:e.target.value.toUpperCase()})} /></div>
@@ -664,6 +667,7 @@ export default function Dipendenti() {
                 <datalist id="aziende-list2">{aziende.map(a=><option key={a} value={a}/>)}</datalist>
               </div>
               <div><label className="label">Mansione</label><input className="input" value={modalModifica.mansione||''} onChange={e=>setModalModifica({...modalModifica,mansione:e.target.value})} /></div>
+              <div><label className="label">Nome da programma</label><input className="input" placeholder="es. Mimmo, Gigio..." value={modalModifica.nome_programma||''} onChange={e=>setModalModifica({...modalModifica,nome_programma:e.target.value})} /></div>
               <div><label className="label">Data nascita</label><input className="input" type="date" value={modalModifica.data_nascita||''} onChange={e=>setModalModifica({...modalModifica,data_nascita:e.target.value})} /></div>
               <div><label className="label">Luogo nascita</label><input className="input" value={modalModifica.luogo_nascita||''} onChange={e=>setModalModifica({...modalModifica,luogo_nascita:e.target.value})} /></div>
               <div className="col-span-2"><label className="label">Codice fiscale</label><input className="input font-mono uppercase" value={modalModifica.codice_fiscale||''} onChange={e=>setModalModifica({...modalModifica,codice_fiscale:e.target.value.toUpperCase()})} /></div>
