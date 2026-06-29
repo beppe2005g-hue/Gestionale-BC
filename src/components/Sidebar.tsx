@@ -35,6 +35,7 @@ const nav = [
   { section: 'Impostazioni', items: [
     { href: '/anagrafiche', label: 'Anagrafiche', icon: '👥', perm: 'perm_anagrafiche' },
     { href: '/dipendenti', label: 'Dipendenti', icon: '👷', perm: 'perm_dipendenti', badgeKey: 'dipendentiScadenze' },
+    { href: '/mezzi', label: 'Mezzi', icon: '🚐', perm: 'perm_dipendenti', badgeKey: 'mezziScadenze' },
     { href: '/utenti', label: 'Utenti e permessi', icon: '🔒', perm: 'perm_utenti' },
   ]},
 ]
@@ -97,7 +98,17 @@ export default function Sidebar() {
         inAllertaConPreavviso(d.scadenza_visita_medica, PREAVVISO_VISITA) ||
         inAllertaConPreavviso(d.data_fine_contratto, PREAVVISO_CONTRATTO)
       ).length
-      setBadges({ fattureDaEmettere: countFde || 0, dipendentiScadenze: dipendentiInAllerta })
+
+      // Mezzi con scadenze in arrivo (30 giorni)
+      const { data: mez } = await supabase
+        .from('mezzi').select('scadenza_assicurazione,scadenza_bollo,scadenza_revisione').eq('attivo', true)
+      const mezziInAllerta = (mez || []).filter(m =>
+        inAllertaConPreavviso(m.scadenza_assicurazione, 30) ||
+        inAllertaConPreavviso(m.scadenza_bollo, 30) ||
+        inAllertaConPreavviso(m.scadenza_revisione, 30)
+      ).length
+
+      setBadges({ fattureDaEmettere: countFde || 0, dipendentiScadenze: dipendentiInAllerta, mezziScadenze: mezziInAllerta })
     }
     loadBadges()
   }, [])
