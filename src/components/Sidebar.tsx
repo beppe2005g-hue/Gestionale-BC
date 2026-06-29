@@ -35,7 +35,7 @@ const nav = [
   { section: 'Impostazioni', items: [
     { href: '/anagrafiche', label: 'Anagrafiche', icon: '👥', perm: 'perm_anagrafiche' },
     { href: '/dipendenti', label: 'Dipendenti', icon: '👷', perm: 'perm_dipendenti', badgeKey: 'dipendentiScadenze' },
-    { href: '/mezzi', label: 'Mezzi', icon: '🚐', perm: 'perm_dipendenti', badgeKey: 'mezziScadenze' },
+    { href: '/mezzi', label: 'Mezzi', icon: '🚐', perm: 'perm_mezzi', badgeKey: 'mezziScadenze' },
     { href: '/utenti', label: 'Utenti e permessi', icon: '🔒', perm: 'perm_utenti' },
   ]},
 ]
