@@ -178,13 +178,15 @@ export default function Sidebar() {
   return (
     <>
       {/* ── Barra superiore SOLO mobile: hamburger + logo compatto ── */}
-      <div className="md:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 sticky top-0 z-30">
+      <div className="md:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 fixed top-0 left-0 right-0 z-30">
         <button onClick={() => setAperta(true)} className="text-2xl leading-none text-gray-700" aria-label="Apri menu">
           ☰
         </button>
         <img src="/logo.png" alt="BC General Service" className="h-7 w-auto object-contain" />
         <span className="text-sm font-semibold text-gray-900">BC General Service</span>
       </div>
+      {/* Spaziatore: compensa l'altezza della barra fissa sopra, solo su mobile */}
+      <div className="md:hidden" style={{ height: 56 }} />
 
       {/* ── Overlay scuro dietro al drawer mobile, chiude al click ── */}
       {aperta && (
@@ -194,8 +196,8 @@ export default function Sidebar() {
       {/* ── Sidebar: fissa su desktop, drawer scorrevole su mobile ── */}
       <aside className={`
         bg-white border-r border-gray-200 flex flex-col flex-shrink-0
-        md:w-52 md:min-h-screen md:static md:translate-x-0
-        fixed inset-y-0 left-0 w-72 z-50 transition-transform duration-200
+        md:w-52 md:h-screen md:static md:translate-x-0
+        fixed top-0 left-0 h-full w-72 z-50 transition-transform duration-200 overflow-y-auto
         ${aperta ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
       `}>
         {/* Pulsante chiudi, visibile solo dentro al drawer mobile aperto */}
