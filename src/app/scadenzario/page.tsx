@@ -43,9 +43,13 @@ export default function Scadenzario() {
   const [ordinamentoPagare, setOrdinamentoPagare] = useState<OrdinamentoPagare>('scadenza')
   const [soloScadutePagare, setSoloScadutePagare] = useState(false)
   const [cercaFornitore, setCercaFornitore] = useState('')
+  const [scadenzaDA, setScadenzaDA] = useState('')
+  const [scadenzaA, setScadenzaA] = useState('')
   const [modalStampa, setModalStampa] = useState(false)
   const [fornitoriSelezionati, setFornitoriSelezionati] = useState<Set<string>>(new Set())
   const [soloScadutoStampa, setSoloScadutoStampa] = useState(false)
+  const [stampaScadenzaDA, setStampaScadenzaDA] = useState('')
+  const [stampaScadenzaA, setStampaScadenzaA] = useState('')
 
   const [fattureClienti, setFattureClienti] = useState<any[]>([])
   const [filtroCliente, setFiltroCliente] = useState('')
@@ -198,6 +202,8 @@ export default function Scadenzario() {
   function apriModalStampa() {
     setFornitoriSelezionati(new Set(fornitoriUnici))
     setSoloScadutoStampa(false)
+    setStampaScadenzaDA('')
+    setStampaScadenzaA('')
     setModalStampa(true)
   }
 
@@ -213,6 +219,8 @@ export default function Scadenzario() {
   const reportStampaPerFornitore = useMemo(() => {
     let righe = pagamenti.filter(p => fornitoriSelezionati.has(p.fornitore_nome))
     if (soloScadutoStampa) righe = righe.filter(r => r.gg !== null && r.gg < 0)
+    if (stampaScadenzaDA) righe = righe.filter(r => r.scadenza && r.scadenza >= stampaScadenzaDA)
+    if (stampaScadenzaA) righe = righe.filter(r => r.scadenza && r.scadenza <= stampaScadenzaA)
     const gruppi: Record<string, RigaPagamento[]> = {}
     righe.forEach(r => {
       if (!gruppi[r.fornitore_nome]) gruppi[r.fornitore_nome] = []
@@ -229,7 +237,7 @@ export default function Scadenzario() {
         totale: rate.reduce((s, r) => s + r.importo, 0),
         scaduto: rate.filter(r => r.gg !== null && r.gg < 0).reduce((s, r) => s + r.importo, 0),
       }))
-  }, [pagamenti, fornitoriSelezionati, soloScadutoStampa])
+  }, [pagamenti, fornitoriSelezionati, soloScadutoStampa, stampaScadenzaDA, stampaScadenzaA])
 
   const totaleReportStampa = reportStampaPerFornitore.reduce((s, g) => s + g.totale, 0)
   const scadutoReportStampa = reportStampaPerFornitore.reduce((s, g) => s + g.scaduto, 0)
@@ -243,6 +251,8 @@ export default function Scadenzario() {
     let r = pagamenti
     if (cercaFornitore) r = r.filter(x => x.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase()))
     if (soloScadutePagare) r = r.filter(x => x.gg !== null && x.gg < 0)
+    if (scadenzaDA) r = r.filter(x => x.scadenza && x.scadenza >= scadenzaDA)
+    if (scadenzaA) r = r.filter(x => x.scadenza && x.scadenza <= scadenzaA)
     const sorted = [...r]
     if (ordinamentoPagare === 'scadenza') {
       sorted.sort((a, b) => {
@@ -258,7 +268,7 @@ export default function Scadenzario() {
       })
     }
     return sorted
-  }, [pagamenti, cercaFornitore, soloScadutePagare, ordinamentoPagare])
+  }, [pagamenti, cercaFornitore, soloScadutePagare, ordinamentoPagare, scadenzaDA, scadenzaA])
 
   const totalePagare = pagamentiFiltrati.reduce((s, r) => s + r.importo, 0)
   const scadutoPagare = pagamentiFiltrati.filter(r => r.gg !== null && r.gg < 0).reduce((s, r) => s + r.importo, 0)
@@ -367,6 +377,14 @@ export default function Scadenzario() {
                   <input className="input" placeholder="Nome fornitore..." value={cercaFornitore} onChange={e => setCercaFornitore(e.target.value)} />
                 </div>
                 <div>
+                  <label className="label">Scade dal</label>
+                  <input className="input" type="date" value={scadenzaDA} onChange={e => setScadenzaDA(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Scade al</label>
+                  <input className="input" type="date" value={scadenzaA} onChange={e => setScadenzaA(e.target.value)} />
+                </div>
+                <div>
                   <label className="label">Ordina per</label>
                   <div className="flex gap-1">
                     <button className={`btn btn-sm ${ordinamentoPagare === 'scadenza' ? 'btn-primary' : ''}`} onClick={() => setOrdinamentoPagare('scadenza')}>Scadenza</button>
@@ -377,7 +395,31 @@ export default function Scadenzario() {
                   <input type="checkbox" checked={soloScadutePagare} onChange={e => setSoloScadutePagare(e.target.checked)} className="rounded" />
                   Solo scadute
                 </label>
-                {(cercaFornitore || soloScadutePagare) && <button className="btn btn-sm pb-2" onClick={() => { setCercaFornitore(''); setSoloScadutePagare(false) }}>× Reset</button>}
+                {(cercaFornitore || soloScadutePagare || scadenzaDA || scadenzaA) && <button className="btn btn-sm pb-2" onClick={() => { setCercaFornitore(''); setSoloScadutePagare(false); setScadenzaDA(''); setScadenzaA('') }}>× Reset</button>}
+              </div>
+              {/* Scorciatoie rapide: oggi → fine mese, oggi → 3 del mese prossimo, ecc. */}
+              <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100 flex-wrap">
+                <span className="text-xs text-gray-400">Scorciatoie:</span>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                  const oggi = new Date()
+                  const fine = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 0)
+                  setScadenzaDA(oggi.toISOString().split('T')[0]); setScadenzaA(fine.toISOString().split('T')[0])
+                }}>Entro fine mese</button>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                  const oggi = new Date()
+                  const target = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 3)
+                  setScadenzaDA(oggi.toISOString().split('T')[0]); setScadenzaA(target.toISOString().split('T')[0])
+                }}>Entro il 3 del mese prossimo</button>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                  const oggi = new Date()
+                  const target = new Date(oggi.getTime() + 7 * 86400000)
+                  setScadenzaDA(oggi.toISOString().split('T')[0]); setScadenzaA(target.toISOString().split('T')[0])
+                }}>Prossimi 7 giorni</button>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                  const oggi = new Date()
+                  const target = new Date(oggi.getTime() + 15 * 86400000)
+                  setScadenzaDA(oggi.toISOString().split('T')[0]); setScadenzaA(target.toISOString().split('T')[0])
+                }}>Prossimi 15 giorni</button>
               </div>
             </div>
             <div className="card overflow-x-auto print:hidden">
@@ -422,6 +464,11 @@ export default function Scadenzario() {
                   <p style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>SCADENZE FORNITORI</p>
                   <p style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>Data: <strong>{new Date().toLocaleDateString('it-IT')}</strong></p>
                   {soloScadutoStampa && <p style={{ fontSize: 11, color: '#dc2626', fontWeight: 600 }}>Solo rate scadute</p>}
+                  {(stampaScadenzaDA || stampaScadenzaA) && (
+                    <p style={{ fontSize: 11, color: '#1e40af', fontWeight: 600 }}>
+                      Scadenza: {stampaScadenzaDA ? new Date(stampaScadenzaDA).toLocaleDateString('it-IT') : '...'} → {stampaScadenzaA ? new Date(stampaScadenzaA).toLocaleDateString('it-IT') : '...'}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -765,6 +812,25 @@ export default function Scadenzario() {
               <input type="checkbox" checked={soloScadutoStampa} onChange={e => setSoloScadutoStampa(e.target.checked)} className="rounded" />
               Stampa solo le rate scadute
             </label>
+
+            <div className="grid grid-cols-2 gap-3 mb-2">
+              <div><label className="label">Scade dal</label><input className="input" type="date" value={stampaScadenzaDA} onChange={e => setStampaScadenzaDA(e.target.value)} /></div>
+              <div><label className="label">Scade al</label><input className="input" type="date" value={stampaScadenzaA} onChange={e => setStampaScadenzaA(e.target.value)} /></div>
+            </div>
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+              <span className="text-xs text-gray-400">Scorciatoie:</span>
+              <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                const oggi = new Date()
+                const fine = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 0)
+                setStampaScadenzaDA(oggi.toISOString().split('T')[0]); setStampaScadenzaA(fine.toISOString().split('T')[0])
+              }}>Entro fine mese</button>
+              <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                const oggi = new Date()
+                const target = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 3)
+                setStampaScadenzaDA(oggi.toISOString().split('T')[0]); setStampaScadenzaA(target.toISOString().split('T')[0])
+              }}>Entro il 3 del prossimo mese</button>
+              <button className="text-xs text-blue-600 hover:underline" onClick={() => { setStampaScadenzaDA(''); setStampaScadenzaA('') }}>× Azzera date</button>
+            </div>
 
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium text-gray-700">Fornitori da includere ({fornitoriSelezionati.size}/{fornitoriUnici.length})</p>
