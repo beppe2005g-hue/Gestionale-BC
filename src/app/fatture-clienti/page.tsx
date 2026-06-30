@@ -227,7 +227,7 @@ export default function FattureClienti() {
     if (filtroTipo === 'nota_credito') r = r.filter(f => isNC(f))
     const sorted = [...r]
     if (ordinamento === 'numero') {
-      sorted.sort((a, b) => confrontaNumeriFattura(a.numero, b.numero))
+      sorted.sort((a, b) => confrontaNumeriFattura(b.numero, a.numero))
     } else {
       sorted.sort((a, b) => (b.data || '').localeCompare(a.data || ''))
     }
