@@ -355,7 +355,7 @@ export default function Scadenzario() {
 
         {tab === 'da_pagare' && (
           <>
-            <div className="grid grid-cols-3 gap-3 mb-4 print:hidden">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4 print:hidden">
               <div className="bg-red-50 rounded-xl p-3 border border-red-100">
                 <p className="text-xs text-red-600 mb-1">⚠️ Scaduto</p>
                 <p className="text-lg font-bold text-red-800">{euro(scadutoPagare)}</p>
@@ -426,26 +426,47 @@ export default function Scadenzario() {
               <div className="flex items-center justify-between mb-3">
                 <span className="text-sm text-gray-500">{pagamentiFiltrati.length} rate da pagare</span>
               </div>
-              {loading ? <div className="text-center text-gray-400 py-8">Caricamento...</div> : (
-                <table className="table-base">
-                  <thead><tr><th>Fornitore</th><th>Cantiere</th><th>N° Fattura</th><th>Data emissione</th><th>Rata</th><th>Importo</th><th>Scadenza</th><th></th></tr></thead>
-                  <tbody>
-                    {pagamentiFiltrati.length === 0 ? (
-                      <tr><td colSpan={8} className="text-center text-gray-400 py-8">Nessuna fattura da pagare.</td></tr>
-                    ) : pagamentiFiltrati.map(r => (
-                      <tr key={`${r.id}-${r.rata}`} className={r.gg !== null && r.gg < 0 ? 'bg-red-50' : ''}>
-                        <td className="font-medium text-sm">{r.fornitore_nome}</td>
-                        <td className="text-xs text-gray-500">{r.cantiere || '—'}</td>
-                        <td className="text-xs">{r.numero}</td>
-                        <td className="text-xs text-gray-500">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
-                        <td className="text-xs text-center">{r.rata}</td>
-                        <td className="font-medium text-sm">{euro(r.importo)}</td>
-                        <td className="text-xs">{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
-                        <td>{badgeGiorni(r.gg)}</td>
-                      </tr>
+              {loading ? <div className="text-center text-gray-400 py-8">Caricamento...</div> : pagamentiFiltrati.length === 0 ? (
+                <div className="text-center text-gray-400 py-8">Nessuna fattura da pagare.</div>
+              ) : (
+                <>
+                  {/* Tabella — solo desktop */}
+                  <table className="table-base hidden md:table">
+                    <thead><tr><th>Fornitore</th><th>Cantiere</th><th>N° Fattura</th><th>Data emissione</th><th>Rata</th><th>Importo</th><th>Scadenza</th><th></th></tr></thead>
+                    <tbody>
+                      {pagamentiFiltrati.map(r => (
+                        <tr key={`${r.id}-${r.rata}`} className={r.gg !== null && r.gg < 0 ? 'bg-red-50' : ''}>
+                          <td className="font-medium text-sm">{r.fornitore_nome}</td>
+                          <td className="text-xs text-gray-500">{r.cantiere || '—'}</td>
+                          <td className="text-xs">{r.numero}</td>
+                          <td className="text-xs text-gray-500">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                          <td className="text-xs text-center">{r.rata}</td>
+                          <td className="font-medium text-sm">{euro(r.importo)}</td>
+                          <td className="text-xs">{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
+                          <td>{badgeGiorni(r.gg)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Card — solo mobile */}
+                  <div className="md:hidden space-y-2">
+                    {pagamentiFiltrati.map(r => (
+                      <div key={`${r.id}-${r.rata}`} className={`rounded-lg border p-3 ${r.gg !== null && r.gg < 0 ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}`}>
+                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                          <p className="font-semibold text-sm">{r.fornitore_nome}</p>
+                          <p className="font-bold text-sm text-gray-800 flex-shrink-0">{euro(r.importo)}</p>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-1">{r.cantiere || '—'}</p>
+                        <div className="flex items-center justify-between text-xs text-gray-500">
+                          <span>N° {r.numero} · Rata {r.rata}</span>
+                          <span>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</span>
+                        </div>
+                        <div className="mt-2">{badgeGiorni(r.gg)}</div>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                </>
               )}
             </div>
 
@@ -566,7 +587,7 @@ export default function Scadenzario() {
                     </div>
                   </div>
                 )}
-                <div className="grid grid-cols-3 gap-3 mb-4 print:grid-cols-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4 print:grid-cols-3">
                   <div className="bg-red-50 rounded-xl p-3 border border-red-100">
                     <p className="text-xs text-red-600 mb-1">⚠️ Scaduto</p>
                     <p className="text-lg font-bold text-red-800">{euro(scadutoIncassare)}</p>
@@ -614,28 +635,45 @@ export default function Scadenzario() {
                                   </p>
                                   <p style={{ fontWeight: 700, fontSize: 13, color: isPassato ? '#dc2626' : '#374151' }}>€ {euroShort(mese.totale)}</p>
                                 </div>
-                                <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
-                                  <thead>
-                                    <tr style={{ background: '#f8faff' }}>
-                                      {['N° Fattura','Data fattura','Cantiere','Rata','Scadenza','Gg','Importo'].map(h => (
-                                        <th key={h} style={{ padding: '5px 16px', textAlign: h === 'Rata' || h === 'Gg' ? 'center' : h === 'Scadenza' || h === 'Importo' ? 'right' : 'left', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>{h}</th>
-                                      ))}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {mese.rate.map((r, idx) => (
-                                      <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#fafafa' }}>
-                                        <td style={{ padding: '5px 16px', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: '#1e40af' }}>{r.numero}</td>
-                                        <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9' }}>{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
-                                        <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9', color: '#6b7280' }}>{r.progetto_nome || '—'}</td>
-                                        <td style={{ padding: '5px 16px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' }}>{r.rata}</td>
-                                        <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#374151', fontWeight: r.scaduta ? 600 : 400 }}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
-                                        <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#6b7280' }}>{r.gg !== null ? (r.gg < 0 ? `-${Math.abs(r.gg)}` : `+${r.gg}`) : '—'}</td>
-                                        <td style={{ padding: '5px 16px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#1e3a8a' }}>€ {euroShort(r.importo)}</td>
+                                <div className="overflow-x-auto hidden md:block">
+                                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11, minWidth: 600 }}>
+                                    <thead>
+                                      <tr style={{ background: '#f8faff' }}>
+                                        {['N° Fattura','Data fattura','Cantiere','Rata','Scadenza','Gg','Importo'].map(h => (
+                                          <th key={h} style={{ padding: '5px 16px', textAlign: h === 'Rata' || h === 'Gg' ? 'center' : h === 'Scadenza' || h === 'Importo' ? 'right' : 'left', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>{h}</th>
+                                        ))}
                                       </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                                    </thead>
+                                    <tbody>
+                                      {mese.rate.map((r, idx) => (
+                                        <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#fafafa' }}>
+                                          <td style={{ padding: '5px 16px', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: '#1e40af' }}>{r.numero}</td>
+                                          <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9' }}>{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                                          <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9', color: '#6b7280' }}>{r.progetto_nome || '—'}</td>
+                                          <td style={{ padding: '5px 16px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' }}>{r.rata}</td>
+                                          <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#374151', fontWeight: r.scaduta ? 600 : 400 }}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
+                                          <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#6b7280' }}>{r.gg !== null ? (r.gg < 0 ? `-${Math.abs(r.gg)}` : `+${r.gg}`) : '—'}</td>
+                                          <td style={{ padding: '5px 16px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#1e3a8a' }}>€ {euroShort(r.importo)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                {/* Card compatte — solo mobile */}
+                                <div className="md:hidden divide-y divide-gray-100">
+                                  {mese.rate.map((r, idx) => (
+                                    <div key={idx} className="px-3 py-2" style={{ background: r.scaduta ? '#fef2f2' : 'white' }}>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-xs font-semibold text-blue-800">{r.numero}</span>
+                                        <span className={`text-xs font-bold ${r.scaduta ? 'text-red-600' : 'text-blue-900'}`}>€ {euroShort(r.importo)}</span>
+                                      </div>
+                                      <div className="flex items-center justify-between text-xs text-gray-500 mt-0.5">
+                                        <span>{r.progetto_nome || '—'} · Rata {r.rata}</span>
+                                        <span className={r.scaduta ? 'text-red-600 font-medium' : ''}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
                             )
                           })}
@@ -667,7 +705,7 @@ export default function Scadenzario() {
 
         {tab === 'ritenute' && (
           <>
-            <div className="grid grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
               <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
                 <p className="text-xs text-amber-600 mb-1">🔒 Garanzia in sospeso</p>
                 <p className="text-lg font-bold text-amber-800">{euro(totGaranziaInSospeso)}</p>
