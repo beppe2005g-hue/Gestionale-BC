@@ -14,6 +14,7 @@ const nav = [
     { href: '/progetti', label: 'Progetti', icon: '🏗', perm: 'perm_progetti' },
     { href: '/costi-cantiere', label: 'Costi cantiere', icon: '💰', perm: 'perm_costi_cantiere' },
     { href: '/programmi', label: 'Programmi', icon: '📋', perm: 'perm_programmi' },
+    { href: '/presenze', label: 'Presenze', icon: '📅', perm: 'perm_presenze' },
   ]},
   { section: 'Ciclo Passivo', items: [
     { href: '/ddt', label: 'DDT / Bolle', icon: '📋', perm: 'perm_ddt' },
@@ -55,7 +56,7 @@ function inAllertaConPreavviso(data: string | null, giorniPreavviso: number): bo
 
 export default function Sidebar() {
   const path = usePathname()
-  const [aperta, setAperta] = useState(false) // stato del drawer mobile
+  const [aperta, setAperta] = useState(false)
 
   useEffect(() => {
     function onTornaVisibile() {
@@ -71,7 +72,6 @@ export default function Sidebar() {
     }
   }, [])
 
-  // Chiude il drawer mobile ogni volta che si cambia pagina
   useEffect(() => { setAperta(false) }, [path])
 
   const [permessi, setPermessi] = useState<Record<string, boolean> | null>(null)
@@ -102,7 +102,6 @@ export default function Sidebar() {
         inAllertaConPreavviso(d.scadenza_visita_medica, PREAVVISO_VISITA) ||
         inAllertaConPreavviso(d.data_fine_contratto, PREAVVISO_CONTRATTO)
       ).length
-
       const { data: mez } = await supabase
         .from('mezzi').select('scadenza_assicurazione,scadenza_bollo,scadenza_revisione').eq('attivo', true)
       const mezziInAllerta = (mez || []).filter(m =>
@@ -110,7 +109,6 @@ export default function Sidebar() {
         inAllertaConPreavviso(m.scadenza_bollo, 30) ||
         inAllertaConPreavviso(m.scadenza_revisione, 30)
       ).length
-
       setBadges({ fattureDaEmettere: countFde || 0, dipendentiScadenze: dipendentiInAllerta, mezziScadenze: mezziInAllerta })
     }
     loadBadges()
@@ -128,7 +126,6 @@ export default function Sidebar() {
     window.location.href = '/'
   }
 
-  // Contenuto della sidebar, condiviso tra versione desktop fissa e drawer mobile
   const contenutoNav = (
     <>
       <div className="p-4 border-b border-gray-200">
@@ -177,33 +174,24 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* ── Barra superiore SOLO mobile: hamburger + logo compatto ── */}
       <div className="md:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 fixed top-0 left-0 right-0 z-30">
-        <button onClick={() => setAperta(true)} className="text-2xl leading-none text-gray-700" aria-label="Apri menu">
-          ☰
-        </button>
+        <button onClick={() => setAperta(true)} className="text-2xl leading-none text-gray-700" aria-label="Apri menu">☰</button>
         <img src="/logo.png" alt="BC General Service" className="h-7 w-auto object-contain" />
         <span className="text-sm font-semibold text-gray-900">BC General Service</span>
       </div>
-      {/* Spaziatore: compensa l'altezza della barra fissa sopra, solo su mobile */}
       <div className="md:hidden" style={{ height: 56 }} />
 
-      {/* ── Overlay scuro dietro al drawer mobile, chiude al click ── */}
       {aperta && (
         <div className="md:hidden fixed inset-0 bg-black/40 z-40" onClick={() => setAperta(false)} />
       )}
 
-      {/* ── Sidebar: fissa su desktop, drawer scorrevole su mobile ── */}
       <aside className={`
         bg-white border-r border-gray-200 flex flex-col flex-shrink-0
         md:w-52 md:h-screen md:static md:translate-x-0
         fixed top-0 left-0 h-full w-72 z-50 transition-transform duration-200 overflow-y-auto
         ${aperta ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
       `}>
-        {/* Pulsante chiudi, visibile solo dentro al drawer mobile aperto */}
-        <button onClick={() => setAperta(false)} className="md:hidden absolute top-3 right-3 text-xl text-gray-400" aria-label="Chiudi menu">
-          ✕
-        </button>
+        <button onClick={() => setAperta(false)} className="md:hidden absolute top-3 right-3 text-xl text-gray-400" aria-label="Chiudi menu">✕</button>
         {contenutoNav}
       </aside>
     </>
