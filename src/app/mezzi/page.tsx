@@ -51,7 +51,7 @@ export default function MezziPage() {
   const [loading, setLoading] = useState(false)
 
   const [form, setForm] = useState({
-    nome: '', targa: '', posti: '', marca: '', modello: '', anno: '',
+    nome: '', targa: '', posti: '', societa: 'BC General Service', marca: '', modello: '', anno: '',
     scadenza_assicurazione: '', scadenza_bollo: '', scadenza_revisione: '',
     km_attuali: '', note: ''
   })
@@ -87,6 +87,7 @@ export default function MezziPage() {
     await supabase.from('mezzi').insert({
       nome: form.nome, targa: form.targa || null,
       posti: form.posti ? parseInt(form.posti) : null,
+      societa: form.societa,
       marca: form.marca || null, modello: form.modello || null,
       anno: form.anno ? parseInt(form.anno) : null,
       scadenza_assicurazione: form.scadenza_assicurazione || null,
@@ -96,7 +97,7 @@ export default function MezziPage() {
       note: form.note || null, attivo: true
     })
     setModal(false)
-    setForm({ nome:'',targa:'',posti:'',marca:'',modello:'',anno:'',scadenza_assicurazione:'',scadenza_bollo:'',scadenza_revisione:'',km_attuali:'',note:'' })
+    setForm({ nome:'',targa:'',posti:'',societa:'BC General Service',marca:'',modello:'',anno:'',scadenza_assicurazione:'',scadenza_bollo:'',scadenza_revisione:'',km_attuali:'',note:'' })
     setLoading(false); load()
   }
 
@@ -106,6 +107,7 @@ export default function MezziPage() {
     await supabase.from('mezzi').update({
       nome: modalModifica.nome, targa: modalModifica.targa || null,
       posti: modalModifica.posti ? parseInt(modalModifica.posti) : null,
+      societa: modalModifica.societa || 'BC General Service',
       marca: modalModifica.marca || null, modello: modalModifica.modello || null,
       anno: modalModifica.anno ? parseInt(modalModifica.anno) : null,
       scadenza_assicurazione: modalModifica.scadenza_assicurazione || null,
@@ -214,7 +216,10 @@ export default function MezziPage() {
                   <p className="text-sm font-semibold text-blue-800">🚐 {m.nome}</p>
                   {hasAlert(m) && <span className="text-xs">⚠️</span>}
                 </div>
-                <div className="flex items-center gap-2">
+                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${m.societa === 'Filosofia' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}`}>
+                  {m.societa === 'Filosofia' ? '🏢 Filosofia' : '🏗 BC General'}
+                </span>
+                <div className="flex items-center gap-2 mt-1">
                   {m.targa && <p className="text-xs text-gray-500 font-mono">{m.targa}</p>}
                   {m.posti && <p className="text-xs text-blue-500">👥 {m.posti}p</p>}
                 </div>
@@ -241,7 +246,10 @@ export default function MezziPage() {
                 <div className="flex items-start justify-between">
                   <div>
                     <h2 className="text-xl font-bold">🚐 {selezionato.nome}</h2>
-                    <div className="flex items-center gap-3 mt-0.5">
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${selezionato.societa === 'Filosofia' ? 'bg-orange-500 text-white' : 'bg-blue-600 text-white'}`}>
+                      {selezionato.societa === 'Filosofia' ? '🏢 Filosofia' : '🏗 BC General Service'}
+                    </span>
+                    <div className="flex items-center gap-3 mt-1.5">
                       {selezionato.targa && <p className="font-mono text-gray-300 text-sm">{selezionato.targa}</p>}
                       {selezionato.posti && <p className="text-blue-300 text-sm">👥 {selezionato.posti} posti</p>}
                     </div>
@@ -365,6 +373,17 @@ export default function MezziPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2"><label className="label">Nome/Identificativo *</label><input className="input" placeholder="es. Iveco EH" value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} /></div>
+              <div className="col-span-2">
+                <label className="label">Società</label>
+                <div className="flex gap-2">
+                  {(['BC General Service', 'Filosofia'] as const).map(s => (
+                    <button key={s} type="button" onClick={() => setForm({...form, societa: s})}
+                      className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-all ${form.societa === s ? (s === 'Filosofia' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-blue-600 border-blue-600 text-white') : 'bg-white border-gray-200 text-gray-600'}`}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div><label className="label">Targa</label><input className="input" placeholder="es. AB123CD" value={form.targa} onChange={e => setForm({...form, targa: e.target.value})} /></div>
               <div><label className="label">Posti</label><input className="input" type="number" min="1" placeholder="es. 3" value={form.posti} onChange={e => setForm({...form, posti: e.target.value})} /></div>
               <div><label className="label">Marca</label><input className="input" placeholder="es. Iveco" value={form.marca} onChange={e => setForm({...form, marca: e.target.value})} /></div>
@@ -397,6 +416,17 @@ export default function MezziPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2"><label className="label">Nome/Identificativo *</label><input className="input" value={modalModifica.nome||''} onChange={e => setModalModifica({...modalModifica, nome: e.target.value})} /></div>
+              <div className="col-span-2">
+                <label className="label">Società</label>
+                <div className="flex gap-2">
+                  {(['BC General Service', 'Filosofia'] as const).map(s => (
+                    <button key={s} type="button" onClick={() => setModalModifica({...modalModifica, societa: s})}
+                      className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-all ${(modalModifica.societa || 'BC General Service') === s ? (s === 'Filosofia' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-blue-600 border-blue-600 text-white') : 'bg-white border-gray-200 text-gray-600'}`}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div><label className="label">Targa</label><input className="input" value={modalModifica.targa||''} onChange={e => setModalModifica({...modalModifica, targa: e.target.value})} /></div>
               <div><label className="label">Posti</label><input className="input" type="number" min="1" value={modalModifica.posti||''} onChange={e => setModalModifica({...modalModifica, posti: e.target.value})} /></div>
               <div><label className="label">Marca</label><input className="input" value={modalModifica.marca||''} onChange={e => setModalModifica({...modalModifica, marca: e.target.value})} /></div>
