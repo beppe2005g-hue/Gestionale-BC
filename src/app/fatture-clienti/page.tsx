@@ -5,6 +5,27 @@ import Sidebar from '@/components/Sidebar'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+// Ordinamento naturale per numero fattura: gestisce sia numeri puri (es. "123")
+// che formati misti (es. "FT/2026/001") confrontando i segmenti numerici correttamente
+// invece che come stringhe (altrimenti "10" finirebbe prima di "2").
+function confrontaNumeriFattura(a: string, b: string): number {
+  const splitA = (a || '').match(/\d+|\D+/g) || []
+  const splitB = (b || '').match(/\d+|\D+/g) || []
+  const len = Math.max(splitA.length, splitB.length)
+  for (let i = 0; i < len; i++) {
+    const partA = splitA[i] || ''
+    const partB = splitB[i] || ''
+    const numA = parseInt(partA), numB = parseInt(partB)
+    if (!isNaN(numA) && !isNaN(numB)) {
+      if (numA !== numB) return numA - numB
+    } else {
+      const cmp = partA.localeCompare(partB)
+      if (cmp !== 0) return cmp
+    }
+  }
+  return 0
+}
+
 export default function FattureClienti() {
   const [fatture, setFatture] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
@@ -15,6 +36,7 @@ export default function FattureClienti() {
   const [modalDettaglio, setModalDettaglio] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [filtroTipo, setFiltroTipo] = useState('tutti')
+  const [ordinamento, setOrdinamento] = useState<'numero' | 'data'>('numero')
 
   const [formPagamento, setFormPagamento] = useState({ rata: 1, importo: '', data_pagamento: '', note: '' })
   const [loadingPagamento, setLoadingPagamento] = useState(false)
@@ -33,7 +55,7 @@ export default function FattureClienti() {
 
   async function load() {
     const [{ data: f }, { data: c }, { data: p }, { data: pag }] = await Promise.all([
-      supabase.from('fatture_clienti').select('*').order('data', { ascending: false }),
+      supabase.from('fatture_clienti').select('*'),
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true),
       supabase.from('progetti').select('id,codice,nome'),
       supabase.from('pagamenti_clienti').select('*').order('data_pagamento', { ascending: false }),
@@ -44,7 +66,6 @@ export default function FattureClienti() {
     setPagamenti(pag || [])
   }
 
-  // ── Calcolo quanto è stato effettivamente incassato per ciascuna rata, dai pagamenti registrati ──
   function pagatoSuRata(fatturaId: string, rata: number): number {
     return pagamenti.filter(p => p.fattura_id === fatturaId && p.rata === rata).reduce((s, p) => s + (p.importo || 0), 0)
   }
@@ -57,7 +78,6 @@ export default function FattureClienti() {
     return 'parziale'
   }
 
-  // Una fattura è "saldata" quando ogni rata con importo > 0 risulta incassata per intero
   function fatturaSaldata(f: any): boolean {
     for (const n of [1, 2, 3]) {
       const imp = f[`rata${n}_importo`] || 0
@@ -90,7 +110,6 @@ export default function FattureClienti() {
     })
     if (error) { alert('Errore: ' + error.message); setLoadingPagamento(false); return }
 
-    // Registra anche il movimento in cash flow
     await supabase.from('cash_flow').insert({
       data: formPagamento.data_pagamento,
       descrizione: `Incasso ${modalDettaglio.cliente_nome} - Ft ${modalDettaglio.numero} rata ${rataTarget}`,
@@ -99,7 +118,6 @@ export default function FattureClienti() {
       progetto_id: modalDettaglio.progetto_id || null, riferimento_fattura: modalDettaglio.numero
     })
 
-    // Se con questo pagamento la rata risulta saldata, aggiorna anche lo stato sintetico della rata
     const nuovoPagato = pagatoSuRata(modalDettaglio.id, rataTarget) + importo
     const importoRata = modalDettaglio[`rata${rataTarget}_importo`] || 0
     if (nuovoPagato >= importoRata - 0.01) {
@@ -111,7 +129,6 @@ export default function FattureClienti() {
     setFormPagamento({ rata: 1, importo: '', data_pagamento: new Date().toISOString().split('T')[0], note: '' })
     setLoadingPagamento(false)
     await load()
-    // Riapre il dettaglio aggiornato
     const { data: aggiornata } = await supabase.from('fatture_clienti').select('*').eq('id', modalDettaglio.id).single()
     if (aggiornata) setModalDettaglio(aggiornata)
   }
@@ -119,7 +136,6 @@ export default function FattureClienti() {
   async function eliminaPagamento(pagamentoId: string, fatturaId: string, rata: number, importoRata: number) {
     if (!confirm('Eliminare questo pagamento registrato? Il movimento in cash flow non viene rimosso automaticamente.')) return
     await supabase.from('pagamenti_clienti').delete().eq('id', pagamentoId)
-    const nuovoPagato = pagatoSuRata(fatturaId, rata) // verrà ricalcolato dopo il reload, qui solo per decidere lo stato provvisorio
     await load()
     const pagatoAggiornato = pagamenti.filter(p => p.id !== pagamentoId && p.fattura_id === fatturaId && p.rata === rata).reduce((s, p) => s + (p.importo || 0), 0)
     let nuovoStato = 'Da Incassare'
@@ -206,10 +222,17 @@ export default function FattureClienti() {
   const isNC = (f: any) => f.tipo === 'Nota di credito'
 
   const fattureFiltrate = useMemo(() => {
-    if (filtroTipo === 'fattura') return fatture.filter(f => !isNC(f))
-    if (filtroTipo === 'nota_credito') return fatture.filter(f => isNC(f))
-    return fatture
-  }, [fatture, filtroTipo])
+    let r = fatture
+    if (filtroTipo === 'fattura') r = r.filter(f => !isNC(f))
+    if (filtroTipo === 'nota_credito') r = r.filter(f => isNC(f))
+    const sorted = [...r]
+    if (ordinamento === 'numero') {
+      sorted.sort((a, b) => confrontaNumeriFattura(a.numero, b.numero))
+    } else {
+      sorted.sort((a, b) => (b.data || '').localeCompare(a.data || ''))
+    }
+    return sorted
+  }, [fatture, filtroTipo, ordinamento])
 
   const totFatture = fatture.filter(f => !isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
   const totNC = fatture.filter(f => isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
@@ -224,7 +247,7 @@ export default function FattureClienti() {
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuova fattura</button>
         </div>
 
-        {/* Filtro tipo + totali netti */}
+        {/* Filtro tipo + ordinamento + totali netti */}
         <div className="card mb-4">
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex gap-1">
@@ -239,6 +262,11 @@ export default function FattureClienti() {
                 </button>
               ))}
             </div>
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-gray-400 mr-1">Ordina:</span>
+              <button className={`btn btn-sm ${ordinamento === 'numero' ? 'btn-primary' : ''}`} onClick={() => setOrdinamento('numero')}>N° fattura</button>
+              <button className={`btn btn-sm ${ordinamento === 'data' ? 'btn-primary' : ''}`} onClick={() => setOrdinamento('data')}>Data</button>
+            </div>
             <div className="flex-1 text-right text-xs text-gray-500 space-x-3">
               <span>Fatture: <strong>{euro(totFatture)}</strong></span>
               {totNC > 0 && <span className="text-purple-600">NC: <strong>- {euro(totNC)}</strong></span>}
@@ -249,10 +277,10 @@ export default function FattureClienti() {
 
         <div className="card overflow-x-auto">
           <table className="table-base">
-            <thead><tr><th>Data</th><th>N° Fattura</th><th>Cliente</th><th>Cantiere</th><th>Imponibile</th><th>Incassato</th><th>Stato</th><th></th></tr></thead>
+            <thead><tr><th>Data</th><th>N° Fattura</th><th>Tipo</th><th>Cliente</th><th>Cantiere</th><th>Imponibile</th><th>Incassato</th><th>Stato</th><th></th></tr></thead>
             <tbody>
               {fattureFiltrate.length === 0 ? (
-                <tr><td colSpan={8} className="text-center text-gray-400 py-8">Nessuna fattura cliente.</td></tr>
+                <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessuna fattura cliente.</td></tr>
               ) : fattureFiltrate.map(f => {
                 const nc = isNC(f)
                 const incassato = nc ? 0 : totaleIncassatoFattura(f)
@@ -262,9 +290,12 @@ export default function FattureClienti() {
                   <tr key={f.id} className={`cursor-pointer ${nc ? 'bg-purple-50 hover:bg-purple-100' : 'hover:bg-gray-50'}`}
                     onClick={() => !nc && apriDettaglio(f)}>
                     <td className="text-xs">{new Date(f.data).toLocaleDateString('it-IT')}</td>
-                    <td className="font-medium text-sm">
-                      {f.numero}
-                      {nc && <span className="ml-1 inline-block bg-purple-100 text-purple-700 text-xs px-1.5 py-0.5 rounded font-medium">NC</span>}
+                    <td className="font-medium text-sm">{f.numero}</td>
+                    <td>
+                      {nc
+                        ? <span className="inline-block bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded font-bold">📝 NC</span>
+                        : <span className="inline-block bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded font-medium">🧾 FT</span>
+                      }
                     </td>
                     <td className="text-sm">{f.cliente_nome}</td>
                     <td className="text-xs text-gray-500">
