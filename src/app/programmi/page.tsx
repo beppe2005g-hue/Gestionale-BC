@@ -23,12 +23,23 @@ export default function ProgrammiPage() {
     'BC General Service': [],
     'Filosofia': [],
   })
+  const [presenzeApprovate, setPresenzeApprovate] = useState<Record<Societa, boolean>>({
+    'BC General Service': false,
+    'Filosofia': false,
+  })
   const [loading, setLoading] = useState(true)
   const [copiato, setCopiato] = useState(false)
   const [salvando, setSalvando] = useState(false)
   const [dataProgr, setDataProgr] = useState(new Date().toISOString().split('T')[0])
   const [vistaPool, setVistaPool] = useState<'liberi' | 'tutti'>('liberi')
   const [tabMobile, setTabMobile] = useState<'pool' | 'cantieri' | 'anteprima'>('cantieri')
+
+  // ── Approvazione presenze ──
+  const [modalApprova, setModalApprova] = useState(false)
+  const [statiPresenza, setStatiPresenza] = useState<Record<string, { stato: 'presente'|'assente'|'parziale', ore: number, cantiere: string, societa: Societa }>>({})
+  const [conducenti, setConducenti] = useState<Record<string, string>>({}) // mezzoId -> dipendenteId
+  const [salvandoApprovazione, setSalvandoApprovazione] = useState(false)
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null)
 
   const cantieri = programmi[societaAttiva]
   const mezziSocieta = mezziDB.filter(m => (m.societa || 'BC General Service') === societaAttiva)
@@ -50,27 +61,52 @@ export default function ProgrammiPage() {
     return a.localeCompare(b)
   })
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { supabase.auth.getUser().then(({ data }) => setCurrentUserEmail(data.user?.email ?? null)) }, [])
+  useEffect(() => { load() }, [dataProgr])
 
   async function load() {
     setLoading(true)
     const [{ data: dip }, { data: mez }, { data: progBC }, { data: progFil }] = await Promise.all([
       supabase.from('dipendenti').select('id,nome,cognome,azienda,nome_programma,foto_url').eq('attivo', true).order('cognome'),
       supabase.from('mezzi').select('id,nome,targa,posti,societa').eq('attivo', true).order('nome'),
-      supabase.from('programma_giornaliero').select('*').eq('societa', 'BC General Service').order('created_at', { ascending: false }).limit(1),
-      supabase.from('programma_giornaliero').select('*').eq('societa', 'Filosofia').order('created_at', { ascending: false }).limit(1),
+      supabase.from('programma_giornaliero').select('*').eq('societa', 'BC General Service').eq('data', dataProgr).limit(1),
+      supabase.from('programma_giornaliero').select('*').eq('societa', 'Filosofia').eq('data', dataProgr).limit(1),
     ])
     setDipendenti(dip || [])
     setMezziDB(mez || [])
+
     const nuoviProgrammi: Record<Societa, Cantiere[]> = { 'BC General Service': [], 'Filosofia': [] }
+    const nuoveApprovazioni: Record<Societa, boolean> = { 'BC General Service': false, 'Filosofia': false }
+
     if (progBC && progBC.length > 0) {
       nuoviProgrammi['BC General Service'] = progBC[0].cantieri || []
-      setDataProgr(progBC[0].data || new Date().toISOString().split('T')[0])
+      nuoveApprovazioni['BC General Service'] = !!progBC[0].presenze_approvate
     }
     if (progFil && progFil.length > 0) {
       nuoviProgrammi['Filosofia'] = progFil[0].cantieri || []
+      nuoveApprovazioni['Filosofia'] = !!progFil[0].presenze_approvate
     }
+
+    // Se per questa data non esiste ancora un programma per una società,
+    // parti dall'ultimo programma APPROVATO di quella società come bozza,
+    // invece di partire vuoto.
+    for (const soc of ['BC General Service', 'Filosofia'] as Societa[]) {
+      const giaEsiste = soc === 'BC General Service' ? (progBC && progBC.length > 0) : (progFil && progFil.length > 0)
+      if (!giaEsiste) {
+        const { data: ultimoApprovato } = await supabase.from('programma_giornaliero')
+          .select('cantieri')
+          .eq('societa', soc)
+          .eq('presenze_approvate', true)
+          .order('data', { ascending: false })
+          .limit(1)
+        if (ultimoApprovato && ultimoApprovato.length > 0) {
+          nuoviProgrammi[soc] = ultimoApprovato[0].cantieri || []
+        }
+      }
+    }
+
     setProgrammi(nuoviProgrammi)
+    setPresenzeApprovate(nuoveApprovazioni)
     setLoading(false)
   }
 
@@ -161,17 +197,27 @@ export default function ProgrammiPage() {
   async function salva() {
     setSalvando(true)
     for (const soc of ['BC General Service', 'Filosofia'] as Societa[]) {
-      await supabase.from('programma_giornaliero').delete().eq('societa', soc)
-      await supabase.from('programma_giornaliero').insert({
-        data: dataProgr, societa: soc, cantieri: programmi[soc], updated_at: new Date().toISOString()
-      })
+      const { data: esistente } = await supabase.from('programma_giornaliero')
+        .select('id, presenze_approvate').eq('societa', soc).eq('data', dataProgr).limit(1)
+      if (esistente && esistente.length > 0) {
+        await supabase.from('programma_giornaliero').update({
+          cantieri: programmi[soc], updated_at: new Date().toISOString()
+        }).eq('id', esistente[0].id)
+      } else {
+        await supabase.from('programma_giornaliero').insert({
+          data: dataProgr, societa: soc, cantieri: programmi[soc],
+          presenze_approvate: false, updated_at: new Date().toISOString()
+        })
+      }
     }
     setSalvando(false)
+    load()
   }
 
   function nuovoProgramma() {
-    if (!confirm(`Creare un nuovo programma ${societaAttiva}? Quello attuale per questa società verrà sostituito.`)) return
+    if (!confirm(`Creare un nuovo programma ${societaAttiva}? Quello attuale per questa data verrà sostituito con la bozza dell'ultimo giorno approvato.`)) return
     setProgrammi(prev => ({ ...prev, [societaAttiva]: [] }))
+    load()
   }
 
   async function copiaMessaggio() {
@@ -188,8 +234,6 @@ export default function ProgrammiPage() {
     return ''
   }
 
-  // Controlla se la persona è già piazzata nell'ALTRA società (oggi), per avvisare
-  // l'utente prima che la metta due volte senza accorgersene
   function dovePiazzatoAltraSocieta(dipId: string): { societa: Societa, cantiere: string } | null {
     const altraSocieta: Societa = societaAttiva === 'BC General Service' ? 'Filosofia' : 'BC General Service'
     const altroProgramma = programmi[altraSocieta]
@@ -210,16 +254,141 @@ export default function ProgrammiPage() {
     return ''
   }
 
+  // ════════════════════════════════════════
+  // APPROVAZIONE PRESENZE — agisce su ENTRAMBE le società per la data corrente
+  // ════════════════════════════════════════
+
+  function apriModalApprova() {
+    // Solo i dati della società attualmente selezionata: ogni società si approva
+    // in modo indipendente. Niente "assenti automatici" qui: chi non è in questo
+    // programma potrebbe essere assegnato all'altra società, non ancora approvata.
+    const stati: typeof statiPresenza = {}
+    for (const c of programmi[societaAttiva]) {
+      for (const l of c.lavorazioni) {
+        for (const p of l.persone) {
+          stati[p.id] = { stato: 'presente', ore: 1, cantiere: c.nome || 'Cantiere senza nome', societa: societaAttiva }
+        }
+      }
+    }
+    setStatiPresenza(stati)
+    setConducenti({})
+    setModalApprova(true)
+  }
+
+  function cambiaStato(dipId: string, stato: 'presente'|'assente'|'parziale') {
+    const ore = stato === 'presente' ? 1 : stato === 'parziale' ? 0.5 : 0
+    setStatiPresenza(prev => ({ ...prev, [dipId]: { ...prev[dipId], stato, ore } }))
+  }
+
+  function mezziDaAbbinare() {
+    const elenco: { mezzoId: string, nomeMezzo: string, cantiere: string, societa: Societa, personeDisponibili: { id: string, nome: string }[] }[] = []
+    for (const c of programmi[societaAttiva]) {
+      if (c.mezzi.length === 0) continue
+      const persone = c.lavorazioni.flatMap(l => l.persone.map(p => ({ id: p.id, nome: p.nomeBreve })))
+      for (const m of c.mezzi) {
+        elenco.push({ mezzoId: m.id, nomeMezzo: m.nome, cantiere: c.nome || 'Cantiere senza nome', societa: societaAttiva, personeDisponibili: persone })
+      }
+    }
+    return elenco
+  }
+
+  async function confermaApprovazione() {
+    const soc = societaAttiva
+    const mezzi = mezziDaAbbinare()
+    const mancanti = mezzi.filter(m => !conducenti[m.mezzoId])
+    if (mancanti.length > 0) {
+      alert(`Manca il conducente per: ${mancanti.map(m => m.nomeMezzo).join(', ')}. Abbinalo prima di confermare.`)
+      return
+    }
+
+    setSalvandoApprovazione(true)
+
+    // 1) Upsert SOLO le presenze di chi è in questa società (presente/parziale).
+    //    Non si toccano gli assenti qui: potrebbero essere assegnati all'altra
+    //    società, non ancora approvata.
+    const righePresenze = Object.entries(statiPresenza).map(([dipId, s]) => ({
+      data: dataProgr,
+      dipendente_id: dipId,
+      societa: soc,
+      stato: s.stato,
+      ore: s.ore,
+      origine: 'da_programma',
+      cantiere_nome: s.cantiere || null,
+      approvato: true,
+      approvato_da: currentUserEmail || 'sconosciuto',
+      approvato_il: new Date().toISOString(),
+    }))
+    if (righePresenze.length > 0) {
+      await supabase.from('presenze').upsert(righePresenze, { onConflict: 'data,dipendente_id' })
+    }
+
+    // 2) Utilizzo mezzi solo di questa società
+    if (mezzi.length > 0) {
+      const righeMezzi = mezzi.map(m => {
+        const dip = dipendenti.find(d => d.id === conducenti[m.mezzoId])
+        return {
+          mezzo_id: m.mezzoId,
+          data: dataProgr,
+          conducente_id: conducenti[m.mezzoId],
+          conducente_nome: dip ? `${dip.cognome} ${dip.nome}` : 'Sconosciuto',
+          cantiere_nome: m.cantiere,
+          societa: soc,
+        }
+      })
+      await supabase.from('mezzi_utilizzo_giornaliero').upsert(righeMezzi, { onConflict: 'mezzo_id,data' })
+    }
+
+    // 3) Segna SOLO questa società come approvata per questa data
+    await supabase.from('programma_giornaliero').update({
+      presenze_approvate: true, approvato_da: currentUserEmail || 'sconosciuto', approvato_il: new Date().toISOString()
+    }).eq('societa', soc).eq('data', dataProgr)
+
+    // 4) Controlla se ANCHE l'altra società risulta già approvata per oggi.
+    //    Se sì, è il momento di finalizzare: chi non ha ancora una riga presenze
+    //    per questa data non è stato messo in nessuno dei due programmi -> assente.
+    const altraSocieta: Societa = soc === 'BC General Service' ? 'Filosofia' : 'BC General Service'
+    const { data: altroProgr } = await supabase.from('programma_giornaliero')
+      .select('presenze_approvate').eq('societa', altraSocieta).eq('data', dataProgr).limit(1)
+    const altraApprovata = !!(altroProgr && altroProgr.length > 0 && altroProgr[0].presenze_approvate)
+
+    if (altraApprovata) {
+      const { data: presenzeEsistenti } = await supabase.from('presenze')
+        .select('dipendente_id').eq('data', dataProgr)
+      const idGiaPresenti = new Set((presenzeEsistenti || []).map((r: any) => r.dipendente_id))
+      const assenti = dipendenti.filter(d => !idGiaPresenti.has(d.id)).map(d => ({
+        data: dataProgr, dipendente_id: d.id, societa: 'Nessuna', stato: 'assente', ore: 0,
+        origine: 'da_programma', cantiere_nome: null, approvato: true,
+        approvato_da: currentUserEmail || 'sconosciuto', approvato_il: new Date().toISOString(),
+      }))
+      if (assenti.length > 0) {
+        await supabase.from('presenze').upsert(assenti, { onConflict: 'data,dipendente_id' })
+      }
+    }
+
+    setSalvandoApprovazione(false)
+    setModalApprova(false)
+    load()
+  }
+
+  const entrambeApprovate = presenzeApprovate['BC General Service'] && presenzeApprovate['Filosofia']
+
   return (
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden" style={{ height: '100vh' }}>
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
-          <div><h1 className="text-lg font-semibold">📋 Programma giornaliero</h1></div>
+          <div>
+            <h1 className="text-lg font-semibold">📋 Programma giornaliero</h1>
+          </div>
           <div className="flex gap-2 items-center flex-wrap">
             <input type="date" className="input text-sm py-1 flex-1 md:flex-none" value={dataProgr} onChange={e => setDataProgr(e.target.value)} />
             <button className="btn btn-sm" onClick={nuovoProgramma}>🆕 Nuovo</button>
             <button className="btn btn-sm btn-primary" onClick={salva} disabled={salvando}>{salvando ? '...' : '💾 Salva'}</button>
+            <button
+              className={`btn btn-sm ${presenzeApprovate[societaAttiva] ? 'bg-green-600 text-white border-green-600' : 'bg-amber-500 text-white border-amber-500'}`}
+              onClick={apriModalApprova}>
+              {presenzeApprovate[societaAttiva] ? `✓ ${societaAttiva} approvata` : `✅ Approva ${societaAttiva}`}
+            </button>
             <button className="btn btn-sm hidden md:inline-flex" onClick={() => window.print()}>🖨️</button>
           </div>
         </div>
@@ -227,15 +396,14 @@ export default function ProgrammiPage() {
         <div className="flex gap-2 px-4 py-2 bg-gray-50 border-b border-gray-200 flex-shrink-0">
           <button onClick={() => setSocietaAttiva('BC General Service')}
             className={`flex-1 py-2 rounded-lg border-2 text-sm font-bold transition-all ${societaAttiva === 'BC General Service' ? 'bg-blue-600 text-white border-blue-600 shadow' : 'bg-blue-50 text-blue-700 border-blue-300'}`}>
-            🏗 BC General Service
+            🏗 BC General Service {presenzeApprovate['BC General Service'] && '✓'}
           </button>
           <button onClick={() => setSocietaAttiva('Filosofia')}
             className={`flex-1 py-2 rounded-lg border-2 text-sm font-bold transition-all ${societaAttiva === 'Filosofia' ? 'bg-orange-500 text-white border-orange-500 shadow' : 'bg-orange-50 text-orange-700 border-orange-300'}`}>
-            🏢 Filosofia
+            🏢 Filosofia {presenzeApprovate['Filosofia'] && '✓'}
           </button>
         </div>
 
-        {/* Tab bar SOLO mobile — su desktop le 3 colonne sono sempre visibili affiancate */}
         <div className="flex md:hidden border-b border-gray-200 flex-shrink-0 bg-white">
           <button onClick={() => setTabMobile('pool')}
             className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${tabMobile === 'pool' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50' : 'text-gray-500'}`}>
@@ -439,7 +607,6 @@ export default function ProgrammiPage() {
 
             <button onClick={aggiungiCantiere} className="btn btn-primary w-full">+ Cantiere {societaAttiva}</button>
 
-            {/* Scorciatoia mobile: salta all'anteprima per copiare il messaggio */}
             {cantieri.length > 0 && (
               <button onClick={() => setTabMobile('anteprima')} className="btn w-full md:hidden text-green-700 border-green-300 bg-green-50">
                 📱 Vedi anteprima messaggio
@@ -466,6 +633,92 @@ export default function ProgrammiPage() {
           </div>
         </div>
       </main>
+
+      {/* ════════ MODAL APPROVAZIONE PRESENZE ════════ */}
+      {modalApprova && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white z-10">
+              <div>
+                <h2 className="text-base font-semibold">✅ Approva presenze {societaAttiva} — {new Date(dataProgr).toLocaleDateString('it-IT')}</h2>
+                <p className="text-xs text-gray-500">Conferma chi è presente in questo programma e abbina un conducente a ogni mezzo.</p>
+                <p className="text-xs text-amber-600 mt-1">
+                  {presenzeApprovate[societaAttiva === 'BC General Service' ? 'Filosofia' : 'BC General Service']
+                    ? 'L\'altra società è già approvata: confermando questa, il sistema segnerà automaticamente assenti tutti i dipendenti non trovati in nessuno dei due programmi.'
+                    : 'L\'altra società non è ancora stata approvata: gli assenti definitivi verranno calcolati solo quando entrambe saranno confermate.'}
+                </p>
+              </div>
+              <button onClick={() => setModalApprova(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+
+            <div className="p-5 space-y-5">
+              <div>
+                <h3 className="font-medium text-sm mb-2">👷 Presenze ({Object.keys(statiPresenza).length} dipendenti)</h3>
+                <div className="space-y-1 max-h-64 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                  {dipendenti.map(d => {
+                    const s = statiPresenza[d.id]
+                    if (!s) return null
+                    return (
+                      <div key={d.id} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium truncate">{d.cognome} {d.nome} <span className="text-xs text-gray-400">({d.azienda})</span></p>
+                          {s.cantiere && <p className="text-xs text-blue-600 truncate">📍 {s.cantiere}</p>}
+                        </div>
+                        <div className="flex gap-1 flex-shrink-0">
+                          {(['presente','parziale','assente'] as const).map(opt => (
+                            <button key={opt} onClick={() => cambiaStato(d.id, opt)}
+                              className={`text-xs px-2 py-1 rounded-lg border font-medium transition-colors
+                                ${s.stato === opt
+                                  ? opt === 'presente' ? 'bg-green-600 text-white border-green-600'
+                                    : opt === 'parziale' ? 'bg-amber-500 text-white border-amber-500'
+                                    : 'bg-red-500 text-white border-red-500'
+                                  : 'bg-white text-gray-500 border-gray-200'}`}>
+                              {opt === 'presente' ? '✓ Presente' : opt === 'parziale' ? '½ Mezza' : '✕ Assente'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="font-medium text-sm mb-2">🚐 Chi ha guidato (obbligatorio per ogni mezzo usato)</h3>
+                {mezziDaAbbinare().length === 0 ? (
+                  <p className="text-sm text-gray-400">Nessun mezzo assegnato oggi.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {mezziDaAbbinare().map(m => (
+                      <div key={m.mezzoId} className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium">🚐 {m.nomeMezzo}</p>
+                          <p className="text-xs text-gray-500 truncate">📍 {m.cantiere} · {m.societa}</p>
+                        </div>
+                        <select className={`input text-xs py-1 w-48 ${!conducenti[m.mezzoId] ? 'border-amber-400' : ''}`}
+                          value={conducenti[m.mezzoId] || ''}
+                          onChange={e => setConducenti(prev => ({ ...prev, [m.mezzoId]: e.target.value }))}>
+                          <option value="">— scegli conducente —</option>
+                          {m.personeDisponibili.map(p => (
+                            <option key={p.id} value={p.id}>{p.nome}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2 sticky bottom-0 bg-white">
+              <button className="btn" onClick={() => setModalApprova(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={confermaApprovazione} disabled={salvandoApprovazione}>
+                {salvandoApprovazione ? 'Salvataggio...' : '✅ Conferma approvazione'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx global>{`
         @media print {
