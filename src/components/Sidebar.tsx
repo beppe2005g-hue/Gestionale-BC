@@ -55,6 +55,7 @@ function inAllertaConPreavviso(data: string | null, giorniPreavviso: number): bo
 
 export default function Sidebar() {
   const path = usePathname()
+  const [aperta, setAperta] = useState(false) // stato del drawer mobile
 
   useEffect(() => {
     function onTornaVisibile() {
@@ -69,6 +70,9 @@ export default function Sidebar() {
       window.removeEventListener('focus', onTornaVisibile)
     }
   }, [])
+
+  // Chiude il drawer mobile ogni volta che si cambia pagina
+  useEffect(() => { setAperta(false) }, [path])
 
   const [permessi, setPermessi] = useState<Record<string, boolean> | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
@@ -99,7 +103,6 @@ export default function Sidebar() {
         inAllertaConPreavviso(d.data_fine_contratto, PREAVVISO_CONTRATTO)
       ).length
 
-      // Mezzi con scadenze in arrivo (30 giorni)
       const { data: mez } = await supabase
         .from('mezzi').select('scadenza_assicurazione,scadenza_bollo,scadenza_revisione').eq('attivo', true)
       const mezziInAllerta = (mez || []).filter(m =>
@@ -125,8 +128,9 @@ export default function Sidebar() {
     window.location.href = '/'
   }
 
-  return (
-    <aside className="w-52 bg-white border-r border-gray-200 flex flex-col min-h-screen flex-shrink-0">
+  // Contenuto della sidebar, condiviso tra versione desktop fissa e drawer mobile
+  const contenutoNav = (
+    <>
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center gap-2">
           <img src="/logo.png" alt="BC General Service" className="h-10 w-auto object-contain flex-shrink-0" />
@@ -168,6 +172,38 @@ export default function Sidebar() {
       <div className="p-4 border-t border-gray-200">
         <button onClick={logout} className="w-full text-left text-sm text-gray-500 hover:text-red-600 transition-colors">Esci</button>
       </div>
-    </aside>
+    </>
+  )
+
+  return (
+    <>
+      {/* ── Barra superiore SOLO mobile: hamburger + logo compatto ── */}
+      <div className="md:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 sticky top-0 z-30">
+        <button onClick={() => setAperta(true)} className="text-2xl leading-none text-gray-700" aria-label="Apri menu">
+          ☰
+        </button>
+        <img src="/logo.png" alt="BC General Service" className="h-7 w-auto object-contain" />
+        <span className="text-sm font-semibold text-gray-900">BC General Service</span>
+      </div>
+
+      {/* ── Overlay scuro dietro al drawer mobile, chiude al click ── */}
+      {aperta && (
+        <div className="md:hidden fixed inset-0 bg-black/40 z-40" onClick={() => setAperta(false)} />
+      )}
+
+      {/* ── Sidebar: fissa su desktop, drawer scorrevole su mobile ── */}
+      <aside className={`
+        bg-white border-r border-gray-200 flex flex-col flex-shrink-0
+        md:w-52 md:min-h-screen md:static md:translate-x-0
+        fixed inset-y-0 left-0 w-72 z-50 transition-transform duration-200
+        ${aperta ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+      `}>
+        {/* Pulsante chiudi, visibile solo dentro al drawer mobile aperto */}
+        <button onClick={() => setAperta(false)} className="md:hidden absolute top-3 right-3 text-xl text-gray-400" aria-label="Chiudi menu">
+          ✕
+        </button>
+        {contenutoNav}
+      </aside>
+    </>
   )
 }
