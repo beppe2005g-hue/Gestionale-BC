@@ -28,6 +28,7 @@ export default function ProgrammiPage() {
   const [salvando, setSalvando] = useState(false)
   const [dataProgr, setDataProgr] = useState(new Date().toISOString().split('T')[0])
   const [vistaPool, setVistaPool] = useState<'liberi' | 'tutti'>('liberi')
+  const [tabMobile, setTabMobile] = useState<'pool' | 'cantieri' | 'anteprima'>('cantieri')
 
   const cantieri = programmi[societaAttiva]
   const mezziSocieta = mezziDB.filter(m => (m.societa || 'BC General Service') === societaAttiva)
@@ -213,13 +214,13 @@ export default function ProgrammiPage() {
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden" style={{ height: '100vh' }}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
           <div><h1 className="text-lg font-semibold">📋 Programma giornaliero</h1></div>
-          <div className="flex gap-2 items-center">
-            <input type="date" className="input text-sm py-1" value={dataProgr} onChange={e => setDataProgr(e.target.value)} />
-            <button className="btn btn-sm" onClick={nuovoProgramma}>🆕 Nuovo ({societaAttiva === 'Filosofia' ? 'Filosofia' : 'BC'})</button>
-            <button className="btn btn-sm btn-primary" onClick={salva} disabled={salvando}>{salvando ? '...' : '💾 Salva entrambi'}</button>
-            <button className="btn btn-sm" onClick={() => window.print()}>🖨️</button>
+          <div className="flex gap-2 items-center flex-wrap">
+            <input type="date" className="input text-sm py-1 flex-1 md:flex-none" value={dataProgr} onChange={e => setDataProgr(e.target.value)} />
+            <button className="btn btn-sm" onClick={nuovoProgramma}>🆕 Nuovo</button>
+            <button className="btn btn-sm btn-primary" onClick={salva} disabled={salvando}>{salvando ? '...' : '💾 Salva'}</button>
+            <button className="btn btn-sm hidden md:inline-flex" onClick={() => window.print()}>🖨️</button>
           </div>
         </div>
 
@@ -234,8 +235,24 @@ export default function ProgrammiPage() {
           </button>
         </div>
 
+        {/* Tab bar SOLO mobile — su desktop le 3 colonne sono sempre visibili affiancate */}
+        <div className="flex md:hidden border-b border-gray-200 flex-shrink-0 bg-white">
+          <button onClick={() => setTabMobile('pool')}
+            className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${tabMobile === 'pool' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50' : 'text-gray-500'}`}>
+            👥 Persone/Mezzi
+          </button>
+          <button onClick={() => setTabMobile('cantieri')}
+            className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${tabMobile === 'cantieri' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50' : 'text-gray-500'}`}>
+            🏗 Cantieri
+          </button>
+          <button onClick={() => setTabMobile('anteprima')}
+            className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${tabMobile === 'anteprima' ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50' : 'text-gray-500'}`}>
+            📱 Messaggio
+          </button>
+        </div>
+
         <div className="flex flex-1 overflow-hidden">
-          <div className="w-52 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col overflow-hidden">
+          <div className={`w-full md:w-52 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex-col overflow-hidden ${tabMobile === 'pool' ? 'flex' : 'hidden md:flex'}`}>
             <div className="flex border-b border-gray-200 flex-shrink-0">
               <button onClick={() => setVistaPool('liberi')}
                 className={`flex-1 py-2 text-xs font-medium transition-colors ${vistaPool === 'liberi' ? 'bg-white text-blue-700 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>
@@ -317,7 +334,7 @@ export default function ProgrammiPage() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-white">
+          <div className={`flex-1 overflow-y-auto p-3 space-y-3 bg-white ${tabMobile === 'cantieri' ? 'block' : 'hidden md:block'}`}>
             <div className={`text-xs font-semibold px-3 py-1.5 rounded-lg inline-block mb-1 ${societaAttiva === 'Filosofia' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'}`}>
               Stai modificando: {societaAttiva}
             </div>
@@ -421,9 +438,16 @@ export default function ProgrammiPage() {
             ))}
 
             <button onClick={aggiungiCantiere} className="btn btn-primary w-full">+ Cantiere {societaAttiva}</button>
+
+            {/* Scorciatoia mobile: salta all'anteprima per copiare il messaggio */}
+            {cantieri.length > 0 && (
+              <button onClick={() => setTabMobile('anteprima')} className="btn w-full md:hidden text-green-700 border-green-300 bg-green-50">
+                📱 Vedi anteprima messaggio
+              </button>
+            )}
           </div>
 
-          <div className="w-72 flex-shrink-0 border-l border-gray-200 flex flex-col overflow-hidden">
+          <div className={`w-full md:w-72 flex-shrink-0 border-l border-gray-200 flex-col overflow-hidden ${tabMobile === 'anteprima' ? 'flex' : 'hidden md:flex'}`}>
             <div className={`flex items-center justify-between px-3 py-2 flex-shrink-0 ${societaAttiva === 'Filosofia' ? 'bg-orange-600' : 'bg-[#128C7E]'}`}>
               <span className="text-white text-xs font-semibold">📱 {societaAttiva}</span>
               <button onClick={copiaMessaggio}
