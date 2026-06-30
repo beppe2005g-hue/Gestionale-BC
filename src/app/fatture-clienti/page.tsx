@@ -37,6 +37,7 @@ export default function FattureClienti() {
   const [loading, setLoading] = useState(false)
   const [filtroTipo, setFiltroTipo] = useState('tutti')
   const [ordinamento, setOrdinamento] = useState<'numero' | 'data'>('numero')
+  const [cercaTesto, setCercaTesto] = useState('')
 
   const [formPagamento, setFormPagamento] = useState({ rata: 1, importo: '', data_pagamento: '', note: '' })
   const [loadingPagamento, setLoadingPagamento] = useState(false)
@@ -225,6 +226,14 @@ export default function FattureClienti() {
     let r = fatture
     if (filtroTipo === 'fattura') r = r.filter(f => !isNC(f))
     if (filtroTipo === 'nota_credito') r = r.filter(f => isNC(f))
+    if (cercaTesto.trim()) {
+      const q = cercaTesto.toLowerCase()
+      r = r.filter(f =>
+        f.numero?.toLowerCase().includes(q) ||
+        f.cliente_nome?.toLowerCase().includes(q) ||
+        f.progetto_nome?.toLowerCase().includes(q)
+      )
+    }
     const sorted = [...r]
     if (ordinamento === 'numero') {
       sorted.sort((a, b) => confrontaNumeriFattura(b.numero, a.numero))
@@ -232,7 +241,7 @@ export default function FattureClienti() {
       sorted.sort((a, b) => (b.data || '').localeCompare(a.data || ''))
     }
     return sorted
-  }, [fatture, filtroTipo, ordinamento])
+  }, [fatture, filtroTipo, ordinamento, cercaTesto])
 
   const totFatture = fatture.filter(f => !isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
   const totNC = fatture.filter(f => isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
@@ -247,8 +256,12 @@ export default function FattureClienti() {
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuova fattura</button>
         </div>
 
-        {/* Filtro tipo + ordinamento + totali netti */}
+        {/* Ricerca + Filtro tipo + ordinamento + totali netti */}
         <div className="card mb-4">
+          <div className="mb-3">
+            <input className="input" placeholder="🔍 Cerca per N° fattura, cliente, cantiere..."
+              value={cercaTesto} onChange={e => setCercaTesto(e.target.value)} />
+          </div>
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex gap-1">
               {[
@@ -268,9 +281,11 @@ export default function FattureClienti() {
               <button className={`btn btn-sm ${ordinamento === 'data' ? 'btn-primary' : ''}`} onClick={() => setOrdinamento('data')}>Data</button>
             </div>
             <div className="flex-1 text-right text-xs text-gray-500 space-x-3">
+              {cercaTesto && <span>{fattureFiltrate.length} risultati</span>}
               <span>Fatture: <strong>{euro(totFatture)}</strong></span>
               {totNC > 0 && <span className="text-purple-600">NC: <strong>- {euro(totNC)}</strong></span>}
               <span className="font-semibold text-gray-800">Netto: <strong>{euro(totNetto)}</strong></span>
+              {cercaTesto && <button className="text-blue-600 hover:underline" onClick={() => setCercaTesto('')}>× Reset</button>}
             </div>
           </div>
         </div>
