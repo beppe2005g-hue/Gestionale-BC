@@ -24,11 +24,9 @@ export default function ProgrammiPage() {
   const [dataProgr, setDataProgr] = useState(new Date().toISOString().split('T')[0])
   const [vistaPool, setVistaPool] = useState<'liberi' | 'tutti'>('liberi')
 
-  // IDs già usati
   const dipUsati = new Set(cantieri.flatMap(c => c.lavorazioni.flatMap(l => l.persone.map(p => p.id))))
   const mezziUsati = new Set(cantieri.flatMap(c => c.mezzi.map(m => m.id)))
 
-  // Dipendenti liberi raggruppati per azienda
   const dipPerAzienda = dipendenti.reduce((acc, d) => {
     const libero = !dipUsati.has(d.id)
     if (vistaPool === 'liberi' && !libero) return acc
@@ -49,7 +47,7 @@ export default function ProgrammiPage() {
     setLoading(true)
     const [{ data: dip }, { data: mez }, { data: prog }] = await Promise.all([
       supabase.from('dipendenti').select('id,nome,cognome,azienda,nome_programma,foto_url').eq('attivo', true).order('cognome'),
-      supabase.from('mezzi').select('id,nome,targa').eq('attivo', true).order('nome'),
+      supabase.from('mezzi').select('id,nome,targa,posti').eq('attivo', true).order('nome'),
       supabase.from('programma_giornaliero').select('*').order('created_at', { ascending: false }).limit(1),
     ])
     setDipendenti(dip || [])
@@ -66,8 +64,14 @@ export default function ProgrammiPage() {
     return d.nome_programma || d.nome || ''
   }
 
-  function nomeMezzo(m: any) {
-    return m.targa ? `${m.nome} ${m.targa}` : m.nome
+  // Nome del mezzo per il MESSAGGIO (solo nome, niente posti)
+  function nomeMezzoMessaggio(m: any) {
+    return m.nome
+  }
+
+  // Etichetta del mezzo per la UI del gestionale (mostra anche i posti)
+  function labelMezzoUI(m: any) {
+    return m.posti ? `${m.nome} (${m.posti}p)` : m.nome
   }
 
   function generaMessaggio(list: Cantiere[]) {
@@ -82,6 +86,7 @@ export default function ProgrammiPage() {
           righe.push(parti.join(' + '))
         }
       }
+      // Il messaggio WhatsApp riporta solo il nome del mezzo, senza i posti
       if (c.mezzi.length > 0) righe.push(c.mezzi.map(m => `*${m.nome}`).join('+'))
       righe.push('')
     }
@@ -96,7 +101,6 @@ export default function ProgrammiPage() {
     generaMessaggio(nuovi)
   }
 
-  // ── Aggiungi persona da pool ──
   function aggiungiPersona(cid: string, lid: string, dip: any) {
     if (dipUsati.has(dip.id)) return
     const persona: Persona = {
@@ -131,9 +135,11 @@ export default function ProgrammiPage() {
       : c))
   }
 
+  // Salviamo SOLO il nome (senza posti) nello stato del cantiere, per coerenza col messaggio.
+  // I posti vengono mostrati nella UI andando a leggere mezziDB al momento del render.
   function aggiungiMezzo(cid: string, m: any) {
     if (mezziUsati.has(m.id)) return
-    update(cantieri.map(c => c.id === cid ? { ...c, mezzi: [...c.mezzi, { id: m.id, nome: nomeMezzo(m) }] } : c))
+    update(cantieri.map(c => c.id === cid ? { ...c, mezzi: [...c.mezzi, { id: m.id, nome: m.nome }] } : c))
   }
 
   function rimuoviMezzo(cid: string, mezzoId: string) {
@@ -185,13 +191,10 @@ export default function ProgrammiPage() {
     setCopiato(true); setTimeout(() => setCopiato(false), 2000)
   }
 
-  // Dove è piazzato un dipendente
   function dovePiazzato(dipId: string): string {
     for (const c of cantieri) {
       for (const l of c.lavorazioni) {
-        if (l.persone.find(p => p.id === dipId)) {
-          return c.nome || 'Cantiere senza nome'
-        }
+        if (l.persone.find(p => p.id === dipId)) return c.nome || 'Cantiere senza nome'
       }
     }
     return ''
@@ -208,11 +211,8 @@ export default function ProgrammiPage() {
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 flex flex-col overflow-hidden" style={{ height: '100vh' }}>
-        {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
-          <div>
-            <h1 className="text-lg font-semibold">📋 Programma giornaliero</h1>
-          </div>
+          <div><h1 className="text-lg font-semibold">📋 Programma giornaliero</h1></div>
           <div className="flex gap-2 items-center">
             <input type="date" className="input text-sm py-1" value={dataProgr} onChange={e => setDataProgr(e.target.value)} />
             <button className="btn btn-sm" onClick={nuovoProgramma}>🆕 Nuovo</button>
@@ -222,9 +222,8 @@ export default function ProgrammiPage() {
         </div>
 
         <div className="flex flex-1 overflow-hidden">
-          {/* ── POOL SINISTRA: DIPENDENTI + MEZZI ── */}
+          {/* ── POOL SINISTRA ── */}
           <div className="w-52 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex flex-col overflow-hidden">
-            {/* Toggle vista */}
             <div className="flex border-b border-gray-200 flex-shrink-0">
               <button onClick={() => setVistaPool('liberi')}
                 className={`flex-1 py-2 text-xs font-medium transition-colors ${vistaPool === 'liberi' ? 'bg-white text-blue-700 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>
@@ -241,7 +240,6 @@ export default function ProgrammiPage() {
                 <p className="text-xs text-gray-400 text-center py-4">Caricamento...</p>
               ) : (
                 <>
-                  {/* Dipendenti per azienda */}
                   {aziendeOrdinate.map(az => (
                     <div key={az}>
                       <div className="px-3 py-1.5 bg-gray-800 sticky top-0 z-10">
@@ -263,17 +261,11 @@ export default function ProgrammiPage() {
                                 </div>
                               )}
                               <div className="min-w-0">
-                                <p className="text-xs font-semibold text-gray-800 truncate">
-                                  {d.nome_programma || d.nome}
-                                </p>
-                                {d.nome_programma && (
-                                  <p className="text-xs text-gray-400 truncate">{d.cognome} {d.nome}</p>
-                                )}
+                                <p className="text-xs font-semibold text-gray-800 truncate">{d.nome_programma || d.nome}</p>
+                                {d.nome_programma && <p className="text-xs text-gray-400 truncate">{d.cognome} {d.nome}</p>}
                                 {dove && <p className="text-xs text-blue-600 truncate">📍 {dove}</p>}
                               </div>
-                              {!usato && (
-                                <span className="ml-auto text-gray-300 text-xs flex-shrink-0">⠿</span>
-                              )}
+                              {!usato && <span className="ml-auto text-gray-300 text-xs flex-shrink-0">⠿</span>}
                             </div>
                           </div>
                         )
@@ -281,7 +273,6 @@ export default function ProgrammiPage() {
                     </div>
                   ))}
 
-                  {/* Separatore Mezzi */}
                   <div className="px-3 py-1.5 bg-blue-800 sticky top-0 z-10 mt-1">
                     <p className="text-xs font-bold text-white">🚐 MEZZI</p>
                   </div>
@@ -293,7 +284,10 @@ export default function ProgrammiPage() {
                       <div key={m.id}
                         className={`px-3 py-2 border-b border-gray-100 transition-colors ${usato ? 'opacity-40' : 'cursor-pointer hover:bg-blue-50'}`}
                         title={usato ? `Assegnato: ${dove}` : ''}>
-                        <p className="text-xs font-semibold text-blue-800 truncate">🚐 {nomeMezzo(m)}</p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-semibold text-blue-800 truncate">🚐 {m.nome}</p>
+                          {m.posti && <span className="text-xs text-blue-500 flex-shrink-0">👥 {m.posti}p</span>}
+                        </div>
                         {dove && <p className="text-xs text-blue-500 truncate">📍 {dove}</p>}
                       </div>
                     )
@@ -303,7 +297,7 @@ export default function ProgrammiPage() {
             </div>
           </div>
 
-          {/* ── CENTRO: BUILDER CANTIERI ── */}
+          {/* ── CENTRO: BUILDER ── */}
           <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-white">
             {cantieri.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-64 text-gray-400">
@@ -312,14 +306,12 @@ export default function ProgrammiPage() {
               </div>
             ) : cantieri.map(c => (
               <div key={c.id} className="border border-gray-200 rounded-xl overflow-hidden">
-                {/* Header cantiere */}
                 <div className="bg-gray-800 px-3 py-2 flex items-center gap-2">
                   <input className="flex-1 bg-transparent text-white text-sm font-semibold placeholder-gray-400 outline-none"
                     placeholder="Nome cantiere..."
                     value={c.nome} onChange={e => aggiornaCantiere(c.id, 'nome', e.target.value)} />
                   <button onClick={() => rimuoviCantiere(c.id)} className="text-gray-400 hover:text-red-400 text-lg">×</button>
                 </div>
-                {/* Note cantiere */}
                 <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100">
                   <input className="w-full text-xs bg-transparent outline-none text-gray-600 placeholder-gray-400"
                     placeholder="Note cantiere (orari speciali, istruzioni...)"
@@ -327,7 +319,6 @@ export default function ProgrammiPage() {
                 </div>
 
                 <div className="p-3 space-y-2">
-                  {/* Lavorazioni */}
                   {c.lavorazioni.map(lav => (
                     <div key={lav.id} className="bg-gray-50 rounded-lg p-2">
                       <div className="flex items-center gap-2 mb-2">
@@ -338,7 +329,6 @@ export default function ProgrammiPage() {
                         )}
                       </div>
 
-                      {/* Persone assegnate */}
                       <div className="flex flex-wrap gap-1 mb-2 min-h-6">
                         {lav.persone.map(p => (
                           <div key={p.id} className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${p.capocantiere ? 'bg-amber-50 border-amber-400 text-amber-800' : 'bg-white border-gray-300 text-gray-700'}`}>
@@ -357,7 +347,6 @@ export default function ProgrammiPage() {
                         )}
                       </div>
 
-                      {/* Select dipendenti */}
                       <select className="input text-xs py-1 w-full" value=""
                         onChange={e => {
                           if (!e.target.value) return
@@ -383,15 +372,18 @@ export default function ProgrammiPage() {
 
                   <button onClick={() => aggiungiLavorazione(c.id)} className="btn btn-sm text-xs w-full">+ Lavorazione</button>
 
-                  {/* Mezzi */}
+                  {/* Mezzi — UI mostra anche i posti, messaggio no */}
                   <div className="border-t border-gray-100 pt-2">
                     <div className="flex flex-wrap gap-1 mb-2">
-                      {c.mezzi.map(m => (
-                        <div key={m.id} className="flex items-center gap-1 text-xs bg-blue-50 border border-blue-200 text-blue-800 px-2 py-0.5 rounded-full">
-                          <span>🚐 {m.nome}</span>
-                          <button onClick={() => rimuoviMezzo(c.id, m.id)} className="text-blue-300 hover:text-red-500 ml-0.5">×</button>
-                        </div>
-                      ))}
+                      {c.mezzi.map(m => {
+                        const mezzoCompleto = mezziDB.find(x => x.id === m.id)
+                        return (
+                          <div key={m.id} className="flex items-center gap-1 text-xs bg-blue-50 border border-blue-200 text-blue-800 px-2 py-0.5 rounded-full">
+                            <span>🚐 {mezzoCompleto ? labelMezzoUI(mezzoCompleto) : m.nome}</span>
+                            <button onClick={() => rimuoviMezzo(c.id, m.id)} className="text-blue-300 hover:text-red-500 ml-0.5">×</button>
+                          </div>
+                        )
+                      })}
                     </div>
                     <select className="input text-xs py-1 w-full" value=""
                       onChange={e => {
@@ -402,7 +394,7 @@ export default function ProgrammiPage() {
                       }}>
                       <option value="">🚐 Aggiungi mezzo...</option>
                       {mezziDB.filter(m => !mezziUsati.has(m.id)).map(m => (
-                        <option key={m.id} value={m.id}>{nomeMezzo(m)}</option>
+                        <option key={m.id} value={m.id}>{labelMezzoUI(m)}</option>
                       ))}
                     </select>
                   </div>
@@ -413,7 +405,7 @@ export default function ProgrammiPage() {
             <button onClick={aggiungiCantiere} className="btn btn-primary w-full">+ Cantiere</button>
           </div>
 
-          {/* ── DESTRA: ANTEPRIMA WHATSAPP ── */}
+          {/* ── DESTRA: ANTEPRIMA WHATSAPP (senza posti) ── */}
           <div className="w-72 flex-shrink-0 border-l border-gray-200 flex flex-col overflow-hidden">
             <div className="flex items-center justify-between px-3 py-2 bg-[#128C7E] flex-shrink-0">
               <span className="text-white text-xs font-semibold">📱 Anteprima WhatsApp</span>
