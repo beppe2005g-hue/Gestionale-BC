@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 
 const formatData = (d: string | null) => d ? new Date(d).toLocaleDateString('it-IT') : '—'
-const PREAVVISO_SCADENZA = 30 // giorni
+const PREAVVISO_SCADENZA = 30
 
 function giorniAllaScadenza(data: string | null): number | null {
   if (!data) return null
@@ -51,7 +51,7 @@ export default function MezziPage() {
   const [loading, setLoading] = useState(false)
 
   const [form, setForm] = useState({
-    nome: '', targa: '', targa_ufficiale: '', marca: '', modello: '', anno: '',
+    nome: '', targa: '', posti: '', marca: '', modello: '', anno: '',
     scadenza_assicurazione: '', scadenza_bollo: '', scadenza_revisione: '',
     km_attuali: '', note: ''
   })
@@ -85,7 +85,8 @@ export default function MezziPage() {
     if (!form.nome) { alert('Inserisci il nome del mezzo'); return }
     setLoading(true)
     await supabase.from('mezzi').insert({
-      nome: form.nome, targa: form.targa || null, targa_ufficiale: form.targa_ufficiale || null,
+      nome: form.nome, targa: form.targa || null,
+      posti: form.posti ? parseInt(form.posti) : null,
       marca: form.marca || null, modello: form.modello || null,
       anno: form.anno ? parseInt(form.anno) : null,
       scadenza_assicurazione: form.scadenza_assicurazione || null,
@@ -95,7 +96,7 @@ export default function MezziPage() {
       note: form.note || null, attivo: true
     })
     setModal(false)
-    setForm({ nome:'',targa:'',targa_ufficiale:'',marca:'',modello:'',anno:'',scadenza_assicurazione:'',scadenza_bollo:'',scadenza_revisione:'',km_attuali:'',note:'' })
+    setForm({ nome:'',targa:'',posti:'',marca:'',modello:'',anno:'',scadenza_assicurazione:'',scadenza_bollo:'',scadenza_revisione:'',km_attuali:'',note:'' })
     setLoading(false); load()
   }
 
@@ -104,7 +105,7 @@ export default function MezziPage() {
     setLoading(true)
     await supabase.from('mezzi').update({
       nome: modalModifica.nome, targa: modalModifica.targa || null,
-      targa_ufficiale: modalModifica.targa_ufficiale || null,
+      posti: modalModifica.posti ? parseInt(modalModifica.posti) : null,
       marca: modalModifica.marca || null, modello: modalModifica.modello || null,
       anno: modalModifica.anno ? parseInt(modalModifica.anno) : null,
       scadenza_assicurazione: modalModifica.scadenza_assicurazione || null,
@@ -167,7 +168,6 @@ export default function MezziPage() {
     if (selezionato?.id === id) setSelezionato({ ...selezionato, attivo: !attivo })
   }
 
-  // Alert scadenze
   const alertMezzi = mezzi.filter(m => {
     const s1 = statoScadenza(m.scadenza_assicurazione)
     const s2 = statoScadenza(m.scadenza_bollo)
@@ -191,7 +191,6 @@ export default function MezziPage() {
           <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuovo mezzo</button>
         </div>
 
-        {/* Alert scadenze */}
         {alertMezzi.length > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4">
             <p className="text-sm font-medium text-amber-800 mb-2">⚠️ Scadenze in arrivo ({alertMezzi.length} mezzi)</p>
@@ -207,7 +206,6 @@ export default function MezziPage() {
         )}
 
         <div className="flex gap-3">
-          {/* Lista laterale */}
           <div className="w-56 flex-shrink-0 space-y-1">
             {mezzi.filter(m => m.attivo !== false).map(m => (
               <div key={m.id} onClick={() => apriMezzo(m)}
@@ -216,7 +214,10 @@ export default function MezziPage() {
                   <p className="text-sm font-semibold text-blue-800">🚐 {m.nome}</p>
                   {hasAlert(m) && <span className="text-xs">⚠️</span>}
                 </div>
-                {m.targa && <p className="text-xs text-gray-500 font-mono">{m.targa}</p>}
+                <div className="flex items-center gap-2">
+                  {m.targa && <p className="text-xs text-gray-500 font-mono">{m.targa}</p>}
+                  {m.posti && <p className="text-xs text-blue-500">👥 {m.posti}p</p>}
+                </div>
                 {m.marca && <p className="text-xs text-gray-400">{m.marca} {m.modello}</p>}
               </div>
             ))}
@@ -234,15 +235,16 @@ export default function MezziPage() {
             {mezzi.length === 0 && <p className="text-sm text-gray-400 text-center py-8">Nessun mezzo.</p>}
           </div>
 
-          {/* Dettaglio */}
           {selezionato ? (
             <div className="flex-1 space-y-4">
-              {/* Header mezzo */}
               <div className="card bg-gray-900 text-white">
                 <div className="flex items-start justify-between">
                   <div>
                     <h2 className="text-xl font-bold">🚐 {selezionato.nome}</h2>
-                    {selezionato.targa && <p className="font-mono text-gray-300 text-sm mt-0.5">{selezionato.targa_ufficiale || selezionato.targa}</p>}
+                    <div className="flex items-center gap-3 mt-0.5">
+                      {selezionato.targa && <p className="font-mono text-gray-300 text-sm">{selezionato.targa}</p>}
+                      {selezionato.posti && <p className="text-blue-300 text-sm">👥 {selezionato.posti} posti</p>}
+                    </div>
                     {selezionato.marca && <p className="text-gray-400 text-sm">{selezionato.marca} {selezionato.modello} {selezionato.anno && `(${selezionato.anno})`}</p>}
                     {selezionato.km_attuali > 0 && <p className="text-gray-400 text-xs mt-1">📍 {selezionato.km_attuali.toLocaleString('it-IT')} km</p>}
                   </div>
@@ -256,14 +258,12 @@ export default function MezziPage() {
                 </div>
               </div>
 
-              {/* Sub-tab */}
               <div className="flex gap-2">
                 <button onClick={() => setSubTab('scheda')} className={`btn btn-sm ${subTab === 'scheda' ? 'btn-primary' : ''}`}>📋 Scheda</button>
                 <button onClick={() => setSubTab('interventi')} className={`btn btn-sm ${subTab === 'interventi' ? 'btn-primary' : ''}`}>🔧 Interventi ({interventi.length})</button>
                 <button onClick={() => setSubTab('attrezzatura')} className={`btn btn-sm ${subTab === 'attrezzatura' ? 'btn-primary' : ''}`}>🧰 Attrezzatura ({attrezzatura.length})</button>
               </div>
 
-              {/* SCHEDA */}
               {subTab === 'scheda' && (
                 <div className="space-y-4">
                   <div className="card">
@@ -278,8 +278,8 @@ export default function MezziPage() {
                     <h3 className="font-medium text-sm mb-3">📋 Dati mezzo</h3>
                     <div className="grid grid-cols-3 gap-3 text-sm">
                       <div><p className="text-xs text-gray-400">Nome/Identificativo</p><p className="font-medium">{selezionato.nome}</p></div>
-                      <div><p className="text-xs text-gray-400">Targa programma</p><p className="font-medium font-mono">{selezionato.targa || '—'}</p></div>
-                      <div><p className="text-xs text-gray-400">Targa ufficiale</p><p className="font-medium font-mono">{selezionato.targa_ufficiale || '—'}</p></div>
+                      <div><p className="text-xs text-gray-400">Targa</p><p className="font-medium font-mono">{selezionato.targa || '—'}</p></div>
+                      <div><p className="text-xs text-gray-400">Posti</p><p className="font-medium">{selezionato.posti ? `${selezionato.posti} posti` : '—'}</p></div>
                       <div><p className="text-xs text-gray-400">Marca</p><p className="font-medium">{selezionato.marca || '—'}</p></div>
                       <div><p className="text-xs text-gray-400">Modello</p><p className="font-medium">{selezionato.modello || '—'}</p></div>
                       <div><p className="text-xs text-gray-400">Anno</p><p className="font-medium">{selezionato.anno || '—'}</p></div>
@@ -290,7 +290,6 @@ export default function MezziPage() {
                 </div>
               )}
 
-              {/* INTERVENTI */}
               {subTab === 'interventi' && (
                 <div className="card">
                   <div className="flex items-center justify-between mb-3">
@@ -322,7 +321,6 @@ export default function MezziPage() {
                 </div>
               )}
 
-              {/* ATTREZZATURA */}
               {subTab === 'attrezzatura' && (
                 <div className="card">
                   <div className="flex items-center justify-between mb-3">
@@ -358,7 +356,6 @@ export default function MezziPage() {
         </div>
       </main>
 
-      {/* Modal nuovo mezzo */}
       {modal && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -368,8 +365,8 @@ export default function MezziPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2"><label className="label">Nome/Identificativo *</label><input className="input" placeholder="es. Iveco EH" value={form.nome} onChange={e => setForm({...form, nome: e.target.value})} /></div>
-              <div><label className="label">Targa programma</label><input className="input" placeholder="es. 3P." value={form.targa} onChange={e => setForm({...form, targa: e.target.value})} /></div>
-              <div><label className="label">Targa ufficiale</label><input className="input" placeholder="es. AB123CD" value={form.targa_ufficiale} onChange={e => setForm({...form, targa_ufficiale: e.target.value})} /></div>
+              <div><label className="label">Targa</label><input className="input" placeholder="es. AB123CD" value={form.targa} onChange={e => setForm({...form, targa: e.target.value})} /></div>
+              <div><label className="label">Posti</label><input className="input" type="number" min="1" placeholder="es. 3" value={form.posti} onChange={e => setForm({...form, posti: e.target.value})} /></div>
               <div><label className="label">Marca</label><input className="input" placeholder="es. Iveco" value={form.marca} onChange={e => setForm({...form, marca: e.target.value})} /></div>
               <div><label className="label">Modello</label><input className="input" placeholder="es. Daily 35C" value={form.modello} onChange={e => setForm({...form, modello: e.target.value})} /></div>
               <div><label className="label">Anno</label><input className="input" type="number" placeholder="es. 2020" value={form.anno} onChange={e => setForm({...form, anno: e.target.value})} /></div>
@@ -391,7 +388,6 @@ export default function MezziPage() {
         </div>
       )}
 
-      {/* Modal modifica */}
       {modalModifica && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -401,8 +397,8 @@ export default function MezziPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="col-span-2"><label className="label">Nome/Identificativo *</label><input className="input" value={modalModifica.nome||''} onChange={e => setModalModifica({...modalModifica, nome: e.target.value})} /></div>
-              <div><label className="label">Targa programma</label><input className="input" value={modalModifica.targa||''} onChange={e => setModalModifica({...modalModifica, targa: e.target.value})} /></div>
-              <div><label className="label">Targa ufficiale</label><input className="input" value={modalModifica.targa_ufficiale||''} onChange={e => setModalModifica({...modalModifica, targa_ufficiale: e.target.value})} /></div>
+              <div><label className="label">Targa</label><input className="input" value={modalModifica.targa||''} onChange={e => setModalModifica({...modalModifica, targa: e.target.value})} /></div>
+              <div><label className="label">Posti</label><input className="input" type="number" min="1" value={modalModifica.posti||''} onChange={e => setModalModifica({...modalModifica, posti: e.target.value})} /></div>
               <div><label className="label">Marca</label><input className="input" value={modalModifica.marca||''} onChange={e => setModalModifica({...modalModifica, marca: e.target.value})} /></div>
               <div><label className="label">Modello</label><input className="input" value={modalModifica.modello||''} onChange={e => setModalModifica({...modalModifica, modello: e.target.value})} /></div>
               <div><label className="label">Anno</label><input className="input" type="number" value={modalModifica.anno||''} onChange={e => setModalModifica({...modalModifica, anno: e.target.value})} /></div>
@@ -424,7 +420,6 @@ export default function MezziPage() {
         </div>
       )}
 
-      {/* Modal intervento */}
       {modalIntervento && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-md">
@@ -455,7 +450,6 @@ export default function MezziPage() {
         </div>
       )}
 
-      {/* Modal attrezzatura */}
       {modalAttrezzatura && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-md">
@@ -478,5 +472,3 @@ export default function MezziPage() {
     </div>
   )
 }
-
-
