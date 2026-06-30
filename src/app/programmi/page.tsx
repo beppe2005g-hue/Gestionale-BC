@@ -103,6 +103,11 @@ export default function ProgrammiPage() {
 
   function aggiungiPersona(cid: string, lid: string, dip: any) {
     if (dipUsati.has(dip.id)) return
+    const altraSoc = dovePiazzatoAltraSocieta(dip.id)
+    if (altraSoc) {
+      const ok = confirm(`⚠️ ${nomeBreve(dip)} è già assegnato oggi a "${altraSoc.cantiere}" (${altraSoc.societa}).\n\nVuoi comunque metterlo anche qui?`)
+      if (!ok) return
+    }
     const persona: Persona = { id: dip.id, nomeBreve: nomeBreve(dip), nomeFull: `${dip.cognome} ${dip.nome}`.trim(), capocantiere: false }
     update(cantieri.map(c => c.id === cid
       ? { ...c, lavorazioni: c.lavorazioni.map(l => {
@@ -182,6 +187,21 @@ export default function ProgrammiPage() {
     return ''
   }
 
+  // Controlla se la persona è già piazzata nell'ALTRA società (oggi), per avvisare
+  // l'utente prima che la metta due volte senza accorgersene
+  function dovePiazzatoAltraSocieta(dipId: string): { societa: Societa, cantiere: string } | null {
+    const altraSocieta: Societa = societaAttiva === 'BC General Service' ? 'Filosofia' : 'BC General Service'
+    const altroProgramma = programmi[altraSocieta]
+    for (const c of altroProgramma) {
+      for (const l of c.lavorazioni) {
+        if (l.persone.find(p => p.id === dipId)) {
+          return { societa: altraSocieta, cantiere: c.nome || 'Cantiere senza nome' }
+        }
+      }
+    }
+    return null
+  }
+
   function dovePiazzatoMezzo(mezzoId: string): string {
     for (const c of cantieri) {
       if (c.mezzi.find(m => m.id === mezzoId)) return c.nome || 'Cantiere senza nome'
@@ -240,10 +260,11 @@ export default function ProgrammiPage() {
                       {dipPerAzienda[az].map((d: any) => {
                         const usato = dipUsati.has(d.id)
                         const dove = vistaPool === 'tutti' && usato ? dovePiazzato(d.id) : ''
+                        const altraSoc = dovePiazzatoAltraSocieta(d.id)
                         return (
                           <div key={d.id}
-                            className={`px-3 py-2 border-b border-gray-100 transition-colors ${usato ? 'opacity-40' : 'cursor-grab hover:bg-blue-50'}`}
-                            title={usato ? `Piazzato: ${dove}` : ''}>
+                            className={`px-3 py-2 border-b border-gray-100 transition-colors ${usato ? 'opacity-40' : 'cursor-grab hover:bg-blue-50'} ${altraSoc ? 'bg-yellow-50' : ''}`}
+                            title={usato ? `Piazzato: ${dove}` : altraSoc ? `⚠️ Già in ${altraSoc.societa}: ${altraSoc.cantiere}` : ''}>
                             <div className="flex items-center gap-2">
                               {d.foto_url ? (
                                 <img src={d.foto_url} className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
@@ -256,8 +277,12 @@ export default function ProgrammiPage() {
                                 <p className="text-xs font-semibold text-gray-800 truncate">{d.nome_programma || d.nome}</p>
                                 {d.nome_programma && <p className="text-xs text-gray-400 truncate">{d.cognome} {d.nome}</p>}
                                 {dove && <p className="text-xs text-blue-600 truncate">📍 {dove}</p>}
+                                {!usato && altraSoc && (
+                                  <p className="text-xs text-amber-700 font-medium truncate">⚠️ Già in {altraSoc.societa === 'Filosofia' ? 'Filosofia' : 'BC'}: {altraSoc.cantiere}</p>
+                                )}
                               </div>
-                              {!usato && <span className="ml-auto text-gray-300 text-xs flex-shrink-0">⠿</span>}
+                              {!usato && !altraSoc && <span className="ml-auto text-gray-300 text-xs flex-shrink-0">⠿</span>}
+                              {!usato && altraSoc && <span className="ml-auto text-amber-500 text-xs flex-shrink-0">⚠️</span>}
                             </div>
                           </div>
                         )
@@ -350,9 +375,14 @@ export default function ProgrammiPage() {
                         <option value="">+ Aggiungi persona...</option>
                         {aziendeOrdinate.map(az => (
                           <optgroup key={az} label={az}>
-                            {dipendenti.filter(d => d.azienda === az && !dipUsati.has(d.id)).map(d => (
-                              <option key={d.id} value={d.id}>{nomeBreve(d)}{d.nome_programma ? ` (${d.cognome} ${d.nome})` : ''}</option>
-                            ))}
+                            {dipendenti.filter(d => d.azienda === az && !dipUsati.has(d.id)).map(d => {
+                              const altraSoc = dovePiazzatoAltraSocieta(d.id)
+                              return (
+                                <option key={d.id} value={d.id}>
+                                  {nomeBreve(d)}{d.nome_programma ? ` (${d.cognome} ${d.nome})` : ''}{altraSoc ? ` ⚠️ già in ${altraSoc.societa}` : ''}
+                                </option>
+                              )
+                            })}
                           </optgroup>
                         ))}
                       </select>
