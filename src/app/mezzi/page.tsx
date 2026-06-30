@@ -43,7 +43,9 @@ export default function MezziPage() {
   const [selezionato, setSelezionato] = useState<any>(null)
   const [interventi, setInterventi] = useState<any[]>([])
   const [attrezzatura, setAttrezzatura] = useState<any[]>([])
-  const [subTab, setSubTab] = useState<'scheda' | 'interventi' | 'attrezzatura'>('scheda')
+  const [utilizzo, setUtilizzo] = useState<any[]>([])
+  const [meseUtilizzo, setMeseUtilizzo] = useState(new Date().toISOString().slice(0, 7))
+  const [subTab, setSubTab] = useState<'scheda' | 'interventi' | 'attrezzatura' | 'utilizzo'>('scheda')
   const [modal, setModal] = useState(false)
   const [modalModifica, setModalModifica] = useState<any>(null)
   const [modalIntervento, setModalIntervento] = useState(false)
@@ -65,9 +67,28 @@ export default function MezziPage() {
 
   useEffect(() => { load() }, [])
 
+  // Ricarica utilizzo quando cambia il mese selezionato
+  useEffect(() => {
+    if (selezionato) loadUtilizzo(selezionato.id, meseUtilizzo)
+  }, [meseUtilizzo])
+
   async function load() {
     const { data } = await supabase.from('mezzi').select('*').order('nome')
     setMezzi(data || [])
+  }
+
+  async function loadUtilizzo(mezzoId: string, mese: string) {
+    const inizio = `${mese}-01`
+    const anno = parseInt(mese.split('-')[0])
+    const mesiNum = parseInt(mese.split('-')[1])
+    const fine = new Date(anno, mesiNum, 0).toISOString().split('T')[0] // ultimo giorno del mese
+    const { data } = await supabase.from('mezzi_utilizzo_giornaliero')
+      .select('*')
+      .eq('mezzo_id', mezzoId)
+      .gte('data', inizio)
+      .lte('data', fine)
+      .order('data')
+    setUtilizzo(data || [])
   }
 
   async function apriMezzo(m: any) {
@@ -79,6 +100,7 @@ export default function MezziPage() {
     ])
     setInterventi(inv || [])
     setAttrezzatura(att || [])
+    await loadUtilizzo(m.id, meseUtilizzo)
   }
 
   async function salvaMezzo() {
@@ -184,6 +206,9 @@ export default function MezziPage() {
 
   const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2 })
 
+  // Calcola totale giorni usati nel mese selezionato
+  const totaleGiorniUsati = utilizzo.length
+
   return (
     <div className="flex min-h-screen">
       <Sidebar />
@@ -266,10 +291,11 @@ export default function MezziPage() {
                 </div>
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <button onClick={() => setSubTab('scheda')} className={`btn btn-sm ${subTab === 'scheda' ? 'btn-primary' : ''}`}>📋 Scheda</button>
                 <button onClick={() => setSubTab('interventi')} className={`btn btn-sm ${subTab === 'interventi' ? 'btn-primary' : ''}`}>🔧 Interventi ({interventi.length})</button>
                 <button onClick={() => setSubTab('attrezzatura')} className={`btn btn-sm ${subTab === 'attrezzatura' ? 'btn-primary' : ''}`}>🧰 Attrezzatura ({attrezzatura.length})</button>
+                <button onClick={() => setSubTab('utilizzo')} className={`btn btn-sm ${subTab === 'utilizzo' ? 'btn-primary' : ''}`}>📅 Utilizzo ({totaleGiorniUsati})</button>
               </div>
 
               {subTab === 'scheda' && (
@@ -355,6 +381,62 @@ export default function MezziPage() {
                   )}
                 </div>
               )}
+
+              {subTab === 'utilizzo' && (
+                <div className="card">
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <div>
+                      <h3 className="font-medium text-sm">📅 Storico utilizzo</h3>
+                      <p className="text-xs text-gray-400 mt-0.5">Chi ha guidato questo mezzo e dove è andato, giorno per giorno.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {totaleGiorniUsati > 0 && (
+                        <span className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-lg font-medium">
+                          {totaleGiorniUsati} giorni usato
+                        </span>
+                      )}
+                      <input type="month" className="input text-sm w-auto" value={meseUtilizzo}
+                        onChange={e => setMeseUtilizzo(e.target.value)} />
+                    </div>
+                  </div>
+                  {utilizzo.length === 0 ? (
+                    <div className="text-center py-8 text-gray-400">
+                      <p className="text-2xl mb-2">🚐</p>
+                      <p className="text-sm">Nessun utilizzo registrato per {new Date(meseUtilizzo + '-01').toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })}.</p>
+                      <p className="text-xs mt-1">I dati vengono aggiunti automaticamente quando si approva un programma giornaliero.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="table-base w-full">
+                        <thead>
+                          <tr>
+                            <th className="text-left">Giorno</th>
+                            <th className="text-left">Chi l'ha usato</th>
+                            <th className="text-left">Dov'è andato</th>
+                            <th className="text-left">Società</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {utilizzo.map(u => (
+                            <tr key={u.id}>
+                              <td className="text-sm font-medium whitespace-nowrap">
+                                {new Date(u.data).toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: '2-digit' })}
+                              </td>
+                              <td className="text-sm font-medium">{u.conducente_nome}</td>
+                              <td className="text-sm text-gray-600">{u.cantiere_nome || '—'}</td>
+                              <td>
+                                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${u.societa === 'Filosofia' ? 'bg-orange-100 text-orange-700' : 'bg-blue-100 text-blue-700'}`}>
+                                  {u.societa === 'Filosofia' ? '🏢 Filosofia' : '🏗 BC General'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex-1 flex items-center justify-center text-gray-400">
@@ -390,9 +472,7 @@ export default function MezziPage() {
               <div><label className="label">Modello</label><input className="input" placeholder="es. Daily 35C" value={form.modello} onChange={e => setForm({...form, modello: e.target.value})} /></div>
               <div><label className="label">Anno</label><input className="input" type="number" placeholder="es. 2020" value={form.anno} onChange={e => setForm({...form, anno: e.target.value})} /></div>
               <div><label className="label">KM attuali</label><input className="input" type="number" value={form.km_attuali} onChange={e => setForm({...form, km_attuali: e.target.value})} /></div>
-              <div className="col-span-2 border-t border-gray-100 pt-3 mt-1">
-                <p className="text-xs font-medium text-gray-500 mb-2">Scadenze</p>
-              </div>
+              <div className="col-span-2 border-t border-gray-100 pt-3 mt-1"><p className="text-xs font-medium text-gray-500 mb-2">Scadenze</p></div>
               <div><label className="label">Assicurazione</label><input className="input" type="date" value={form.scadenza_assicurazione} onChange={e => setForm({...form, scadenza_assicurazione: e.target.value})} /></div>
               <div><label className="label">Bollo</label><input className="input" type="date" value={form.scadenza_bollo} onChange={e => setForm({...form, scadenza_bollo: e.target.value})} /></div>
               <div><label className="label">Revisione</label><input className="input" type="date" value={form.scadenza_revisione} onChange={e => setForm({...form, scadenza_revisione: e.target.value})} /></div>
@@ -433,9 +513,7 @@ export default function MezziPage() {
               <div><label className="label">Modello</label><input className="input" value={modalModifica.modello||''} onChange={e => setModalModifica({...modalModifica, modello: e.target.value})} /></div>
               <div><label className="label">Anno</label><input className="input" type="number" value={modalModifica.anno||''} onChange={e => setModalModifica({...modalModifica, anno: e.target.value})} /></div>
               <div><label className="label">KM attuali</label><input className="input" type="number" value={modalModifica.km_attuali||''} onChange={e => setModalModifica({...modalModifica, km_attuali: e.target.value})} /></div>
-              <div className="col-span-2 border-t border-gray-100 pt-3 mt-1">
-                <p className="text-xs font-medium text-gray-500 mb-2">Scadenze</p>
-              </div>
+              <div className="col-span-2 border-t border-gray-100 pt-3 mt-1"><p className="text-xs font-medium text-gray-500 mb-2">Scadenze</p></div>
               <div><label className="label">Assicurazione</label><input className="input" type="date" value={modalModifica.scadenza_assicurazione||''} onChange={e => setModalModifica({...modalModifica, scadenza_assicurazione: e.target.value})} /></div>
               <div><label className="label">Bollo</label><input className="input" type="date" value={modalModifica.scadenza_bollo||''} onChange={e => setModalModifica({...modalModifica, scadenza_bollo: e.target.value})} /></div>
               <div><label className="label">Revisione</label><input className="input" type="date" value={modalModifica.scadenza_revisione||''} onChange={e => setModalModifica({...modalModifica, scadenza_revisione: e.target.value})} /></div>
