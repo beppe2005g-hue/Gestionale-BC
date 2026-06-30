@@ -39,13 +39,14 @@ type OrdinamentoPagare = 'scadenza' | 'fornitore'
 export default function Scadenzario() {
   const [tab, setTab] = useState<'da_pagare' | 'da_incassare' | 'ritenute'>('da_pagare')
 
-  // ── Da Pagare ──
   const [pagamenti, setPagamenti] = useState<RigaPagamento[]>([])
   const [ordinamentoPagare, setOrdinamentoPagare] = useState<OrdinamentoPagare>('scadenza')
   const [soloScadutePagare, setSoloScadutePagare] = useState(false)
   const [cercaFornitore, setCercaFornitore] = useState('')
+  const [modalStampa, setModalStampa] = useState(false)
+  const [fornitoriSelezionati, setFornitoriSelezionati] = useState<Set<string>>(new Set())
+  const [soloScadutoStampa, setSoloScadutoStampa] = useState(false)
 
-  // ── Da Incassare ──
   const [fattureClienti, setFattureClienti] = useState<any[]>([])
   const [filtroCliente, setFiltroCliente] = useState('')
   const [soloScaduteIncassare, setSoloScaduteIncassare] = useState(false)
@@ -56,7 +57,6 @@ export default function Scadenzario() {
   const [ncFornitori, setNcFornitori] = useState<any[]>([])
   const [ncClienti, setNcClienti] = useState<any[]>([])
 
-  // ── Ritenute ──
   const [subTab, setSubTab] = useState<'garanzia' | 'acconto'>('garanzia')
   const [ritenutaGaranzia, setRitenutaGaranzia] = useState<any[]>([])
   const [ritenutaAcconto, setRitenutaAcconto] = useState<any[]>([])
@@ -185,14 +185,60 @@ export default function Scadenzario() {
     loadRitenute()
   }
 
-  // KPI ritenute
   const totGaranziaInSospeso = ritenutaGaranzia.filter(r => r.stato === 'In sospeso').reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
   const totGaranziaVincolata = ritenutaGaranzia.filter(r => r.stato !== 'Svincolata').reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
   const annoCorrente = new Date().getFullYear()
   const totAccontoAnno = ritenutaAcconto.filter(r => r.anno_fiscale === annoCorrente).reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
   const totAccontoTotale = ritenutaAcconto.reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
 
-  // ── Da Pagare ──
+  const fornitoriUnici = useMemo(() => {
+    return Array.from(new Set(pagamenti.map(p => p.fornitore_nome))).sort((a, b) => a.localeCompare(b))
+  }, [pagamenti])
+
+  function apriModalStampa() {
+    setFornitoriSelezionati(new Set(fornitoriUnici))
+    setSoloScadutoStampa(false)
+    setModalStampa(true)
+  }
+
+  function toggleFornitoreStampa(nome: string) {
+    setFornitoriSelezionati(prev => {
+      const next = new Set(prev)
+      if (next.has(nome)) next.delete(nome)
+      else next.add(nome)
+      return next
+    })
+  }
+
+  const reportStampaPerFornitore = useMemo(() => {
+    let righe = pagamenti.filter(p => fornitoriSelezionati.has(p.fornitore_nome))
+    if (soloScadutoStampa) righe = righe.filter(r => r.gg !== null && r.gg < 0)
+    const gruppi: Record<string, RigaPagamento[]> = {}
+    righe.forEach(r => {
+      if (!gruppi[r.fornitore_nome]) gruppi[r.fornitore_nome] = []
+      gruppi[r.fornitore_nome].push(r)
+    })
+    return Object.entries(gruppi)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([fornitore, rate]) => ({
+        fornitore,
+        rate: [...rate].sort((a, b) => {
+          const ga = a.gg ?? 999999, gb = b.gg ?? 999999
+          return ga - gb
+        }),
+        totale: rate.reduce((s, r) => s + r.importo, 0),
+        scaduto: rate.filter(r => r.gg !== null && r.gg < 0).reduce((s, r) => s + r.importo, 0),
+      }))
+  }, [pagamenti, fornitoriSelezionati, soloScadutoStampa])
+
+  const totaleReportStampa = reportStampaPerFornitore.reduce((s, g) => s + g.totale, 0)
+  const scadutoReportStampa = reportStampaPerFornitore.reduce((s, g) => s + g.scaduto, 0)
+
+  function confermaStampa() {
+    setModalStampa(false)
+    setTimeout(() => window.print(), 100)
+  }
+
   const pagamentiFiltrati = useMemo(() => {
     let r = pagamenti
     if (cercaFornitore) r = r.filter(x => x.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase()))
@@ -229,7 +275,6 @@ export default function Scadenzario() {
     return <span className="badge badge-blue">Tra {gg} gg</span>
   }
 
-  // ── Da Incassare ──
   const rateIncassareGrezze = useMemo(() => {
     const righe: RigaIncasso[] = []
     fattureClienti.forEach(f => {
@@ -287,6 +332,9 @@ export default function Scadenzario() {
           {tab === 'da_incassare' && (
             <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Stampa / PDF</button>
           )}
+          {tab === 'da_pagare' && (
+            <button className="btn btn-primary" onClick={apriModalStampa}>🖨️ Stampa scadenze</button>
+          )}
         </div>
 
         <div className="flex gap-2 mb-4 print:hidden">
@@ -295,10 +343,9 @@ export default function Scadenzario() {
           <button onClick={() => setTab('ritenute')} className={`btn ${tab === 'ritenute' ? 'btn-primary' : ''}`}>🔒 Ritenute</button>
         </div>
 
-        {/* ════════ TAB DA PAGARE ════════ */}
         {tab === 'da_pagare' && (
           <>
-            <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="grid grid-cols-3 gap-3 mb-4 print:hidden">
               <div className="bg-red-50 rounded-xl p-3 border border-red-100">
                 <p className="text-xs text-red-600 mb-1">⚠️ Scaduto</p>
                 <p className="text-lg font-bold text-red-800">{euro(scadutoPagare)}</p>
@@ -313,7 +360,7 @@ export default function Scadenzario() {
                 {totaleNcFornitori > 0 && <p className="text-xs text-purple-600 mt-0.5">NC: - {euro(totaleNcFornitori)}</p>}
               </div>
             </div>
-            <div className="card mb-4">
+            <div className="card mb-4 print:hidden">
               <div className="flex gap-3 items-end flex-wrap">
                 <div className="flex-1 min-w-48">
                   <label className="label">Cerca fornitore</label>
@@ -333,7 +380,7 @@ export default function Scadenzario() {
                 {(cercaFornitore || soloScadutePagare) && <button className="btn btn-sm pb-2" onClick={() => { setCercaFornitore(''); setSoloScadutePagare(false) }}>× Reset</button>}
               </div>
             </div>
-            <div className="card overflow-x-auto">
+            <div className="card overflow-x-auto print:hidden">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-sm text-gray-500">{pagamentiFiltrati.length} rate da pagare</span>
               </div>
@@ -359,10 +406,85 @@ export default function Scadenzario() {
                 </table>
               )}
             </div>
+
+            <div id="report-pagare" className="hidden print:block">
+              <div className="report-header flex items-start justify-between mb-6 pb-4" style={{ borderBottom: '3px solid #1e3a8a' }}>
+                <div className="flex items-center gap-4">
+                  <img src="/logo.png" alt="BC General Service" style={{ height: 55, objectFit: 'contain' }} />
+                  <div>
+                    <p style={{ fontSize: 15, fontWeight: 800, color: '#1e3a8a', letterSpacing: 1 }}>BC GENERAL SERVICE</p>
+                    <p style={{ fontSize: 10, color: '#6b7280' }}>Società Consortile a Responsabilità Limitata</p>
+                    <p style={{ fontSize: 10, color: '#6b7280' }}>Via Duca d'Este 7 — 41036 Medolla (MO)</p>
+                    <p style={{ fontSize: 10, color: '#6b7280' }}>P.IVA 03943310361</p>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <p style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>SCADENZE FORNITORI</p>
+                  <p style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>Data: <strong>{new Date().toLocaleDateString('it-IT')}</strong></p>
+                  {soloScadutoStampa && <p style={{ fontSize: 11, color: '#dc2626', fontWeight: 600 }}>Solo rate scadute</p>}
+                </div>
+              </div>
+
+              {reportStampaPerFornitore.length === 0 ? (
+                <p style={{ textAlign: 'center', color: '#9ca3af', padding: 40 }}>Nessuna scadenza da mostrare con i filtri selezionati.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                  {reportStampaPerFornitore.map(g => (
+                    <div key={g.fornitore} style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', pageBreakInside: 'avoid' }}>
+                      <div style={{ background: '#1e3a8a', color: 'white', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <p style={{ fontWeight: 700, fontSize: 14 }}>{g.fornitore}</p>
+                        <div style={{ textAlign: 'right' }}>
+                          <p style={{ fontSize: 16, fontWeight: 800, color: '#fbbf24' }}>€ {euroShort(g.totale)}</p>
+                          {g.scaduto > 0 && <p style={{ fontSize: 11, color: '#fca5a5' }}>🔴 Scaduto: € {euroShort(g.scaduto)}</p>}
+                        </div>
+                      </div>
+                      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+                        <thead>
+                          <tr style={{ background: '#f8faff' }}>
+                            {['N° Fattura','Data fattura','Cantiere','Rata','Scadenza','Gg','Importo'].map(h => (
+                              <th key={h} style={{ padding: '5px 16px', textAlign: h === 'Rata' || h === 'Gg' ? 'center' : h === 'Scadenza' || h === 'Importo' ? 'right' : 'left', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {g.rate.map((r, idx) => {
+                            const scaduta = r.gg !== null && r.gg < 0
+                            return (
+                              <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#fafafa' }}>
+                                <td style={{ padding: '5px 16px', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: '#1e40af' }}>{r.numero}</td>
+                                <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9' }}>{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                                <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9', color: '#6b7280' }}>{r.cantiere || '—'}</td>
+                                <td style={{ padding: '5px 16px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' }}>{r.rata}</td>
+                                <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: scaduta ? '#dc2626' : '#374151', fontWeight: scaduta ? 600 : 400 }}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
+                                <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: scaduta ? '#dc2626' : '#6b7280' }}>{r.gg !== null ? (r.gg < 0 ? `-${Math.abs(r.gg)}` : `+${r.gg}`) : '—'}</td>
+                                <td style={{ padding: '5px 16px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: scaduta ? '#dc2626' : '#1e3a8a' }}>€ {euroShort(r.importo)}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                      <div style={{ background: '#f8faff', padding: '8px 16px', display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #1e40af' }}>
+                        <span style={{ fontWeight: 600, fontSize: 12 }}>Totale {g.fornitore}</span>
+                        <span style={{ fontWeight: 800, fontSize: 14, color: '#1e3a8a' }}>€ {euroShort(g.totale)}</span>
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{ border: '3px solid #1e3a8a', borderRadius: 8, padding: '16px 20px', background: '#eff6ff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <p style={{ fontWeight: 700, fontSize: 15, color: '#1e3a8a' }}>TOTALE GENERALE</p>
+                      <p style={{ fontSize: 12, color: '#6b7280' }}>{reportStampaPerFornitore.length} fornitori</p>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <p style={{ fontSize: 24, fontWeight: 900, color: '#1e3a8a' }}>€ {euroShort(totaleReportStampa)}</p>
+                      {scadutoReportStampa > 0 && <p style={{ fontSize: 13, color: '#dc2626', fontWeight: 600 }}>🔴 Scaduto: € {euroShort(scadutoReportStampa)}</p>}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </>
         )}
 
-        {/* ════════ TAB DA INCASSARE ════════ */}
         {tab === 'da_incassare' && (
           <>
             <div className="card mb-4 print:hidden">
@@ -496,10 +618,8 @@ export default function Scadenzario() {
           </>
         )}
 
-        {/* ════════ TAB RITENUTE ════════ */}
         {tab === 'ritenute' && (
           <>
-            {/* KPI ritenute */}
             <div className="grid grid-cols-4 gap-3 mb-4">
               <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
                 <p className="text-xs text-amber-600 mb-1">🔒 Garanzia in sospeso</p>
@@ -523,13 +643,11 @@ export default function Scadenzario() {
               </div>
             </div>
 
-            {/* Sub-tab */}
             <div className="flex gap-2 mb-4">
               <button onClick={() => setSubTab('garanzia')} className={`btn ${subTab === 'garanzia' ? 'btn-primary' : ''}`}>🔒 Ritenute a Garanzia</button>
               <button onClick={() => setSubTab('acconto')} className={`btn ${subTab === 'acconto' ? 'btn-primary' : ''}`}>📋 Ritenute d'Acconto (Condomini)</button>
             </div>
 
-            {/* ── GARANZIA ── */}
             {subTab === 'garanzia' && (
               <>
                 <div className="flex items-center justify-between mb-3">
@@ -579,7 +697,6 @@ export default function Scadenzario() {
               </>
             )}
 
-            {/* ── ACCONTO ── */}
             {subTab === 'acconto' && (
               <>
                 <div className="flex items-center justify-between mb-3">
@@ -636,7 +753,50 @@ export default function Scadenzario() {
         )}
       </main>
 
-      {/* Modal registra garanzia */}
+      {modalStampa && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">🖨️ Stampa scadenze fornitori</h2>
+              <button onClick={() => setModalStampa(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer mb-3 bg-gray-50 rounded-lg p-3">
+              <input type="checkbox" checked={soloScadutoStampa} onChange={e => setSoloScadutoStampa(e.target.checked)} className="rounded" />
+              Stampa solo le rate scadute
+            </label>
+
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-700">Fornitori da includere ({fornitoriSelezionati.size}/{fornitoriUnici.length})</p>
+              <div className="flex gap-2">
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => setFornitoriSelezionati(new Set(fornitoriUnici))}>Tutti</button>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => setFornitoriSelezionati(new Set())}>Nessuno</button>
+              </div>
+            </div>
+
+            <div className="border border-gray-200 rounded-lg max-h-72 overflow-y-auto">
+              {fornitoriUnici.map(nome => (
+                <label key={nome} className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 last:border-b-0 cursor-pointer hover:bg-gray-50 text-sm">
+                  <input type="checkbox" checked={fornitoriSelezionati.has(nome)} onChange={() => toggleFornitoreStampa(nome)} className="rounded" />
+                  {nome}
+                </label>
+              ))}
+            </div>
+
+            <div className="bg-blue-50 rounded-lg p-3 mt-4 border border-blue-200">
+              <p className="text-xs text-blue-600">Anteprima totale</p>
+              <p className="text-lg font-bold text-blue-800">{euro(totaleReportStampa)}</p>
+              <p className="text-xs text-blue-500 mt-0.5">{reportStampaPerFornitore.length} fornitori nel report</p>
+            </div>
+
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalStampa(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={confermaStampa} disabled={fornitoriSelezionati.size === 0}>🖨️ Stampa</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {modalGaranzia && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-lg">
@@ -673,7 +833,6 @@ export default function Scadenzario() {
         </div>
       )}
 
-      {/* Modal registra acconto */}
       {modalAcconto && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-lg">
@@ -708,7 +867,6 @@ export default function Scadenzario() {
         </div>
       )}
 
-      {/* Modal svincolo */}
       {modalSvincolo && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-md">
@@ -737,11 +895,12 @@ export default function Scadenzario() {
         @media print {
           @page { size: A4; margin: 12mm; }
           body * { visibility: hidden; }
-          #report-incassare, #report-incassare * { visibility: visible; }
-          #report-incassare { position: static !important; width: 100% !important; height: auto !important; max-height: none !important; overflow: visible !important; padding: 0 !important; font-size: 11px; }
+          #report-incassare, #report-incassare *, #report-pagare, #report-pagare * { visibility: visible; }
+          #report-incassare, #report-pagare { position: static !important; width: 100% !important; height: auto !important; max-height: none !important; overflow: visible !important; padding: 0 !important; font-size: 11px; }
           main { overflow: visible !important; height: auto !important; max-height: none !important; width: 100% !important; flex: none !important; padding: 0 !important; margin: 0 !important; }
           .flex.min-h-screen { display: block !important; }
           .print\\:hidden { display: none !important; }
+          .hidden.print\\:block { display: block !important; }
         }
       `}</style>
     </div>
