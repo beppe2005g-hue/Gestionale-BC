@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import { logActivity } from '@/lib/logActivity'
 import * as XLSX from 'xlsx'
+import SearchableSelect from '@/components/SearchableSelect'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -542,10 +543,12 @@ export default function FattureFornitori() {
               <div><label className="label">Data fattura</label><input className="input" type="date" value={form.data} onChange={e => setForm({...form, data: e.target.value})} /></div>
               <div><label className="label">N° Fattura *</label><input className="input" placeholder="es. FF/2026/018" value={form.numero} onChange={e => setForm({...form, numero: e.target.value})} /></div>
               <div><label className="label">Fornitore *</label>
-                <select className="input" value={form.fornitore_id} onChange={e => setForm({...form, fornitore_id: e.target.value, fattura_collegata_id: ''})}>
-                  <option value="">-- seleziona --</option>
-                  {fornitori.map(f => <option key={f.id} value={f.id}>{f.ragione_sociale}</option>)}
-                </select></div>
+                <SearchableSelect
+                  value={form.fornitore_id}
+                  onChange={v => setForm({...form, fornitore_id: v, fattura_collegata_id: ''})}
+                  options={fornitori.map(f => ({ value: f.id, label: f.ragione_sociale, sublabel: f.cf_piva }))}
+                  placeholder="— seleziona fornitore —"
+                /></div>
               {form.tipo === 'Nota di credito' && (
                 <div className="col-span-2">
                   <label className="label">Fattura di riferimento (opzionale)</label>
@@ -558,10 +561,12 @@ export default function FattureFornitori() {
                 </div>
               )}
               <div><label className="label">Cantiere</label>
-                <select className="input" value={form.progetto_id} onChange={e => setForm({...form, progetto_id: e.target.value})}>
-                  <option value="">-- seleziona --</option>
-                  {progetti.map(p => <option key={p.id} value={p.id}>{p.codice} - {p.nome}</option>)}
-                </select></div>
+                <SearchableSelect
+                  value={form.progetto_id}
+                  onChange={v => setForm({...form, progetto_id: v})}
+                  options={progetti.map(p => ({ value: p.id, label: `${p.codice} — ${p.nome}` }))}
+                  placeholder="— nessun cantiere —"
+                /></div>
               <div><label className="label">Imponibile (€) *</label><input className="input" type="number" step="0.01" value={form.imponibile} onChange={e => setForm({...form, imponibile: e.target.value})} /></div>
               <div><label className="label">IVA %</label>
                 <select className="input" value={form.iva_percentuale} onChange={e => setForm({...form, iva_percentuale: e.target.value})}>
@@ -628,13 +633,12 @@ export default function FattureFornitori() {
                 </div>
               )}
               <div><label className="label">Cantiere</label>
-                <select className="input" value={modalModifica.progetto_id || ''} onChange={e => {
-                  const prj = progetti.find(p => p.id === e.target.value)
-                  setModalModifica({...modalModifica, progetto_id: e.target.value || null, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : ''})
-                }}>
-                  <option value="">-- nessuno --</option>
-                  {progetti.map(p => <option key={p.id} value={p.id}>{p.codice} - {p.nome}</option>)}
-                </select></div>
+                <SearchableSelect
+                  value={modalModifica.progetto_id || ''}
+                  onChange={v => { const prj = progetti.find(p => p.id === v); setModalModifica({...modalModifica, progetto_id: v || null, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : ''}) }}
+                  options={progetti.map(p => ({ value: p.id, label: `${p.codice} — ${p.nome}` }))}
+                  placeholder="— nessun cantiere —"
+                /></div>
               <div><label className="label">Imponibile (€)</label><input className="input" type="number" step="0.01" value={modalModifica.imponibile || ''} onChange={e => setModalModifica({...modalModifica, imponibile: e.target.value})} /></div>
               <div><label className="label">IVA %</label>
                 <select className="input" value={modalModifica.iva_percentuale || '22'} onChange={e => setModalModifica({...modalModifica, iva_percentuale: e.target.value})}>
