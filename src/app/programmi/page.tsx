@@ -32,6 +32,7 @@ export default function ProgrammiPage() {
   const [statiPresenza, setStatiPresenza] = useState<Record<string, { stato: 'presente'|'assente'|'parziale', ore: number, cantiere: string }>>({})
   const [conducenti, setConducenti] = useState<Record<string, string>>({})
   const [salvandoApprovazione, setSalvandoApprovazione] = useState(false)
+  const [mezzoInSelezione, setMezzoInSelezione] = useState<{ id: string; nome: string } | null>(null)
 
   const cantieri = programmi[societaAttiva]
   const mezziSocieta = mezziDB.filter(m => (m.societa || 'BC General Service') === societaAttiva)
@@ -341,13 +342,40 @@ export default function ProgrammiPage() {
                     const usato = mezziUsati.has(m.id)
                     const dove = vistaPool === 'tutti' && usato ? dovePiazzatoMezzo(m.id) : ''
                     if (vistaPool === 'liberi' && usato) return null
+                    const isInSelezione = mezzoInSelezione?.id === m.id
                     return (
-                      <div key={m.id} className={`px-3 py-2 border-b border-gray-100 ${usato ? 'opacity-40' : 'cursor-pointer hover:bg-blue-50'}`}>
-                        <div className="flex items-center justify-between">
-                          <p className={`text-xs font-semibold truncate ${societaAttiva === 'Filosofia' ? 'text-orange-800' : 'text-blue-800'}`}>🚐 {m.nome}</p>
-                          {m.posti && <span className="text-xs text-gray-400 flex-shrink-0">👥{m.posti}p</span>}
+                      <div key={m.id}>
+                        <div
+                          className={`px-3 py-2 border-b border-gray-100 transition-colors ${usato ? 'opacity-40' : 'cursor-pointer hover:bg-blue-50'} ${isInSelezione ? 'bg-blue-100 border-blue-300' : ''}`}
+                          onClick={() => { if (!usato) setMezzoInSelezione(isInSelezione ? null : { id: m.id, nome: m.nome }) }}>
+                          <div className="flex items-center justify-between">
+                            <p className={`text-xs font-semibold truncate ${societaAttiva === 'Filosofia' ? 'text-orange-800' : 'text-blue-800'}`}>
+                              🚐 {m.nome}
+                              {!usato && <span className="ml-1 text-gray-400 font-normal">{isInSelezione ? '▲ scegli cantiere' : '→'}</span>}
+                            </p>
+                            {m.posti && <span className="text-xs text-gray-400 flex-shrink-0">👥{m.posti}p</span>}
+                          </div>
+                          {dove && <p className="text-xs text-blue-500 truncate">📍 {dove}</p>}
                         </div>
-                        {dove && <p className="text-xs text-blue-500 truncate">📍 {dove}</p>}
+                        {/* Mini-picker cantiere quando il mezzo è selezionato */}
+                        {isInSelezione && cantieri.length > 0 && (
+                          <div className="bg-blue-50 border-b border-blue-200 px-2 py-1.5">
+                            <p className="text-xs text-blue-600 font-medium mb-1">Aggiungi a:</p>
+                            {cantieri.map(c => (
+                              <button key={c.id}
+                                className="w-full text-left text-xs px-2 py-1 rounded hover:bg-blue-200 text-blue-900 truncate block mb-0.5"
+                                onClick={() => { aggiungiMezzo(c.id, m); setMezzoInSelezione(null) }}>
+                                📍 {c.nome || 'Cantiere senza nome'}
+                              </button>
+                            ))}
+                            <button className="text-xs text-gray-400 mt-1" onClick={() => setMezzoInSelezione(null)}>Annulla</button>
+                          </div>
+                        )}
+                        {isInSelezione && cantieri.length === 0 && (
+                          <div className="bg-amber-50 border-b border-amber-200 px-3 py-1.5 text-xs text-amber-700">
+                            Aggiungi prima un cantiere
+                          </div>
+                        )}
                       </div>
                     )
                   })}
