@@ -3,6 +3,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import { logActivity } from '@/lib/logActivity'
+import SearchableSelect from '@/components/SearchableSelect'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -162,6 +163,11 @@ export default function FattureDaEmetterePage() {
   const [modalAliquote, setModalAliquote] = useState(false)
   const [formNuovaAliquota, setFormNuovaAliquota] = useState({ percentuale: '', descrizione: '' })
   const [loadingAliquota, setLoadingAliquota] = useState(false)
+
+  // ── Creazione cliente inline ──
+  const [modalNuovoCliente, setModalNuovoCliente] = useState<{ query: string } | null>(null)
+  const [formNuovoCliente, setFormNuovoCliente] = useState({ ragione_sociale: '', cf_piva: '', codice_sdi: '', email: '', indirizzo: '', comune: '', cap: '', provincia: '' })
+  const [salvandoCliente, setSalvandoCliente] = useState(false)
 
   useEffect(() => {
     supabase.auth.getUser().then(async ({ data }) => {
@@ -351,6 +357,29 @@ export default function FattureDaEmetterePage() {
     }).eq('id', modalModificaEmessa.id)
     if (error) { alert('Errore: ' + error.message); return }
     setModalModificaEmessa(null); loadAll()
+  }
+
+  async function salvaNuovoCliente() {
+    if (!formNuovoCliente.ragione_sociale.trim()) { alert('Inserisci la ragione sociale'); return }
+    setSalvandoCliente(true)
+    const { data: nuovo, error } = await supabase.from('clienti').insert({
+      ragione_sociale: formNuovoCliente.ragione_sociale.trim(),
+      cf_piva: formNuovoCliente.cf_piva || null,
+      codice_sdi: formNuovoCliente.codice_sdi || null,
+      email: formNuovoCliente.email || null,
+      indirizzo: formNuovoCliente.indirizzo || null,
+      comune: formNuovoCliente.comune || null,
+      cap: formNuovoCliente.cap || null,
+      provincia: formNuovoCliente.provincia || null,
+      attivo: true,
+    }).select('id,ragione_sociale,cf_piva,codice_sdi,indirizzo,via,comune,cap,provincia,email').single()
+    if (error) { alert('Errore: ' + error.message); setSalvandoCliente(false); return }
+    // Aggiunge alla lista e seleziona subito
+    setClienti(prev => [...prev, nuovo].sort((a,b) => a.ragione_sociale.localeCompare(b.ragione_sociale)))
+    setFormFde(prev => ({ ...prev, cliente_id: nuovo.id, email_invio_fattura: prev.email_invio_fattura || nuovo.email || '' }))
+    setModalNuovoCliente(null)
+    setFormNuovoCliente({ ragione_sociale: '', cf_piva: '', codice_sdi: '', email: '', indirizzo: '', comune: '', cap: '', provincia: '' })
+    setSalvandoCliente(false)
   }
 
   async function salvaNuovaAliquota() {
@@ -583,10 +612,12 @@ export default function FattureDaEmetterePage() {
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="col-span-2">
                 <label className="label">Cantiere *</label>
-                <select className="input" value={formFde.progetto_id} onChange={e => onCambiaProgetto(e.target.value)}>
-                  <option value="">-- seleziona --</option>
-                  {progetti.map(p => <option key={p.id} value={p.id}>{p.codice} — {p.nome}</option>)}
-                </select>
+                <SearchableSelect
+                  value={formFde.progetto_id}
+                  onChange={v => onCambiaProgetto(v)}
+                  options={progetti.map(p => ({ value: p.id, label: `${p.codice} — ${p.nome}` }))}
+                  placeholder="— seleziona cantiere —"
+                />
               </div>
 
               {progettoSelezionato && <SpecchettoContrattuale progetto={progettoSelezionato} />}
@@ -605,13 +636,17 @@ export default function FattureDaEmetterePage() {
 
               <div className="col-span-2">
                 <label className="label">Cliente *</label>
-                <select className="input" value={formFde.cliente_id} onChange={e => {
-                  const cli = clienti.find(c => c.id === e.target.value)
-                  setFormFde({...formFde, cliente_id: e.target.value, email_invio_fattura: formFde.email_invio_fattura || cli?.email || ''})
-                }}>
-                  <option value="">-- seleziona --</option>
-                  {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
-                </select>
+                <SearchableSelect
+                  value={formFde.cliente_id}
+                  onChange={v => {
+                    const cli = clienti.find(c => c.id === v)
+                    setFormFde({...formFde, cliente_id: v, email_invio_fattura: formFde.email_invio_fattura || cli?.email || ''})
+                  }}
+                  options={clienti.map(c => ({ value: c.id, label: c.ragione_sociale, sublabel: c.cf_piva }))}
+                  placeholder="— seleziona cliente —"
+                  onCreateNew={q => { setFormNuovoCliente({ ragione_sociale: q, cf_piva: '', codice_sdi: '', email: '', indirizzo: '', comune: '', cap: '', provincia: '' }); setModalNuovoCliente({ query: q }) }}
+                  createNewLabel="Crea nuovo cliente"
+                />
                 {/* Dati committente visibili subito sotto */}
                 {formFde.cliente_id && (() => {
                   const cli = clienti.find(c => c.id === formFde.cliente_id)
@@ -766,6 +801,62 @@ export default function FattureDaEmetterePage() {
               </div>
             </div>
             <div className="flex justify-end mt-4"><button className="btn" onClick={() => setModalAliquote(false)}>Chiudi</button></div>
+          </div>
+        </div>
+      )}
+
+      {/* ════ MODAL CREA NUOVO CLIENTE INLINE ════ */}
+      {modalNuovoCliente && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[999] p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-base font-semibold">+ Nuovo cliente</h2>
+                <p className="text-xs text-gray-500 mt-0.5">Salvato nell'anagrafica e selezionato automaticamente</p>
+              </div>
+              <button onClick={() => setModalNuovoCliente(null)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="label">Ragione sociale *</label>
+                <input className="input" placeholder="es. RE.CO. S.R.L." value={formNuovoCliente.ragione_sociale}
+                  onChange={e => setFormNuovoCliente({...formNuovoCliente, ragione_sociale: e.target.value})} autoFocus />
+              </div>
+              <div>
+                <label className="label">P.IVA / C.F.</label>
+                <input className="input font-mono" placeholder="es. 02072990365" value={formNuovoCliente.cf_piva}
+                  onChange={e => setFormNuovoCliente({...formNuovoCliente, cf_piva: e.target.value})} />
+              </div>
+              <div>
+                <label className="label">Codice SDI</label>
+                <input className="input font-mono uppercase" placeholder="es. T04ZHR3" value={formNuovoCliente.codice_sdi}
+                  onChange={e => setFormNuovoCliente({...formNuovoCliente, codice_sdi: e.target.value.toUpperCase()})} />
+              </div>
+              <div className="col-span-2">
+                <label className="label">Email ufficio acquisti</label>
+                <input className="input" type="email" placeholder="es. ufficioacquisti@cliente.it" value={formNuovoCliente.email}
+                  onChange={e => setFormNuovoCliente({...formNuovoCliente, email: e.target.value})} />
+              </div>
+              <div className="col-span-2">
+                <label className="label">Indirizzo</label>
+                <input className="input" placeholder="Via / Piazza..." value={formNuovoCliente.indirizzo}
+                  onChange={e => setFormNuovoCliente({...formNuovoCliente, indirizzo: e.target.value})} />
+              </div>
+              <div>
+                <label className="label">Comune</label>
+                <input className="input" value={formNuovoCliente.comune} onChange={e => setFormNuovoCliente({...formNuovoCliente, comune: e.target.value})} />
+              </div>
+              <div className="flex gap-2">
+                <div className="w-24"><label className="label">CAP</label><input className="input" value={formNuovoCliente.cap} onChange={e => setFormNuovoCliente({...formNuovoCliente, cap: e.target.value})} /></div>
+                <div className="flex-1"><label className="label">Prov.</label><input className="input" maxLength={2} placeholder="MO" value={formNuovoCliente.provincia} onChange={e => setFormNuovoCliente({...formNuovoCliente, provincia: e.target.value.toUpperCase()})} /></div>
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalNuovoCliente(null)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaNuovoCliente} disabled={salvandoCliente}>
+                {salvandoCliente ? 'Salvataggio...' : '✓ Crea e seleziona'}
+              </button>
+            </div>
           </div>
         </div>
       )}
