@@ -41,6 +41,7 @@ export default function PresenzeMonthly() {
   const [loading, setLoading] = useState(false)
   const [cellaEdit, setCellaEdit] = useState<CellaEdit | null>(null)
   const [salvandoCella, setSalvandoCella] = useState(false)
+  const [hoveredCell, setHoveredCell] = useState<{ dipId: string; dayIdx: number } | null>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { loadDati() }, [anno, mese])
@@ -222,6 +223,7 @@ export default function PresenzeMonthly() {
                   {giorni.map((g, i) => {
                     const dow = g.getDay()
                     const isOggi = dateToYMD(g) === oggiStr
+                    const isHovered = hoveredCell?.dayIdx === i
                     return (
                       <th key={i} className={`border border-gray-400 text-center font-bold px-0 py-1 ${
                         dow === 0 ? 'bg-gray-500 text-white' :
@@ -229,7 +231,14 @@ export default function PresenzeMonthly() {
                         isOggi ? 'bg-blue-500 text-white' :
                         'bg-gray-800 text-white'
                       }`} style={{ minWidth: 24 }}>
-                        {GIORNI_SETTIMANA[dow]}{g.getDate()}
+                        <span className="block text-gray-300" style={{ fontSize: 7 }}>{GIORNI_SETTIMANA[dow]}</span>
+                        <span className={`inline-block leading-none transition-all ${
+                          isHovered
+                            ? 'bg-yellow-300 text-gray-900 rounded font-black px-0.5'
+                            : ''
+                        }`} style={{ fontSize: 9 }}>
+                          {g.getDate()}
+                        </span>
                       </th>
                     )
                   })}
@@ -250,43 +259,70 @@ export default function PresenzeMonthly() {
                       const tot = totaleRiga(d.id)
                       const nomeCognome = `${d.cognome} ${d.nome}`
                       return (
-                        <tr key={d.id} className={rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                          <td className={`border border-gray-300 px-1 py-0.5 font-medium whitespace-nowrap sticky left-0 z-10 text-xs ${rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{ minWidth: 140 }}>
+                        <tr key={d.id}
+                          className={`transition-colors ${
+                            hoveredCell?.dipId === d.id
+                              ? 'bg-blue-50'
+                              : rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                          }`}>
+                          <td className={`border border-gray-300 px-1 py-0.5 font-medium whitespace-nowrap sticky left-0 z-10 text-xs transition-colors ${
+                            hoveredCell?.dipId === d.id
+                              ? 'bg-blue-100 text-blue-900 font-semibold'
+                              : rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                          }`} style={{ minWidth: 140 }}>
                             {nomeCognome}
                           </td>
                           {giorni.map((g, gi) => {
                             const dow = g.getDay()
-                            if (dow === 0) return <td key={gi} className="border border-gray-300 bg-gray-200"></td>
+                            if (dow === 0) return (
+                              <td key={gi} className="border border-gray-300 bg-gray-200"
+                                onMouseEnter={() => setHoveredCell(null)}></td>
+                            )
 
                             const val = valoreCella(d.id, g)
                             const oggiMidnight = new Date(); oggiMidnight.setHours(0,0,0,0)
                             const isFuturo = g > oggiMidnight
                             const isOggi = dateToYMD(g) === oggiStr
+                            const isThisHovered = hoveredCell?.dipId === d.id && hoveredCell?.dayIdx === gi
+                            const isRowHovered = hoveredCell?.dipId === d.id
 
                             let testo = ''
-                            let cls = dow === 6 ? 'bg-blue-50' : ''
-                            if (isOggi) cls += ' ring-1 ring-inset ring-blue-400'
-                            const hoverCls = isFuturo ? '' : 'cursor-pointer hover:ring-2 hover:ring-blue-400 hover:ring-inset'
+                            let bgBase = dow === 6 ? 'bg-blue-50' : ''
+                            if (isOggi) bgBase += ' ring-1 ring-inset ring-blue-400'
 
+                            let colorCls = ''
                             if (val !== null) {
-                              if (val.ore >= 1) { testo = '1'; cls += ' text-green-800 font-bold bg-green-50' }
-                              else if (val.ore > 0) { testo = '½'; cls += ' text-amber-700 font-bold bg-amber-50' }
-                              else { testo = '0'; cls += ' text-red-600 font-medium bg-red-50' }
+                              if (val.ore >= 1) { testo = '1'; colorCls = 'text-green-800 font-bold bg-green-50' }
+                              else if (val.ore > 0) { testo = '½'; colorCls = 'text-amber-700 font-bold bg-amber-50' }
+                              else { testo = '0'; colorCls = 'text-red-600 font-medium bg-red-50' }
                             } else if (!isFuturo) {
-                              cls += ' bg-gray-50'
+                              colorCls = 'bg-gray-50'
                             }
+
+                            // Evidenziazione cella specifica sotto il cursore
+                            const hoverCellCls = isThisHovered
+                              ? 'ring-2 ring-inset ring-blue-500 bg-blue-100 scale-100 z-10 relative'
+                              : isRowHovered
+                              ? '' // riga evidenziata già dal tr
+                              : ''
+
+                            const cursorCls = isFuturo ? '' : 'cursor-pointer'
 
                             return (
                               <td key={gi}
-                                className={`border border-gray-300 text-center py-0.5 px-0 select-none transition-all ${cls} ${hoverCls}`}
+                                className={`border border-gray-300 text-center py-0.5 px-0 select-none transition-all ${colorCls} ${bgBase} ${hoverCellCls} ${cursorCls}`}
                                 style={{ minWidth: 24, fontSize: 9 }}
+                                onMouseEnter={() => !isFuturo && setHoveredCell({ dipId: d.id, dayIdx: gi })}
+                                onMouseLeave={() => setHoveredCell(null)}
                                 onClick={() => apriCella(d, g)}
                                 title={isFuturo ? '' : `${nomeCognome} — ${g.toLocaleDateString('it-IT')}`}>
                                 {testo}
                               </td>
                             )
                           })}
-                          <td className="border border-gray-400 text-center font-bold px-1 bg-gray-100 text-xs">
+                          <td className={`border border-gray-400 text-center font-bold px-1 text-xs transition-colors ${
+                            hoveredCell?.dipId === d.id ? 'bg-blue-200 text-blue-900' : 'bg-gray-100'
+                          }`}>
                             {tot > 0 ? String(tot).replace('.', ',') : ''}
                           </td>
                           <td className="border border-gray-300 px-1 py-0.5 font-medium whitespace-nowrap print:table-cell hidden text-xs">
