@@ -42,6 +42,7 @@ export default function PresenzeMonthly() {
   const [cellaEdit, setCellaEdit] = useState<CellaEdit | null>(null)
   const [salvandoCella, setSalvandoCella] = useState(false)
   const [hoveredCell, setHoveredCell] = useState<{ dipId: string; dayIdx: number } | null>(null)
+  const [giorniNonApprovati, setGiorniNonApprovati] = useState<Set<string>>(new Set())
   const popoverRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { loadDati() }, [anno, mese])
@@ -60,9 +61,16 @@ export default function PresenzeMonthly() {
     const fineDate = new Date(anno, mese + 1, 0)
     const fine = `${anno}-${String(mese + 1).padStart(2, '0')}-${String(fineDate.getDate()).padStart(2, '0')}`
 
-    const [{ data: dip }, { data: pres }] = await Promise.all([
+    const [{ data: dip }, { data: pres }, { data: nonApprovati }] = await Promise.all([
       supabase.from('dipendenti').select('id,nome,cognome,azienda').eq('attivo', true).order('cognome').order('nome'),
       supabase.from('presenze').select('dipendente_id,data,ore,approvato').gte('data', inizio).lte('data', fine),
+      // Giorni con programma salvato ma presenze non approvate (solo passati)
+      supabase.from('programma_giornaliero')
+        .select('data')
+        .eq('presenze_approvate', false)
+        .gte('data', inizio)
+        .lte('data', fine)
+        .lt('data', new Date().toISOString().split('T')[0]),
     ])
 
     const dipOrdinati = (dip || []).sort((a: any, b: any) => {
@@ -85,6 +93,7 @@ export default function PresenzeMonthly() {
       mappa[p.dipendente_id][p.data] = { ore: p.ore, approvato: p.approvato }
     }
     setPresenzeMap(mappa)
+    setGiorniNonApprovati(new Set((nonApprovati || []).map(r => r.data)))
     setLoading(false)
   }
 
@@ -224,6 +233,8 @@ export default function PresenzeMonthly() {
                     const dow = g.getDay()
                     const isOggi = dateToYMD(g) === oggiStr
                     const isHovered = hoveredCell?.dayIdx === i
+                    const keyData = dateToYMD(g)
+                    const isNonApprovato = giorniNonApprovati.has(keyData) && dow !== 0
                     return (
                       <th key={i} className={`border border-gray-400 text-center font-bold px-0 py-1 ${
                         dow === 0 ? 'bg-gray-500 text-white' :
@@ -239,6 +250,9 @@ export default function PresenzeMonthly() {
                         }`} style={{ fontSize: 9 }}>
                           {g.getDate()}
                         </span>
+                        {isNonApprovato && (
+                          <span className="block" style={{ fontSize: 8, lineHeight: 1 }} title="Presenze non approvate">🚩</span>
+                        )}
                       </th>
                     )
                   })}
