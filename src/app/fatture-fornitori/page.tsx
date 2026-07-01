@@ -159,6 +159,8 @@ export default function FattureFornitori() {
     setImportando(false)
   }
 
+  const [modalAutorizza, setModalAutorizza] = useState<any>(null)
+
   const isNC = (f: any) => f.tipo === 'Nota di credito'
   const haFiltri = ricerca || filtroStato !== 'tutti' || filtroTipo !== 'tutti' || dataDA || dataA || importoDA || importoA
 
@@ -463,6 +465,7 @@ export default function FattureFornitori() {
                     ))}
                     <td>
                       <div className="flex gap-1">
+                        {!nc && <button className="btn btn-sm text-amber-600 border-amber-200 hover:bg-amber-50" title="Autorizzazione pagamento" onClick={() => setModalAutorizza(f)}>📄</button>}
                         <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => setModalModifica({...f})}>✏️</button>
                         <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(f.id, f.numero)}>✕</button>
                       </div>
@@ -675,6 +678,152 @@ export default function FattureFornitori() {
           </div>
         </div>
       )}
+
+      {/* ════════ MODAL AUTORIZZAZIONE AL PAGAMENTO ════════ */}
+      {modalAutorizza && (() => {
+        const f = modalAutorizza
+        const totale = (f.imponibile || 0) * (1 + (f.iva_percentuale || 0) / 100)
+        const oggi = new Date().toLocaleDateString('it-IT')
+        const rate = [1,2,3].filter(n => (f[`rata${n}_importo`] || 0) > 0).map(n => ({
+          n, importo: f[`rata${n}_importo`], scadenza: f[`rata${n}_scadenza`], stato: f[`rata${n}_stato`]
+        }))
+        return (
+          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 print:hidden">
+                <h2 className="text-base font-semibold">📄 Autorizzazione al pagamento</h2>
+                <div className="flex gap-2">
+                  <button className="btn btn-primary btn-sm" onClick={() => window.print()}>🖨️ Stampa</button>
+                  <button onClick={() => setModalAutorizza(null)} className="text-gray-400 text-xl">×</button>
+                </div>
+              </div>
+              <div id="autorizzazione-pagamento" className="p-8" style={{ fontFamily: 'Georgia, serif' }}>
+                <div className="flex items-start justify-between mb-8">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-blue-900 rounded-full flex items-center justify-center flex-shrink-0">
+                      <span className="text-white font-black text-sm">BC</span>
+                    </div>
+                    <div>
+                      <p className="font-bold text-blue-900 text-sm">BC GENERAL SERVICE Soc. Consortile A R.L.</p>
+                      <p className="text-xs text-gray-500">Via Duca d'Este 7 — 41036 Medolla (MO) · P.IVA 03943310361</p>
+                      <p className="text-xs text-gray-500">Tel. 340 8933491 / 349 3995255 · SDI: BA6ET11</p>
+                    </div>
+                  </div>
+                  <div className="text-right text-xs text-gray-500">
+                    <p className="font-semibold text-gray-700">Medolla, {oggi}</p>
+                    <p className="mt-1">Rif. fattura: <strong className="text-gray-900">{f.numero}</strong></p>
+                  </div>
+                </div>
+
+                <div className="text-center mb-8">
+                  <h1 className="text-xl font-bold text-gray-900 tracking-wide border-b-2 border-gray-900 pb-2 inline-block px-8">
+                    AUTORIZZAZIONE AL PAGAMENTO
+                  </h1>
+                </div>
+
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Beneficiario</p>
+                  <p className="text-base font-bold text-gray-900">{f.fornitore_nome}</p>
+                  {f.descrizione && <p className="text-sm text-gray-600 mt-1">{f.descrizione}</p>}
+                  {f.progetto_nome && <p className="text-sm text-gray-500 mt-1">Cantiere: <strong>{f.progetto_nome}</strong></p>}
+                </div>
+
+                <div className="mb-6">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Dati documento</p>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <tbody>
+                      {[
+                        ['N° Fattura', f.numero],
+                        ['Data fattura', new Date(f.data).toLocaleDateString('it-IT')],
+                        ['Imponibile', euro(f.imponibile)],
+                        [`IVA ${f.iva_percentuale}%`, euro((f.imponibile || 0) * (f.iva_percentuale || 0) / 100)],
+                      ].map(([label, val]) => (
+                        <tr key={label as string} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                          <td style={{ padding: '8px 0', color: '#6b7280', width: '40%' }}>{label}</td>
+                          <td style={{ padding: '8px 0', fontWeight: 600 }}>{val}</td>
+                        </tr>
+                      ))}
+                      <tr style={{ borderBottom: '2px solid #1e3a8a', background: '#eff6ff' }}>
+                        <td style={{ padding: '10px 0', color: '#1e40af', fontWeight: 700 }}>TOTALE DA PAGARE</td>
+                        <td style={{ padding: '10px 0', color: '#1e40af', fontWeight: 700, fontSize: 16 }}>{euro(totale)}</td>
+                      </tr>
+                      <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                        <td style={{ padding: '8px 0', color: '#6b7280' }}>Modalità pagamento</td>
+                        <td style={{ padding: '8px 0', fontWeight: 600 }}>{f.modalita_pagamento || 'Bonifico'}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {rate.length > 0 && (
+                  <div className="mb-6">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Scadenze di pagamento</p>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ background: '#1e3a8a', color: 'white' }}>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Rata</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Importo</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Scadenza</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Stato</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rate.map(r => (
+                          <tr key={r.n} style={{ borderBottom: '1px solid #e5e7eb' }}>
+                            <td style={{ padding: '8px 12px' }}>Rata {r.n}</td>
+                            <td style={{ padding: '8px 12px', fontWeight: 600 }}>{euro(r.importo)}</td>
+                            <td style={{ padding: '8px 12px' }}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
+                            <td style={{ padding: '8px 12px' }}>
+                              <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600,
+                                background: r.stato === 'Pagata' ? '#dcfce7' : '#fef9c3',
+                                color: r.stato === 'Pagata' ? '#166534' : '#854d0e' }}>
+                                {r.stato || 'Da Pagare'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {f.note && (
+                  <div className="mb-6 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-gray-700">
+                    <strong>Note:</strong> {f.note}
+                  </div>
+                )}
+
+                <div className="mt-10 pt-6 border-t border-gray-200 grid grid-cols-2 gap-8">
+                  <div>
+                    <p className="text-xs text-gray-500 mb-8">Il sottoscritto autorizza il pagamento della fattura sopra indicata</p>
+                    <div style={{ borderBottom: '1px solid #374151', marginBottom: 4 }}></div>
+                    <p className="text-xs text-gray-500">Firma autorizzante</p>
+                    <p className="text-xs text-gray-400 mt-1">Data: _______________</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-8">Pagamento effettuato da</p>
+                    <div style={{ borderBottom: '1px solid #374151', marginBottom: 4 }}></div>
+                    <p className="text-xs text-gray-500">Firma addetto pagamento</p>
+                    <p className="text-xs text-gray-400 mt-1">Data: _______________</p>
+                  </div>
+                </div>
+
+                <div className="mt-8 pt-4 border-t border-gray-100 text-center">
+                  <p className="text-xs text-gray-400">BC GENERAL SERVICE Soc. Consortile A R.L. — direzione@bcgeneralservice.it — PEC: bcgeneralservice@pec.it</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      <style jsx global>{`
+        @media print {
+          body > * { visibility: hidden !important; }
+          #autorizzazione-pagamento { visibility: visible !important; position: fixed; top: 0; left: 0; width: 100%; padding: 20mm; }
+          #autorizzazione-pagamento * { visibility: visible !important; }
+        }
+      `}</style>
     </div>
   )
 }
