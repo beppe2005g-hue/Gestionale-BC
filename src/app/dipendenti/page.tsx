@@ -85,6 +85,10 @@ export default function Dipendenti() {
       const bBC = b.azienda.toUpperCase().startsWith('BC')
       if (aBC && !bBC) return -1; if (!aBC && bBC) return 1
       const cmpAz = a.azienda.localeCompare(b.azienda); if (cmpAz !== 0) return cmpAz
+      // Ordine manuale: usa colonna ordine se valorizzata
+      const ordA = a.ordine ?? 999999
+      const ordB = b.ordine ?? 999999
+      if (ordA !== ordB) return ordA - ordB
       const cmpCog = a.cognome.localeCompare(b.cognome); if (cmpCog !== 0) return cmpCog
       return a.nome.localeCompare(b.nome)
     })
@@ -100,6 +104,26 @@ export default function Dipendenti() {
     setSelezionato(dip)
     const { data } = await supabase.from('corsi_dipendente').select('*').eq('dipendente_id', dip.id).order('scadenza')
     setCorsiDip(data || [])
+  }
+
+  // Sposta dipendente su o giù nell'ordine, dentro la stessa azienda
+  async function sposta(dipId: string, direzione: 'su' | 'giu') {
+    const dip = dipendenti.find(d => d.id === dipId)
+    if (!dip) return
+    // Prendi tutti i dipendenti della stessa azienda con stesso stato attivo/ex
+    const stessaAz = dipendenti.filter(d => d.azienda === dip.azienda && d.attivo === dip.attivo)
+    const idx = stessaAz.findIndex(d => d.id === dipId)
+    const swapIdx = direzione === 'su' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= stessaAz.length) return
+    const other = stessaAz[swapIdx]
+    // Assegna ordine se mancante
+    const ordA = dip.ordine ?? (idx * 10)
+    const ordB = other.ordine ?? (swapIdx * 10)
+    await Promise.all([
+      supabase.from('dipendenti').update({ ordine: ordB }).eq('id', dipId),
+      supabase.from('dipendenti').update({ ordine: ordA }).eq('id', other.id),
+    ])
+    load()
   }
 
   async function uploadFoto(file: File, dipId: string) {
@@ -293,19 +317,34 @@ export default function Dipendenti() {
                       <p className="text-xs font-medium text-white">{azienda}</p>
                       <p className="text-xs text-gray-400">{dipList.length} {mostraExDipendenti ? 'ex ' : ''}dipendenti</p>
                     </div>
-                    {dipList.map(d => (
-                      <div key={d.id} onClick={() => apriDipendente(d)}
-                        className={`px-3 py-2 cursor-pointer mb-0 border-b border-gray-100 transition-all flex items-center gap-2 ${selezionato?.id === d.id ? 'bg-blue-50' : 'bg-white hover:bg-gray-50'}`}>
-                        <AvatarDipendente dipendente={d} size="sm" />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm font-medium truncate">{d.cognome} {d.nome}</p>
-                            <div className="flex gap-1 flex-shrink-0">
-                              {hasVisitaAlert(d) && <span title={`Visita: ${formatData(d.scadenza_visita_medica)}`}>⚕️</span>}
-                              {hasContrattoAlert(d) && <span title={`Contratto: ${formatData(d.data_fine_contratto)}`}>📋</span>}
+                    {dipList.map((d, didx) => (
+                      <div key={d.id}
+                        className={`px-2 py-1.5 cursor-pointer border-b border-gray-100 transition-all flex items-center gap-1.5 ${selezionato?.id === d.id ? 'bg-blue-50' : 'bg-white hover:bg-gray-50'}`}>
+                        {/* Bottoni ordine */}
+                        <div className="flex flex-col gap-0 flex-shrink-0">
+                          <button
+                            className="text-gray-300 hover:text-blue-500 text-xs leading-none py-0.5 px-0.5 rounded"
+                            onClick={e => { e.stopPropagation(); sposta(d.id, 'su') }}
+                            title="Sposta su"
+                            disabled={didx === 0}>▲</button>
+                          <button
+                            className="text-gray-300 hover:text-blue-500 text-xs leading-none py-0.5 px-0.5 rounded"
+                            onClick={e => { e.stopPropagation(); sposta(d.id, 'giu') }}
+                            title="Sposta giù"
+                            disabled={didx === dipList.length - 1}>▼</button>
+                        </div>
+                        <div className="flex items-center gap-2 flex-1 min-w-0" onClick={() => apriDipendente(d)}>
+                          <AvatarDipendente dipendente={d} size="sm" />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm font-medium truncate">{d.cognome} {d.nome}</p>
+                              <div className="flex gap-1 flex-shrink-0">
+                                {hasVisitaAlert(d) && <span title={`Visita: ${formatData(d.scadenza_visita_medica)}`}>⚕️</span>}
+                                {hasContrattoAlert(d) && <span title={`Contratto: ${formatData(d.data_fine_contratto)}`}>📋</span>}
+                              </div>
                             </div>
+                            <p className="text-xs text-gray-500 truncate">{d.mansione || '—'}</p>
                           </div>
-                          <p className="text-xs text-gray-500 truncate">{d.mansione || '—'}</p>
                         </div>
                       </div>
                     ))}
