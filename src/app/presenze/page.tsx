@@ -13,6 +13,15 @@ function giorniDelMese(anno: number, mese: number): Date[] {
   return giorni
 }
 
+// ── FIX TIMEZONE ──────────────────────────────────────────────────────────────
+// toISOString() converte in UTC: in Italia (UTC+2) la mezzanotte del 1 luglio
+// diventa "2026-06-30T22:00:00Z" → split('T')[0] = "2026-06-30" invece di
+// "2026-07-01". Uso sempre l'ora locale per costruire la chiave data.
+function dateToYMD(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 type StatoPresenza = 'presente' | 'parziale' | 'assente'
 
 interface CellaEdit {
@@ -36,7 +45,6 @@ export default function PresenzeMonthly() {
 
   useEffect(() => { loadDati() }, [anno, mese])
 
-  // Chiudi popover cliccando fuori
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) setCellaEdit(null)
@@ -72,6 +80,7 @@ export default function PresenzeMonthly() {
     const mappa: Record<string, Record<string, { ore: number, approvato: boolean }>> = {}
     for (const p of pres || []) {
       if (!mappa[p.dipendente_id]) mappa[p.dipendente_id] = {}
+      // p.data dal DB è già "YYYY-MM-DD" in ora locale — nessuna conversione necessaria
       mappa[p.dipendente_id][p.data] = { ore: p.ore, approvato: p.approvato }
     }
     setPresenzeMap(mappa)
@@ -92,7 +101,8 @@ export default function PresenzeMonthly() {
   }
 
   function valoreCella(dipId: string, giorno: Date): { ore: number, approvato: boolean } | null {
-    const key = giorno.toISOString().split('T')[0]
+    // FIX: usa dateToYMD (ora locale) invece di toISOString() (UTC)
+    const key = dateToYMD(giorno)
     return presenzeMap[dipId]?.[key] ?? null
   }
 
@@ -104,11 +114,11 @@ export default function PresenzeMonthly() {
 
   function apriCella(dip: any, giorno: Date) {
     const dow = giorno.getDay()
-    if (dow === 0) return // domenica, non editabile
-    const key = giorno.toISOString().split('T')[0]
-    // Non permettere edit di giorni futuri
-    const oggi = new Date(); oggi.setHours(0,0,0,0)
-    if (giorno > oggi) return
+    if (dow === 0) return // domenica non editabile
+    const oggiMidnight = new Date(); oggiMidnight.setHours(0,0,0,0)
+    if (giorno > oggiMidnight) return // giorni futuri non editabili
+    // FIX: usa dateToYMD (ora locale) invece di toISOString() (UTC)
+    const key = dateToYMD(giorno)
     const val = presenzeMap[dip.id]?.[key]
     setCellaEdit({
       dipId: dip.id,
@@ -123,10 +133,11 @@ export default function PresenzeMonthly() {
     if (!cellaEdit) return
     setSalvandoCella(true)
     const ore = stato === 'presente' ? 1 : stato === 'parziale' ? 0.5 : 0
-    await supabase.from('presenze').upsert({
+    const societa = dipendenti.find(d => d.id === cellaEdit.dipId)?.azienda || 'Manuale'
+    const { error } = await supabase.from('presenze').upsert({
       data: cellaEdit.data,
       dipendente_id: cellaEdit.dipId,
-      societa: dipendenti.find(d => d.id === cellaEdit.dipId)?.azienda || 'Manuale',
+      societa,
       stato, ore,
       origine: 'correzione_ufficio',
       approvato: true,
@@ -134,7 +145,13 @@ export default function PresenzeMonthly() {
       approvato_il: new Date().toISOString(),
     }, { onConflict: 'data,dipendente_id' })
 
-    // Aggiorna mappa locale immediatamente
+    if (error) {
+      alert('Errore salvataggio: ' + error.message)
+      setSalvandoCella(false)
+      return
+    }
+
+    // Aggiorna mappa locale immediatamente senza ricaricare
     setPresenzeMap(prev => ({
       ...prev,
       [cellaEdit.dipId]: { ...(prev[cellaEdit.dipId] || {}), [cellaEdit.data]: { ore, approvato: true } }
@@ -143,14 +160,31 @@ export default function PresenzeMonthly() {
     setCellaEdit(null)
   }
 
+  async function eliminaCella() {
+    if (!cellaEdit) return
+    setSalvandoCella(true)
+    await supabase.from('presenze').delete().eq('data', cellaEdit.data).eq('dipendente_id', cellaEdit.dipId)
+    setPresenzeMap(prev => {
+      const nuova = { ...prev }
+      if (nuova[cellaEdit.dipId]) {
+        nuova[cellaEdit.dipId] = { ...nuova[cellaEdit.dipId] }
+        delete nuova[cellaEdit.dipId][cellaEdit.data]
+      }
+      return nuova
+    })
+    setSalvandoCella(false)
+    setCellaEdit(null)
+  }
+
   function mesePrecedente() { if (mese === 0) { setMese(11); setAnno(a => a - 1) } else setMese(m => m - 1) }
   function meseSuccessivo() { if (mese === 11) { setMese(0); setAnno(a => a + 1) } else setMese(m => m + 1) }
+
+  const oggiStr = dateToYMD(new Date())
 
   return (
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 overflow-auto relative">
-        {/* Barra controlli */}
         <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white print:hidden sticky top-0 z-20">
           <h1 className="text-lg font-semibold">📅 Presenze mensili</h1>
           <div className="flex items-center gap-3">
@@ -172,12 +206,10 @@ export default function PresenzeMonthly() {
               <h2 className="text-xl font-bold text-center print:text-lg">{MESI[mese].toUpperCase()} {anno}</h2>
             </div>
 
-            {/* Legenda */}
             <div className="flex gap-4 mb-3 text-xs print:hidden flex-wrap">
               <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-green-100 border border-green-400 inline-flex items-center justify-center text-green-800 font-bold">1</span> Presente</span>
               <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-amber-100 border border-amber-400 inline-flex items-center justify-center text-amber-800 font-bold text-xs">½</span> Mezza giornata</span>
               <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-red-50 border border-red-300 inline-flex items-center justify-center text-red-600 font-bold">0</span> Assente</span>
-              <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-white border border-dashed border-gray-300 inline-block"></span> Non ancora approvato</span>
               <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-gray-200 inline-block"></span> Domenica</span>
             </div>
 
@@ -189,8 +221,14 @@ export default function PresenzeMonthly() {
                   </th>
                   {giorni.map((g, i) => {
                     const dow = g.getDay()
+                    const isOggi = dateToYMD(g) === oggiStr
                     return (
-                      <th key={i} className={`border border-gray-400 text-center font-bold px-0 py-1 ${dow === 0 ? 'bg-gray-500 text-white' : dow === 6 ? 'bg-gray-300 text-gray-800' : 'bg-gray-800 text-white'}`} style={{ minWidth: 24 }}>
+                      <th key={i} className={`border border-gray-400 text-center font-bold px-0 py-1 ${
+                        dow === 0 ? 'bg-gray-500 text-white' :
+                        dow === 6 ? 'bg-blue-700 text-white' :
+                        isOggi ? 'bg-blue-500 text-white' :
+                        'bg-gray-800 text-white'
+                      }`} style={{ minWidth: 24 }}>
                         {GIORNI_SETTIMANA[dow]}{g.getDate()}
                       </th>
                     )
@@ -221,16 +259,18 @@ export default function PresenzeMonthly() {
                             if (dow === 0) return <td key={gi} className="border border-gray-300 bg-gray-200"></td>
 
                             const val = valoreCella(d.id, g)
-                            const oggi2 = new Date(); oggi2.setHours(0,0,0,0)
-                            const isFuturo = g > oggi2
+                            const oggiMidnight = new Date(); oggiMidnight.setHours(0,0,0,0)
+                            const isFuturo = g > oggiMidnight
+                            const isOggi = dateToYMD(g) === oggiStr
 
                             let testo = ''
                             let cls = dow === 6 ? 'bg-blue-50' : ''
-                            let hoverCls = isFuturo ? '' : 'cursor-pointer hover:ring-2 hover:ring-blue-400 hover:ring-inset'
+                            if (isOggi) cls += ' ring-1 ring-inset ring-blue-400'
+                            const hoverCls = isFuturo ? '' : 'cursor-pointer hover:ring-2 hover:ring-blue-400 hover:ring-inset'
 
                             if (val !== null) {
                               if (val.ore >= 1) { testo = '1'; cls += ' text-green-800 font-bold bg-green-50' }
-                              else if (val.ore > 0) { testo = '0,5'; cls += ' text-amber-700 font-bold bg-amber-50' }
+                              else if (val.ore > 0) { testo = '½'; cls += ' text-amber-700 font-bold bg-amber-50' }
                               else { testo = '0'; cls += ' text-red-600 font-medium bg-red-50' }
                             } else if (!isFuturo) {
                               cls += ' bg-gray-50'
@@ -241,7 +281,7 @@ export default function PresenzeMonthly() {
                                 className={`border border-gray-300 text-center py-0.5 px-0 select-none transition-all ${cls} ${hoverCls}`}
                                 style={{ minWidth: 24, fontSize: 9 }}
                                 onClick={() => apriCella(d, g)}
-                                title={isFuturo ? '' : val ? `${nomeCognome} — ${g.toLocaleDateString('it-IT')}: clicca per modificare` : `${nomeCognome} — ${g.toLocaleDateString('it-IT')}: non ancora registrato, clicca per aggiungere`}>
+                                title={isFuturo ? '' : `${nomeCognome} — ${g.toLocaleDateString('it-IT')}`}>
                                 {testo}
                               </td>
                             )
@@ -272,28 +312,42 @@ export default function PresenzeMonthly() {
             <div ref={popoverRef} className="bg-white rounded-xl shadow-xl p-4 w-72" onClick={e => e.stopPropagation()}>
               <div className="mb-3">
                 <p className="font-semibold text-sm">{cellaEdit.dipNome}</p>
+                {/* FIX: aggiungi T12:00:00 per evitare che il parsing della stringa YYYY-MM-DD
+                    venga interpretato come UTC e mostri il giorno precedente in Italia */}
                 <p className="text-xs text-gray-500">{new Date(cellaEdit.data + 'T12:00:00').toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</p>
                 {cellaEdit.ore !== null && (
-                  <p className="text-xs text-gray-400 mt-0.5">Stato attuale: {cellaEdit.ore >= 1 ? '✓ Presente' : cellaEdit.ore > 0 ? '½ Mezza giornata' : '✕ Assente'}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Stato attuale: {cellaEdit.ore >= 1 ? '✓ Presente' : cellaEdit.ore > 0 ? '½ Mezza giornata' : '✕ Assente'}
+                  </p>
                 )}
               </div>
               <p className="text-xs text-gray-500 mb-2 font-medium">Modifica presenza:</p>
-              <div className="grid grid-cols-3 gap-2">
-                <button onClick={() => salvaCella('presente')} disabled={salvandoCella}
-                  className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl border-2 border-green-400 bg-green-50 text-green-800 hover:bg-green-100 transition-colors font-medium text-xs">
-                  <span className="text-lg">✓</span>Presente
-                </button>
-                <button onClick={() => salvaCella('parziale')} disabled={salvandoCella}
-                  className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl border-2 border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 transition-colors font-medium text-xs">
-                  <span className="text-lg">½</span>Mezza
-                </button>
-                <button onClick={() => salvaCella('assente')} disabled={salvandoCella}
-                  className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl border-2 border-red-400 bg-red-50 text-red-800 hover:bg-red-100 transition-colors font-medium text-xs">
-                  <span className="text-lg">✕</span>Assente
-                </button>
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                {(['presente', 'parziale', 'assente'] as const).map(opt => (
+                  <button key={opt} onClick={() => salvaCella(opt)} disabled={salvandoCella}
+                    className={`flex flex-col items-center gap-1 py-3 px-2 rounded-xl border-2 transition-colors font-medium text-xs
+                      ${cellaEdit.stato === opt ? (
+                        opt === 'presente' ? 'border-green-600 bg-green-600 text-white' :
+                        opt === 'parziale' ? 'border-amber-500 bg-amber-500 text-white' :
+                        'border-red-500 bg-red-500 text-white'
+                      ) : (
+                        opt === 'presente' ? 'border-green-400 bg-green-50 text-green-800 hover:bg-green-100' :
+                        opt === 'parziale' ? 'border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100' :
+                        'border-red-400 bg-red-50 text-red-800 hover:bg-red-100'
+                      )}`}>
+                    <span className="text-lg">{opt === 'presente' ? '✓' : opt === 'parziale' ? '½' : '✕'}</span>
+                    {opt === 'presente' ? 'Presente' : opt === 'parziale' ? 'Mezza' : 'Assente'}
+                  </button>
+                ))}
               </div>
-              {salvandoCella && <p className="text-xs text-gray-400 text-center mt-2">Salvataggio...</p>}
-              <button onClick={() => setCellaEdit(null)} className="w-full mt-3 text-xs text-gray-400 hover:text-gray-600">Annulla</button>
+              {cellaEdit.stato !== null && (
+                <button onClick={eliminaCella} disabled={salvandoCella}
+                  className="w-full text-xs text-red-500 hover:text-red-700 border border-red-200 rounded-lg py-1.5 hover:bg-red-50 mb-2">
+                  🗑 Elimina registrazione
+                </button>
+              )}
+              {salvandoCella && <p className="text-xs text-gray-400 text-center">Salvataggio...</p>}
+              <button onClick={() => setCellaEdit(null)} className="w-full mt-1 text-xs text-gray-400 hover:text-gray-600">Annulla</button>
             </div>
           </div>
         )}
