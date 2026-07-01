@@ -33,6 +33,7 @@ export default function ProgrammiPage() {
   const [conducenti, setConducenti] = useState<Record<string, string>>({})
   const [salvandoApprovazione, setSalvandoApprovazione] = useState(false)
   const [mezzoInSelezione, setMezzoInSelezione] = useState<{ id: string; nome: string } | null>(null)
+  const [giorniNonApprovati, setGiorniNonApprovati] = useState<Record<Societa, string[]>>({ 'BC General Service': [], 'Filosofia': [] })
 
   const cantieri = programmi[societaAttiva]
   const mezziSocieta = mezziDB.filter(m => (m.societa || 'BC General Service') === societaAttiva)
@@ -100,6 +101,18 @@ export default function ProgrammiPage() {
 
     setProgrammi(nuoviProgrammi)
     setPresenzeApprovate(nuoveApprovazioni)
+
+    // Controlla giorni passati non approvati (per badge notifica)
+    const oggi = new Date().toISOString().split('T')[0]
+    const { data: nonApprovati } = await supabase.from('programma_giornaliero')
+      .select('data,societa')
+      .eq('presenze_approvate', false)
+      .lt('data', oggi)
+      .order('data', { ascending: false })
+    const naBC = (nonApprovati || []).filter(r => r.societa === 'BC General Service').map(r => r.data)
+    const naFil = (nonApprovati || []).filter(r => r.societa === 'Filosofia').map(r => r.data)
+    setGiorniNonApprovati({ 'BC General Service': naBC, 'Filosofia': naFil })
+
     setLoading(false)
   }
 
@@ -281,13 +294,40 @@ export default function ProgrammiPage() {
         </div>
 
         <div className="flex gap-2 px-4 py-2 bg-gray-50 border-b border-gray-200 flex-shrink-0">
-          {(['BC General Service', 'Filosofia'] as Societa[]).map(soc => (
-            <button key={soc} onClick={() => setSocietaAttiva(soc)}
-              className={`flex-1 py-2 rounded-lg border-2 text-sm font-bold transition-all ${soc === 'BC General Service' ? (societaAttiva === soc ? 'bg-blue-600 text-white border-blue-600 shadow' : 'bg-blue-50 text-blue-700 border-blue-300') : (societaAttiva === soc ? 'bg-orange-500 text-white border-orange-500 shadow' : 'bg-orange-50 text-orange-700 border-orange-300')}`}>
-              {soc === 'BC General Service' ? '🏗' : '🏢'} {soc} {presenzeApprovate[soc] ? '✓' : ''}
-            </button>
-          ))}
+          {(['BC General Service', 'Filosofia'] as Societa[]).map(soc => {
+            const na = giorniNonApprovati[soc].length
+            return (
+              <button key={soc} onClick={() => setSocietaAttiva(soc)}
+                className={`relative flex-1 py-2 rounded-lg border-2 text-sm font-bold transition-all ${soc === 'BC General Service' ? (societaAttiva === soc ? 'bg-blue-600 text-white border-blue-600 shadow' : 'bg-blue-50 text-blue-700 border-blue-300') : (societaAttiva === soc ? 'bg-orange-500 text-white border-orange-500 shadow' : 'bg-orange-50 text-orange-700 border-orange-300')}`}>
+                {soc === 'BC General Service' ? '🏗' : '🏢'} {soc} {presenzeApprovate[soc] ? '✓' : ''}
+                {na > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center shadow-sm">
+                    {na > 9 ? '9+' : na}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
+
+        {/* Banner giorni arretrati non approvati */}
+        {giorniNonApprovati[societaAttiva].length > 0 && (
+          <div className="bg-red-50 border-b border-red-200 px-4 py-2 flex items-center gap-3 flex-shrink-0">
+            <span className="text-red-600 font-bold text-xs">⚠️ {giorniNonApprovati[societaAttiva].length} {giorniNonApprovati[societaAttiva].length === 1 ? 'giorno' : 'giorni'} non approvati ({societaAttiva}):</span>
+            <div className="flex gap-1 flex-wrap">
+              {giorniNonApprovati[societaAttiva].slice(0, 8).map(d => (
+                <button key={d}
+                  className="text-xs bg-red-100 text-red-700 border border-red-300 rounded px-1.5 py-0.5 hover:bg-red-200 font-medium"
+                  onClick={() => setDataProgr(d)}>
+                  {new Date(d + 'T12:00:00').toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' })}
+                </button>
+              ))}
+              {giorniNonApprovati[societaAttiva].length > 8 && (
+                <span className="text-xs text-red-500">…+{giorniNonApprovati[societaAttiva].length - 8}</span>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="flex md:hidden border-b border-gray-200 flex-shrink-0 bg-white">
           {(['pool','cantieri','anteprima'] as const).map(t => (
