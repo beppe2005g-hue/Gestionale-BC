@@ -11,6 +11,7 @@ const SEZIONI = [
   { key: 'perm_archivia_progetti',       label: 'Archivia Cantieri',      icon: '📦', section: 'Principale' },
   { key: 'perm_costi_cantiere',          label: 'Costi Cantiere',         icon: '💰', section: 'Principale' },
   { key: 'perm_programmi',               label: 'Programmi',              icon: '📋', section: 'Principale' },
+  { key: 'perm_presenze',                label: 'Presenze',               icon: '📅', section: 'Principale' },
   { key: 'perm_ddt',                     label: 'DDT / Bolle',            icon: '📋', section: 'Ciclo Passivo' },
   { key: 'perm_import_ddt',             label: 'Import DDT con AI',      icon: '🤖', section: 'Ciclo Passivo' },
   { key: 'perm_da_ricevere',             label: 'Da Ricevere',            icon: '⏳', section: 'Ciclo Passivo' },
@@ -26,18 +27,18 @@ const SEZIONI = [
   { key: 'perm_dipendenti',              label: 'Dipendenti',             icon: '👷', section: 'Impostazioni' },
   { key: 'perm_mezzi',                   label: 'Mezzi',                  icon: '🚐', section: 'Impostazioni' },
   { key: 'perm_utenti',                  label: 'Utenti e Permessi',      icon: '🔒', section: 'Impostazioni' },
-  { key: 'perm_solo_cantieri_assegnati', label: '🔒 Solo cant. assegnati', icon: '', section: 'Speciale' },
+  { key: 'perm_solo_cantieri_assegnati', label: '🔒 Solo cant. assegnati', icon: '',  section: 'Speciale' },
 ]
 
 const TUTTI_I_PERMESSI_FALSE: Record<string, boolean> = {
   perm_dashboard: false, perm_progetti: false, perm_archivia_progetti: false,
-  perm_costi_cantiere: false, perm_programmi: false,
+  perm_costi_cantiere: false, perm_programmi: false, perm_presenze: false,
   perm_ddt: false, perm_import_ddt: false, perm_da_ricevere: false,
   perm_fatture_fornitori: false, perm_import_sdi: false, perm_prezzario: false,
   perm_fatture_clienti: false, perm_fatture_da_emettere: false,
   perm_scadenzario: false, perm_cashflow: false, perm_budget: false,
-  perm_anagrafiche: false, perm_dipendenti: false, perm_mezzi: false, perm_utenti: false,
-  perm_solo_cantieri_assegnati: false,
+  perm_anagrafiche: false, perm_dipendenti: false, perm_mezzi: false,
+  perm_utenti: false, perm_solo_cantieri_assegnati: false,
 }
 
 const PRESETS: Record<string, Record<string, boolean>> = {
@@ -45,6 +46,7 @@ const PRESETS: Record<string, Record<string, boolean>> = {
   geometra: {
     ...TUTTI_I_PERMESSI_FALSE,
     perm_progetti: true, perm_costi_cantiere: true, perm_programmi: true,
+    perm_presenze: true,
     perm_ddt: true, perm_import_ddt: true, perm_prezzario: true,
     perm_anagrafiche: true, perm_dipendenti: true, perm_mezzi: true,
     perm_solo_cantieri_assegnati: true,
@@ -52,7 +54,7 @@ const PRESETS: Record<string, Record<string, boolean>> = {
   capo_geometra: {
     ...TUTTI_I_PERMESSI_FALSE,
     perm_dashboard: true, perm_progetti: true, perm_archivia_progetti: true,
-    perm_costi_cantiere: true, perm_programmi: true,
+    perm_costi_cantiere: true, perm_programmi: true, perm_presenze: true,
     perm_ddt: true, perm_import_ddt: true, perm_da_ricevere: true, perm_prezzario: true,
     perm_fatture_da_emettere: true, perm_scadenzario: true, perm_budget: true,
     perm_anagrafiche: true, perm_dipendenti: true, perm_mezzi: true,
@@ -60,7 +62,7 @@ const PRESETS: Record<string, Record<string, boolean>> = {
   admin: {
     ...TUTTI_I_PERMESSI_FALSE,
     perm_dashboard: true, perm_progetti: true, perm_archivia_progetti: true,
-    perm_costi_cantiere: true, perm_programmi: true,
+    perm_costi_cantiere: true, perm_programmi: true, perm_presenze: true,
     perm_ddt: true, perm_import_ddt: true, perm_da_ricevere: true,
     perm_fatture_fornitori: true, perm_import_sdi: true, perm_prezzario: true,
     perm_fatture_clienti: true, perm_fatture_da_emettere: true,
@@ -73,6 +75,7 @@ const TABELLA_LABEL: Record<string, string> = {
   fatture_fornitori: '📄 Fatt. Ricevute', fatture_clienti: '🧾 Fatt. Emesse',
   ddt: '📋 DDT', progetti: '🏗 Cantieri', costi_cantiere: '💰 Costi Cantiere',
   dipendenti: '👷 Dipendenti', clienti: '👥 Clienti', fornitori: '👥 Fornitori',
+  presenze: '📅 Presenze', programma_giornaliero: '📋 Programmi',
 }
 
 const AZIONE_BADGE: Record<string, { label: string, cls: string }> = {
@@ -81,8 +84,18 @@ const AZIONE_BADGE: Record<string, { label: string, cls: string }> = {
   eliminazione: { label: '✕ Eliminato', cls: 'bg-red-100 text-red-700' },
 }
 
+// Colore del badge per ogni sezione
+const SEZIONE_COLORE: Record<string, string> = {
+  perm_presenze:                'bg-teal-50 border-teal-400 text-teal-800',
+  perm_solo_cantieri_assegnati: 'bg-orange-50 border-orange-400 text-orange-800',
+  perm_archivia_progetti:       'bg-amber-50 border-amber-400 text-amber-800',
+  perm_programmi:               'bg-purple-50 border-purple-400 text-purple-800',
+}
+const COLORE_DEFAULT_ACTIVE = 'bg-green-50 border-green-400 text-green-800'
+const COLORE_INACTIVE       = 'bg-gray-50 border-gray-200 text-gray-400'
+
 type Utente = { id: string; nome: string; ruolo: string; [key: string]: any }
-type LogRow = { id: string; created_at: string; utente_nome: string; azione: string; tabella: string; descrizione: string }
+type LogRow  = { id: string; created_at: string; utente_nome: string; azione: string; tabella: string; descrizione: string }
 
 export default function Utenti() {
   const [tab, setTab] = useState<'permessi' | 'log'>('permessi')
@@ -171,9 +184,12 @@ export default function Utenti() {
         <div className="mb-4">
           <h1 className="text-xl font-semibold text-gray-900">Utenti e permessi</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {isAdmin ? 'Sei loggato come amministratore — puoi modificare tutti i permessi.' : 'Solo l\'amministratore può modificare i permessi.'}
+            {isAdmin
+              ? 'Sei loggato come amministratore — puoi modificare tutti i permessi.'
+              : "Solo l'amministratore può modificare i permessi."}
           </p>
         </div>
+
         <div className="flex gap-1 mb-5 border-b border-gray-200">
           <button onClick={() => setTab('permessi')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${tab === 'permessi' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
@@ -185,12 +201,17 @@ export default function Utenti() {
           </button>
         </div>
 
+        {/* ══════ TAB PERMESSI ══════ */}
         {tab === 'permessi' && (
           <>
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm text-blue-800">
-              <strong>Come aggiungere un utente:</strong> vai su <strong>supabase.com → Authentication → Users → Add user</strong>.
-              Poi esegui nel SQL Editor: <code className="bg-blue-100 px-1 rounded">INSERT INTO utenti (id, nome, ruolo) VALUES ('UUID', 'Nome', 'geometra');</code>
+              <strong>Come aggiungere un utente:</strong> vai su{' '}
+              <strong>supabase.com → Authentication → Users → Add user</strong>. Poi esegui nel SQL Editor:{' '}
+              <code className="bg-blue-100 px-1 rounded">
+                INSERT INTO utenti (id, nome, ruolo) VALUES ('UUID', 'Nome', 'geometra');
+              </code>
             </div>
+
             {loading ? (
               <div className="text-center py-12 text-gray-400">Caricamento utenti...</div>
             ) : utenti.length === 0 ? (
@@ -200,8 +221,10 @@ export default function Utenti() {
                 {utenti.map(u => {
                   const isSelf = currentUserEmail === ADMIN_EMAIL && u.ruolo === 'admin'
                   const isSaving = saving[u.id]
+
                   return (
                     <div key={u.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${isSelf ? 'border-blue-300' : 'border-gray-200'}`}>
+                      {/* Intestazione utente */}
                       <div className={`px-5 py-4 flex items-center justify-between flex-wrap gap-3 ${isSelf ? 'bg-blue-50' : 'bg-gray-50'}`}>
                         <div className="flex items-center gap-3">
                           <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white ${isSelf ? 'bg-blue-600' : 'bg-gray-500'}`}>
@@ -214,47 +237,49 @@ export default function Utenti() {
                           {isSelf && <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full">HOST / ADMIN</span>}
                           {isSaving && <span className="text-xs text-gray-400 animate-pulse ml-2">Salvataggio...</span>}
                         </div>
+
+                        {/* Preset — solo admin su altri utenti */}
                         {isAdmin && !isSelf && (
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs text-gray-400">Preset:</span>
                             {(['nessuno', 'geometra', 'capo_geometra', 'admin'] as const).map(p => (
                               <button key={p} onClick={() => applicaPreset(u.id, p)}
                                 className="text-xs px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-700 transition">
-                                {p === 'nessuno' ? '🚫 Nessuno' : p === 'geometra' ? '📐 Geometra' : p === 'capo_geometra' ? '🏗️ Capo Geom.' : '🔑 Admin'}
+                                {p === 'nessuno' ? '🚫 Nessuno'
+                                  : p === 'geometra' ? '📐 Geometra'
+                                  : p === 'capo_geometra' ? '🏗️ Capo Geom.'
+                                  : '🔑 Admin'}
                               </button>
                             ))}
                           </div>
                         )}
                       </div>
+
+                      {/* Griglia permessi */}
                       <div className="p-5">
                         {isSelf ? (
                           <p className="text-sm text-blue-700 font-medium">✓ Accesso completo a tutto — account host</p>
                         ) : (
-                          <div className="space-y-3">
+                          <div className="space-y-4">
                             {['Principale', 'Ciclo Passivo', 'Ciclo Attivo', 'Controllo', 'Impostazioni', 'Speciale'].map(sez => {
                               const voci = SEZIONI.filter(s => s.section === sez)
                               return (
                                 <div key={sez}>
-                                  <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-1">{sez}</p>
+                                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">{sez}</p>
                                   <div className="flex flex-wrap gap-1.5">
                                     {voci.map(s => {
                                       const active = !!u[s.key]
-                                      const isSpecial = s.key === 'perm_solo_cantieri_assegnati'
-                                      const isArchivia = s.key === 'perm_archivia_progetti'
-                                      const isProgr = s.key === 'perm_programmi'
+                                      const coloreCls = active
+                                        ? (SEZIONE_COLORE[s.key] || COLORE_DEFAULT_ACTIVE)
+                                        : COLORE_INACTIVE
                                       return (
                                         <button key={s.key}
                                           onClick={() => togglePermesso(u.id, s.key, active)}
                                           disabled={!isAdmin}
-                                          className={`text-xs px-3 py-1.5 rounded-lg border transition-all duration-150
-                                            ${isSpecial
-                                              ? active ? 'bg-orange-50 border-orange-400 text-orange-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
-                                              : isArchivia
-                                                ? active ? 'bg-amber-50 border-amber-400 text-amber-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
-                                                : isProgr
-                                                  ? active ? 'bg-purple-50 border-purple-400 text-purple-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
-                                                  : active ? 'bg-green-50 border-green-400 text-green-800 font-medium' : 'bg-gray-50 border-gray-200 text-gray-400'
-                                            } ${isAdmin ? 'cursor-pointer hover:shadow-sm' : 'cursor-default'}`}>
+                                          title={active ? 'Clicca per revocare' : 'Clicca per concedere'}
+                                          className={`text-xs px-3 py-1.5 rounded-lg border transition-all duration-150 font-medium
+                                            ${coloreCls}
+                                            ${isAdmin ? 'cursor-pointer hover:shadow-sm hover:opacity-90' : 'cursor-default'}`}>
                                           <span className="mr-1">{active ? '✓' : '×'}</span>
                                           {s.icon && <span className="mr-1">{s.icon}</span>}
                                           {s.label}
@@ -276,6 +301,7 @@ export default function Utenti() {
           </>
         )}
 
+        {/* ══════ TAB LOG ══════ */}
         {tab === 'log' && (
           <>
             <div className="card mb-4">
@@ -314,6 +340,7 @@ export default function Utenti() {
                 <p className="text-xs text-gray-500 mt-2">{logsFiltrati.length} eventi su {logs.length}</p>
               )}
             </div>
+
             {loadingLog ? (
               <div className="text-center py-12 text-gray-400">Caricamento log...</div>
             ) : logsFiltrati.length === 0 ? (
@@ -323,7 +350,9 @@ export default function Utenti() {
             ) : (
               <div className="card overflow-x-auto">
                 <table className="table-base">
-                  <thead><tr><th>Data e ora</th><th>Utente</th><th>Azione</th><th>Sezione</th><th>Dettaglio</th></tr></thead>
+                  <thead>
+                    <tr><th>Data e ora</th><th>Utente</th><th>Azione</th><th>Sezione</th><th>Dettaglio</th></tr>
+                  </thead>
                   <tbody>
                     {logsFiltrati.map(l => {
                       const badge = AZIONE_BADGE[l.azione] || { label: l.azione, cls: 'bg-gray-100 text-gray-600' }
