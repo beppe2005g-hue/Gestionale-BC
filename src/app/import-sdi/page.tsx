@@ -18,45 +18,39 @@ function parseExcelDate(val: any): string {
     return ''
   }
   if (typeof val === 'number') {
-    const excelEpoch = new Date(1899, 11, 30)
-    const d = new Date(excelEpoch.getTime() + val * 86400000)
-    if (!isNaN(d.getTime()) && d.getFullYear() > 1980 && d.getFullYear() < 2100) {
-      return d.toISOString().split('T')[0]
-    }
+    const d = new Date(new Date(1899, 11, 30).getTime() + val * 86400000)
+    if (!isNaN(d.getTime()) && d.getFullYear() > 1980 && d.getFullYear() < 2100) return d.toISOString().split('T')[0]
     return ''
   }
-  if (val instanceof Date) {
-    if (!isNaN(val.getTime())) return val.toISOString().split('T')[0]
-    return ''
-  }
+  if (val instanceof Date && !isNaN(val.getTime())) return val.toISOString().split('T')[0]
   return ''
 }
 
-interface RigaImportRicevute {
-  data: string
-  numero: string
-  fornitore: string
-  piva: string
-  totale: number
-  netto: number
-  data_ricezione: string
-  scadenza: string
-  selezionata: boolean
-  stato: 'ok' | 'duplicato' | 'escluso' | 'errore'
-  motivo?: string
+// Confronto nome fornitore flessibile: rimuove s.r.l., spa, ecc. e confronta le parole chiave
+function nomeSimilare(a: string, b: string): boolean {
+  const normalizza = (s: string) => s.toLowerCase()
+    .replace(/\b(s\.?r\.?l\.?|s\.?p\.?a\.?|s\.?a\.?s\.?|s\.?n\.?c\.?|soc\.?|scarl|srls|srl|spa|sas|snc)\b/g, '')
+    .replace(/[.\-,]/g, ' ').replace(/\s+/g, ' ').trim()
+  const na = normalizza(a), nb = normalizza(b)
+  return na.includes(nb) || nb.includes(na) || na === nb
 }
 
-interface RigaImportEmesse {
-  data: string
-  numero: string
-  cliente: string
-  piva: string
-  totale: number
-  netto: number
-  scadenza: string
-  selezionata: boolean
-  stato: 'ok' | 'duplicato' | 'errore'
-  motivo?: string
+type Stato = 'ok' | 'duplicato' | 'abbinata' | 'escluso' | 'errore'
+
+interface RigaRic {
+  data: string; numero: string; fornitore: string; piva: string
+  totale: number; netto: number; data_ricezione: string; scadenza: string
+  selezionata: boolean; stato: Stato; motivo?: string
+  fattura_esistente?: { id: string; numero: string; data: string; fornitore_nome: string }
+  abbinata_a?: string; abbinata_label?: string
+}
+
+interface RigaEm {
+  data: string; numero: string; cliente: string; piva: string
+  totale: number; netto: number; scadenza: string
+  selezionata: boolean; stato: Stato; motivo?: string
+  fattura_esistente?: { id: string; numero: string; data: string; cliente_nome: string }
+  abbinata_a?: string; abbinata_label?: string
 }
 
 export default function ImportSDI() {
@@ -65,21 +59,26 @@ export default function ImportSDI() {
   const [esclusi, setEsclusi] = useState<any[]>([])
   const [nuovoEscluso, setNuovoEscluso] = useState({ nome: '', piva: '', motivo: '' })
 
-  // --- STATO FATTURE RICEVUTE ---
-  const [righeRic, setRigheRic] = useState<RigaImportRicevute[]>([])
+  // Ricevute
+  const [righeRic, setRigheRic] = useState<RigaRic[]>([])
   const [loadingRic, setLoadingRic] = useState(false)
   const [importandoRic, setImportandoRic] = useState(false)
   const [risultatoRic, setRisultatoRic] = useState<{importate: number, errori: number} | null>(null)
   const [progettoDefaultRic, setProgettoDefaultRic] = useState('')
   const [scadenzaDefaultRic, setScadenzaDefaultRic] = useState('')
 
-  // --- STATO FATTURE EMESSE ---
-  const [righeEm, setRigheEm] = useState<RigaImportEmesse[]>([])
+  // Emesse
+  const [righeEm, setRigheEm] = useState<RigaEm[]>([])
   const [loadingEm, setLoadingEm] = useState(false)
   const [importandoEm, setImportandoEm] = useState(false)
   const [risultatoEm, setRisultatoEm] = useState<{importate: number, errori: number} | null>(null)
   const [progettoDefaultEm, setProgettoDefaultEm] = useState('')
   const [scadenzaDefaultEm, setScadenzaDefaultEm] = useState('')
+
+  // Modal abbinamento manuale
+  const [modalAbbina, setModalAbbina] = useState<{ rigaIdx: number; tipo: 'ric' | 'em' } | null>(null)
+  const [fattureEsistenti, setFattureEsistenti] = useState<any[]>([])
+  const [cercaAbbina, setCercaAbbina] = useState('')
 
   useEffect(() => {
     supabase.from('progetti').select('id,codice,nome').then(({ data }) => setProgetti(data || []))
@@ -93,11 +92,7 @@ export default function ImportSDI() {
 
   async function aggiungiEscluso() {
     if (!nuovoEscluso.nome.trim()) { alert('Inserisci il nome del fornitore'); return }
-    await supabase.from('fornitori_esclusi_import').insert({
-      nome_fornitore: nuovoEscluso.nome.trim(),
-      piva: nuovoEscluso.piva.trim(),
-      motivo: nuovoEscluso.motivo.trim()
-    })
+    await supabase.from('fornitori_esclusi_import').insert({ nome_fornitore: nuovoEscluso.nome.trim(), piva: nuovoEscluso.piva.trim(), motivo: nuovoEscluso.motivo.trim() })
     setNuovoEscluso({ nome: '', piva: '', motivo: '' })
     caricaEsclusi()
   }
@@ -108,27 +103,73 @@ export default function ImportSDI() {
     caricaEsclusi()
   }
 
+  // ── Apri modal abbinamento manuale ──
+  async function apriAbbina(rigaIdx: number, tipo: 'ric' | 'em') {
+    setModalAbbina({ rigaIdx, tipo })
+    setCercaAbbina('')
+    if (tipo === 'ric') {
+      const { data } = await supabase.from('fatture_fornitori')
+        .select('id,numero,data,fornitore_nome,imponibile')
+        .order('data', { ascending: false }).limit(200)
+      setFattureEsistenti(data || [])
+    } else {
+      const { data } = await supabase.from('fatture_clienti')
+        .select('id,numero,data,cliente_nome,imponibile')
+        .order('data', { ascending: false }).limit(200)
+      setFattureEsistenti(data || [])
+    }
+  }
+
+  function confermaAbbina(fattura: any) {
+    if (!modalAbbina) return
+    const { rigaIdx, tipo } = modalAbbina
+    const label = `${fattura.numero} — ${fattura.fornitore_nome || fattura.cliente_nome} — ${new Date(fattura.data).toLocaleDateString('it-IT')}`
+    if (tipo === 'ric') {
+      setRigheRic(prev => prev.map((r, i) => i === rigaIdx
+        ? { ...r, stato: 'abbinata', selezionata: false, abbinata_a: fattura.id, abbinata_label: label, motivo: 'Abbinata manualmente a fattura esistente' }
+        : r))
+    } else {
+      setRigheEm(prev => prev.map((r, i) => i === rigaIdx
+        ? { ...r, stato: 'abbinata', selezionata: false, abbinata_a: fattura.id, abbinata_label: label, motivo: 'Abbinata manualmente a fattura esistente' }
+        : r))
+    }
+    setModalAbbina(null)
+  }
+
+  function annullaAbbina(rigaIdx: number, tipo: 'ric' | 'em') {
+    if (tipo === 'ric') {
+      setRigheRic(prev => prev.map((r, i) => i === rigaIdx
+        ? { ...r, stato: 'ok', selezionata: true, abbinata_a: undefined, abbinata_label: undefined, motivo: undefined }
+        : r))
+    } else {
+      setRigheEm(prev => prev.map((r, i) => i === rigaIdx
+        ? { ...r, stato: 'ok', selezionata: true, abbinata_a: undefined, abbinata_label: undefined, motivo: undefined }
+        : r))
+    }
+  }
+
+  const fattureFiltrate = fattureEsistenti.filter(f => {
+    if (!cercaAbbina.trim()) return true
+    const q = cercaAbbina.toLowerCase()
+    return (f.numero || '').toLowerCase().includes(q) ||
+      (f.fornitore_nome || f.cliente_nome || '').toLowerCase().includes(q)
+  })
+
   // ── LEGGI FILE RICEVUTE ──
   async function leggiFileRicevute(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setLoadingRic(true)
-    setRisultatoRic(null)
-
+    const file = e.target.files?.[0]; if (!file) return
+    setLoadingRic(true); setRisultatoRic(null)
     const buffer = await file.arrayBuffer()
     const wb = XLSX.read(buffer, { type: 'array', raw: true })
-    const ws = wb.Sheets[wb.SheetNames[0]]
-    const raw = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }) as any[][]
+    const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }) as any[][]
 
     let headerRow = -1
     for (let i = 0; i < Math.min(10, raw.length); i++) {
-      if (raw[i]?.some((v: any) => String(v) === 'Numero' || String(v) === 'Fornitore')) {
-        headerRow = i; break
-      }
+      if (raw[i]?.some((v: any) => String(v) === 'Numero' || String(v) === 'Fornitore')) { headerRow = i; break }
     }
     if (headerRow === -1) { alert('File non riconosciuto.'); setLoadingRic(false); return }
 
-    const headers: string[] = raw[headerRow].map((h: any) => String(h || '').trim())
+    const headers = raw[headerRow].map((h: any) => String(h || '').trim())
     const col = {
       data: headers.indexOf('Data'), numero: headers.indexOf('Numero'),
       tipo: headers.indexOf('Tipo'), fornitore: headers.indexOf('Fornitore'),
@@ -137,14 +178,14 @@ export default function ImportSDI() {
     }
 
     const [{ data: esistenti }, { data: listaEsclusi }] = await Promise.all([
-      supabase.from('fatture_fornitori').select('numero,fornitore_nome'),
+      // Carica tutte le fatture fornitori con numero, nome, piva e data
+      supabase.from('fatture_fornitori').select('id,numero,fornitore_nome,data').order('data', { ascending: false }),
       supabase.from('fornitori_esclusi_import').select('nome_fornitore,piva'),
     ])
 
-    const parsed: RigaImportRicevute[] = []
+    const parsed: RigaRic[] = []
     for (let i = headerRow + 1; i < raw.length; i++) {
-      const row = raw[i]
-      if (!row || !row[col.numero]) continue
+      const row = raw[i]; if (!row || !row[col.numero]) continue
       const numero = String(row[col.numero] || '').trim()
       const fornitore = String(row[col.fornitore] || '').trim()
       const tipo = String(row[col.tipo] || '').trim().toLowerCase()
@@ -154,90 +195,90 @@ export default function ImportSDI() {
       if (tipo.includes('reverse') || tipo.includes('integrazione') || (totale === 0 && netto === 0)) continue
       const dataStr = parseExcelDate(row[col.data])
       const dataRicezione = parseExcelDate(row[col.ricezione])
-      let stato: RigaImportRicevute['stato'] = 'ok'
+
+      let stato: Stato = 'ok'
       let motivo = ''
+      let fattura_esistente: RigaRic['fattura_esistente'] = undefined
+
+      // 1) Controlla lista esclusioni
       const escluso = listaEsclusi?.find(e =>
-        fornitore.toLowerCase().includes(e.nome_fornitore.toLowerCase()) ||
-        (e.piva && piva && e.piva === piva)
+        nomeSimilare(fornitore, e.nome_fornitore) || (e.piva && piva && e.piva === piva)
       )
       if (escluso) { stato = 'escluso'; motivo = 'Fornitore in lista esclusioni' }
+
       if (stato === 'ok') {
-        const dup = esistenti?.find(e => e.numero === numero && e.fornitore_nome.toLowerCase() === fornitore.toLowerCase())
-        if (dup) { stato = 'duplicato'; motivo = 'Già presente nel sistema' }
+        // 2) Rileva duplicato: numero + (nome simile OPPURE P.IVA uguale)
+        // Questo cattura anche variazioni di maiuscole/abbreviazioni (Srl vs S.R.L. ecc.)
+        const dup = esistenti?.find(e => {
+          const numeroMatch = e.numero === numero
+          if (!numeroMatch) return false
+          const nomeMatch = nomeSimilare(e.fornitore_nome, fornitore)
+          // Non abbiamo piva in fatture_fornitori ma possiamo usare solo nome+numero
+          return nomeMatch
+        })
+        if (dup) {
+          stato = 'duplicato'
+          motivo = `Già presente: N° ${dup.numero} del ${new Date(dup.data).toLocaleDateString('it-IT')}`
+          fattura_esistente = { id: dup.id, numero: dup.numero, data: dup.data, fornitore_nome: dup.fornitore_nome }
+        }
       }
-      parsed.push({ data: dataStr, numero, fornitore, piva, totale, netto, data_ricezione: dataRicezione, scadenza: scadenzaDefaultRic || '', selezionata: stato === 'ok', stato, motivo })
+
+      parsed.push({ data: dataStr, numero, fornitore, piva, totale, netto, data_ricezione: dataRicezione, scadenza: scadenzaDefaultRic || '', selezionata: stato === 'ok', stato, motivo, fattura_esistente })
     }
-    setRigheRic(parsed)
-    setLoadingRic(false)
+    setRigheRic(parsed); setLoadingRic(false)
   }
 
   // ── LEGGI FILE EMESSE ──
   async function leggiFileEmesse(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setLoadingEm(true)
-    setRisultatoEm(null)
-
+    const file = e.target.files?.[0]; if (!file) return
+    setLoadingEm(true); setRisultatoEm(null)
     const buffer = await file.arrayBuffer()
     const wb = XLSX.read(buffer, { type: 'array', raw: true })
-    const ws = wb.Sheets[wb.SheetNames[0]]
-    const raw = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }) as any[][]
+    const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }) as any[][]
 
     let headerRow = -1
     for (let i = 0; i < Math.min(10, raw.length); i++) {
-      if (raw[i]?.some((v: any) => String(v) === 'Numero' || String(v) === 'Cliente')) {
-        headerRow = i; break
-      }
+      if (raw[i]?.some((v: any) => String(v) === 'Numero' || String(v) === 'Cliente' || String(v).includes('Cessionario'))) { headerRow = i; break }
     }
-    // Fallback: prova con "Cessionario/committente" come nome colonna cliente SDI emesse
-    if (headerRow === -1) {
-      for (let i = 0; i < Math.min(10, raw.length); i++) {
-        if (raw[i]?.some((v: any) => String(v).includes('Cessionario') || String(v) === 'Numero')) {
-          headerRow = i; break
-        }
-      }
-    }
-    if (headerRow === -1) { alert('File non riconosciuto. Carica il file Excel SDI delle fatture emesse.'); setLoadingEm(false); return }
+    if (headerRow === -1) { alert('File non riconosciuto.'); setLoadingEm(false); return }
 
-    const headers: string[] = raw[headerRow].map((h: any) => String(h || '').trim())
-
-    // Cerca colonna cliente con vari nomi possibili SDI
+    const headers = raw[headerRow].map((h: any) => String(h || '').trim())
     const clienteIdx = ['Cliente', 'Cessionario/committente', 'Cessionario', 'Committente', 'Destinatario']
       .map(n => headers.indexOf(n)).find(i => i >= 0) ?? -1
-
     const col = {
-      data: headers.indexOf('Data'),
-      numero: headers.indexOf('Numero'),
-      tipo: headers.indexOf('Tipo'),
-      cliente: clienteIdx,
-      piva: headers.indexOf('Partita IVA'),
-      totale: headers.indexOf('Tot. documento'),
-      netto: headers.indexOf('Netto a pagare'),
+      data: headers.indexOf('Data'), numero: headers.indexOf('Numero'), tipo: headers.indexOf('Tipo'),
+      cliente: clienteIdx, piva: headers.indexOf('Partita IVA'),
+      totale: headers.indexOf('Tot. documento'), netto: headers.indexOf('Netto a pagare'),
     }
 
-    const { data: esistenti } = await supabase.from('fatture_clienti').select('numero,cliente_nome')
+    const { data: esistenti } = await supabase.from('fatture_clienti').select('id,numero,data,cliente_nome')
 
-    const parsed: RigaImportEmesse[] = []
+    const parsed: RigaEm[] = []
     for (let i = headerRow + 1; i < raw.length; i++) {
-      const row = raw[i]
-      if (!row || !row[col.numero]) continue
+      const row = raw[i]; if (!row || !row[col.numero]) continue
       const numero = String(row[col.numero] || '').trim()
       const cliente = col.cliente >= 0 ? String(row[col.cliente] || '').trim() : ''
       const tipo = String(row[col.tipo] || '').trim().toLowerCase()
       const totale = parseFloat(String(row[col.totale] || '0').replace(',', '.')) || 0
       const netto = parseFloat(String(row[col.netto] || '0').replace(',', '.')) || 0
       const piva = String(row[col.piva] || '').trim()
-      // Escludi RC e note credito (totale negativo)
       if (tipo.includes('reverse') || tipo.includes('integrazione') || totale < 0) continue
       const dataStr = parseExcelDate(row[col.data])
-      let stato: RigaImportEmesse['stato'] = 'ok'
+
+      let stato: Stato = 'ok'
       let motivo = ''
-      const dup = esistenti?.find(e => e.numero === numero && e.cliente_nome?.toLowerCase() === cliente.toLowerCase())
-      if (dup) { stato = 'duplicato'; motivo = 'Già presente nel sistema' }
-      parsed.push({ data: dataStr, numero, cliente, piva, totale, netto, scadenza: scadenzaDefaultEm || '', selezionata: stato === 'ok', stato, motivo })
+      let fattura_esistente: RigaEm['fattura_esistente'] = undefined
+
+      const dup = esistenti?.find(e => e.numero === numero && nomeSimilare(e.cliente_nome || '', cliente))
+      if (dup) {
+        stato = 'duplicato'
+        motivo = `Già presente: N° ${dup.numero} del ${new Date(dup.data).toLocaleDateString('it-IT')}`
+        fattura_esistente = { id: dup.id, numero: dup.numero, data: dup.data, cliente_nome: dup.cliente_nome }
+      }
+
+      parsed.push({ data: dataStr, numero, cliente, piva, totale, netto, scadenza: scadenzaDefaultEm || '', selezionata: stato === 'ok', stato, motivo, fattura_esistente })
     }
-    setRigheEm(parsed)
-    setLoadingEm(false)
+    setRigheEm(parsed); setLoadingEm(false)
   }
 
   // ── IMPORTA RICEVUTE ──
@@ -254,8 +295,8 @@ export default function ImportSDI() {
         let { data: fornExist } = await supabase.from('fornitori').select('id').ilike('ragione_sociale', `%${r.fornitore}%`).limit(1)
         let fornitoreId = fornExist?.[0]?.id
         if (!fornitoreId) {
-          const { data: newForn } = await supabase.from('fornitori').insert({ ragione_sociale: r.fornitore, cf_piva: r.piva, categoria: 'Altro', attivo: true }).select('id').single()
-          fornitoreId = newForn?.id
+          const { data: nf } = await supabase.from('fornitori').insert({ ragione_sociale: r.fornitore, cf_piva: r.piva, categoria: 'Altro', attivo: true }).select('id').single()
+          fornitoreId = nf?.id
         }
         const imponibile = r.netto > 0 ? r.netto : r.totale
         const ivaPerc = r.totale > 0 && r.netto > 0 && r.totale !== r.netto ? Math.round((r.totale / r.netto - 1) * 100) : 22
@@ -271,9 +312,9 @@ export default function ImportSDI() {
         if (error) errori++; else importate++
       } catch { errori++ }
     }
-    setImportandoRic(false)
-    setRisultatoRic({ importate, errori })
-    setRigheRic(prev => prev.map(r => r.selezionata && r.stato === 'ok' ? { ...r, stato: 'duplicato', motivo: 'Appena importata', selezionata: false } : r))
+    setImportandoRic(false); setRisultatoRic({ importate, errori })
+    setRigheRic(prev => prev.map(r => r.selezionata && r.stato === 'ok'
+      ? { ...r, stato: 'duplicato', motivo: 'Appena importata', selezionata: false } : r))
   }
 
   // ── IMPORTA EMESSE ──
@@ -287,12 +328,11 @@ export default function ImportSDI() {
     let importate = 0, errori = 0
     for (const r of daImportare) {
       try {
-        // Cerca o crea cliente
         let { data: cliExist } = await supabase.from('clienti').select('id').ilike('ragione_sociale', `%${r.cliente}%`).limit(1)
         let clienteId = cliExist?.[0]?.id
         if (!clienteId && r.cliente) {
-          const { data: newCli } = await supabase.from('clienti').insert({ ragione_sociale: r.cliente, cf_piva: r.piva, attivo: true }).select('id').single()
-          clienteId = newCli?.id
+          const { data: nc } = await supabase.from('clienti').insert({ ragione_sociale: r.cliente, cf_piva: r.piva, attivo: true }).select('id').single()
+          clienteId = nc?.id
         }
         const imponibile = r.netto > 0 ? r.netto : r.totale
         const ivaPerc = r.totale > 0 && r.netto > 0 && r.totale !== r.netto ? Math.round((r.totale / r.netto - 1) * 100) : 0
@@ -308,19 +348,21 @@ export default function ImportSDI() {
         if (error) errori++; else importate++
       } catch { errori++ }
     }
-    setImportandoEm(false)
-    setRisultatoEm({ importate, errori })
-    setRigheEm(prev => prev.map(r => r.selezionata && r.stato === 'ok' ? { ...r, stato: 'duplicato', motivo: 'Appena importata', selezionata: false } : r))
+    setImportandoEm(false); setRisultatoEm({ importate, errori })
+    setRigheEm(prev => prev.map(r => r.selezionata && r.stato === 'ok'
+      ? { ...r, stato: 'duplicato', motivo: 'Appena importata', selezionata: false } : r))
   }
 
   const nOkRic = righeRic.filter(r => r.stato === 'ok').length
   const nDupRic = righeRic.filter(r => r.stato === 'duplicato').length
   const nEscRic = righeRic.filter(r => r.stato === 'escluso').length
+  const nAbbRic = righeRic.filter(r => r.stato === 'abbinata').length
   const nSelRic = righeRic.filter(r => r.selezionata && r.stato === 'ok').length
   const nSenzaScadenzaRic = righeRic.filter(r => r.stato === 'ok' && r.selezionata && !r.scadenza).length
 
   const nOkEm = righeEm.filter(r => r.stato === 'ok').length
   const nDupEm = righeEm.filter(r => r.stato === 'duplicato').length
+  const nAbbEm = righeEm.filter(r => r.stato === 'abbinata').length
   const nSelEm = righeEm.filter(r => r.selezionata && r.stato === 'ok').length
   const nSenzaScadenzaEm = righeEm.filter(r => r.stato === 'ok' && r.selezionata && !r.scadenza).length
 
@@ -343,10 +385,13 @@ export default function ImportSDI() {
           <>
             <div className="card mb-4">
               <h3 className="text-sm font-medium mb-3">Carica file Excel SDI — Fatture ricevute dai fornitori</h3>
+              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-3 text-xs text-blue-700 space-y-1">
+                <p>🔍 Il sistema rileva automaticamente i duplicati per <strong>numero fattura + nome fornitore</strong> (tollerante a variazioni di maiuscole e abbreviazioni tipo Srl/S.R.L.).</p>
+                <p>🔗 Per fatture già inserite a mano che l'SDI non riconosce come duplicate, usa il bottone <strong>Abbina</strong> per collegarle manualmente senza creare un secondo record.</p>
+              </div>
               <div className="flex gap-4 items-end flex-wrap">
                 <div>
-                  <label className="btn btn-primary cursor-pointer">
-                    📂 Scegli file .xlsx
+                  <label className="btn btn-primary cursor-pointer">📂 Scegli file .xlsx
                     <input type="file" accept=".xlsx,.xls" className="hidden" onChange={leggiFileRicevute} />
                   </label>
                   <p className="text-xs text-gray-400 mt-1">RC e integrazioni escluse automaticamente</p>
@@ -360,23 +405,26 @@ export default function ImportSDI() {
                 </div>
               </div>
             </div>
+
             {loadingRic && <div className="card text-center py-8 text-gray-500">Analisi file in corso...</div>}
             {risultatoRic && (
               <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
                 <p className="font-medium text-green-800">✅ Import completato — {risultatoRic.importate} fatture importate{risultatoRic.errori > 0 && ` · ❌ ${risultatoRic.errori} errori`}</p>
               </div>
             )}
+
             {righeRic.length > 0 && (
               <div className="card">
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
                   <div className="flex gap-4 text-sm flex-wrap">
                     <span className="text-green-700 font-medium">✅ Da importare: {nOkRic}</span>
-                    <span className="text-amber-700">⚠️ Duplicati: {nDupRic}</span>
+                    <span className="text-amber-700">⚠️ Già presenti: {nDupRic}</span>
                     {nEscRic > 0 && <span className="text-gray-500">🚫 Esclusi: {nEscRic}</span>}
+                    {nAbbRic > 0 && <span className="text-blue-600">🔗 Abbinate: {nAbbRic}</span>}
                     {nSenzaScadenzaRic > 0 && <span className="text-red-600">⚠️ Senza scadenza: {nSenzaScadenzaRic}</span>}
                   </div>
                   <div className="flex gap-2 flex-wrap">
-                    <button className="btn btn-sm" onClick={() => setRigheRic(prev => prev.map(r => ({ ...r, selezionata: r.stato === 'ok' })))}>Seleziona tutti</button>
+                    <button className="btn btn-sm" onClick={() => setRigheRic(prev => prev.map(r => ({ ...r, selezionata: r.stato === 'ok' })))}>Seleziona tutti ok</button>
                     <button className="btn btn-sm" onClick={() => setRigheRic(prev => prev.map(r => ({ ...r, selezionata: false })))}>Deseleziona</button>
                     <button className="btn btn-primary btn-sm" onClick={eseguiImportRicevute} disabled={importandoRic || nSelRic === 0}>
                       {importandoRic ? 'Importazione...' : `Importa ${nSelRic} fatture`}
@@ -393,21 +441,51 @@ export default function ImportSDI() {
                 </div>
                 <div className="overflow-x-auto">
                   <table className="table-base">
-                    <thead><tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Fornitore</th><th>Totale</th><th>Netto</th><th>Scadenza pagamento</th><th>Stato</th></tr></thead>
+                    <thead>
+                      <tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Fornitore</th><th>Totale</th><th>Netto</th><th>Scadenza</th><th>Stato</th><th></th></tr>
+                    </thead>
                     <tbody>
                       {righeRic.map((r, i) => (
-                        <tr key={i} className={r.stato === 'duplicato' ? 'opacity-50' : r.stato === 'escluso' ? 'opacity-40 bg-gray-50' : r.selezionata ? 'bg-green-50' : ''}>
+                        <tr key={i} className={
+                          r.stato === 'duplicato' ? 'opacity-50 bg-amber-50' :
+                          r.stato === 'abbinata' ? 'bg-blue-50' :
+                          r.stato === 'escluso' ? 'opacity-40 bg-gray-50' :
+                          r.selezionata ? 'bg-green-50' : ''
+                        }>
                           <td>{r.stato === 'ok' && <input type="checkbox" checked={r.selezionata} onChange={() => setRigheRic(prev => prev.map((x, j) => j === i ? { ...x, selezionata: !x.selezionata } : x))} />}</td>
                           <td className="text-xs">{r.data ? new Date(r.data).toLocaleDateString('it-IT') : <span className="text-red-500">—</span>}</td>
                           <td className="font-medium text-xs">{r.numero}</td>
                           <td className="text-xs">{r.fornitore}</td>
                           <td className="text-sm font-medium">{euro(r.totale)}</td>
                           <td className="text-sm">{euro(r.netto)}</td>
-                          <td>{r.stato === 'ok' ? <input type="date" className="input text-xs py-0.5 w-36" value={r.scadenza} onChange={e => setRigheRic(prev => prev.map((x, j) => j === i ? { ...x, scadenza: e.target.value } : x))} /> : <span className="text-xs text-gray-400">—</span>}</td>
                           <td>
+                            {r.stato === 'ok'
+                              ? <input type="date" className="input text-xs py-0.5 w-36" value={r.scadenza} onChange={e => setRigheRic(prev => prev.map((x, j) => j === i ? { ...x, scadenza: e.target.value } : x))} />
+                              : <span className="text-xs text-gray-400">—</span>}
+                          </td>
+                          <td className="min-w-32">
                             {r.stato === 'ok' && <span className="badge badge-green">Da importare</span>}
-                            {r.stato === 'duplicato' && <span className="badge badge-amber" title={r.motivo}>Già presente</span>}
-                            {r.stato === 'escluso' && <span className="badge badge-gray" title={r.motivo}>🚫 Escluso</span>}
+                            {r.stato === 'duplicato' && (
+                              <div>
+                                <span className="badge badge-amber">Già presente</span>
+                                {r.fattura_esistente && <p className="text-xs text-amber-700 mt-0.5">{r.motivo}</p>}
+                              </div>
+                            )}
+                            {r.stato === 'abbinata' && (
+                              <div>
+                                <span className="badge" style={{background:'#dbeafe',color:'#1e40af'}}>🔗 Abbinata</span>
+                                <p className="text-xs text-blue-600 mt-0.5 max-w-40 truncate" title={r.abbinata_label}>{r.abbinata_label}</p>
+                              </div>
+                            )}
+                            {r.stato === 'escluso' && <span className="badge badge-gray">🚫 Escluso</span>}
+                          </td>
+                          <td>
+                            {r.stato === 'ok' && (
+                              <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50 text-xs" onClick={() => apriAbbina(i, 'ric')} title="Abbina a fattura già presente">🔗 Abbina</button>
+                            )}
+                            {r.stato === 'abbinata' && (
+                              <button className="btn btn-sm text-gray-400 text-xs" onClick={() => annullaAbbina(i, 'ric')}>✕ Sgancia</button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -425,12 +503,11 @@ export default function ImportSDI() {
             <div className="card mb-4">
               <h3 className="text-sm font-medium mb-3">Carica file Excel SDI — Fatture emesse verso clienti</h3>
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs text-blue-700">
-                📌 Le fatture emesse vengono importate in <strong>Fatture Clienti</strong> con IVA 0% (RC) di default. Le note di credito (importo negativo) vengono escluse automaticamente.
+                📌 Le fatture emesse vengono importate in <strong>Fatture Clienti</strong>. Note di credito e RC escluse automaticamente. Usa <strong>🔗 Abbina</strong> per collegare a fatture già inserite a mano.
               </div>
               <div className="flex gap-4 items-end flex-wrap">
                 <div>
-                  <label className="btn btn-primary cursor-pointer">
-                    📂 Scegli file .xlsx
+                  <label className="btn btn-primary cursor-pointer">📂 Scegli file .xlsx
                     <input type="file" accept=".xlsx,.xls" className="hidden" onChange={leggiFileEmesse} />
                   </label>
                   <p className="text-xs text-gray-400 mt-1">Note di credito escluse automaticamente</p>
@@ -444,22 +521,25 @@ export default function ImportSDI() {
                 </div>
               </div>
             </div>
+
             {loadingEm && <div className="card text-center py-8 text-gray-500">Analisi file in corso...</div>}
             {risultatoEm && (
               <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4">
                 <p className="font-medium text-green-800">✅ Import completato — {risultatoEm.importate} fatture clienti importate{risultatoEm.errori > 0 && ` · ❌ ${risultatoEm.errori} errori`}</p>
               </div>
             )}
+
             {righeEm.length > 0 && (
               <div className="card">
                 <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
                   <div className="flex gap-4 text-sm flex-wrap">
                     <span className="text-green-700 font-medium">✅ Da importare: {nOkEm}</span>
-                    <span className="text-amber-700">⚠️ Duplicati: {nDupEm}</span>
+                    <span className="text-amber-700">⚠️ Già presenti: {nDupEm}</span>
+                    {nAbbEm > 0 && <span className="text-blue-600">🔗 Abbinate: {nAbbEm}</span>}
                     {nSenzaScadenzaEm > 0 && <span className="text-red-600">⚠️ Senza scadenza: {nSenzaScadenzaEm}</span>}
                   </div>
                   <div className="flex gap-2 flex-wrap">
-                    <button className="btn btn-sm" onClick={() => setRigheEm(prev => prev.map(r => ({ ...r, selezionata: r.stato === 'ok' })))}>Seleziona tutti</button>
+                    <button className="btn btn-sm" onClick={() => setRigheEm(prev => prev.map(r => ({ ...r, selezionata: r.stato === 'ok' })))}>Seleziona tutti ok</button>
                     <button className="btn btn-sm" onClick={() => setRigheEm(prev => prev.map(r => ({ ...r, selezionata: false })))}>Deseleziona</button>
                     <button className="btn btn-primary btn-sm" onClick={eseguiImportEmesse} disabled={importandoEm || nSelEm === 0}>
                       {importandoEm ? 'Importazione...' : `Importa ${nSelEm} fatture`}
@@ -476,20 +556,47 @@ export default function ImportSDI() {
                 </div>
                 <div className="overflow-x-auto">
                   <table className="table-base">
-                    <thead><tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Cliente</th><th>Totale</th><th>Netto</th><th>Scadenza incasso</th><th>Stato</th></tr></thead>
+                    <thead><tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Cliente</th><th>Totale</th><th>Netto</th><th>Scadenza incasso</th><th>Stato</th><th></th></tr></thead>
                     <tbody>
                       {righeEm.map((r, i) => (
-                        <tr key={i} className={r.stato === 'duplicato' ? 'opacity-50' : r.selezionata ? 'bg-blue-50' : ''}>
+                        <tr key={i} className={
+                          r.stato === 'duplicato' ? 'opacity-50 bg-amber-50' :
+                          r.stato === 'abbinata' ? 'bg-blue-50' :
+                          r.selezionata ? 'bg-blue-50' : ''
+                        }>
                           <td>{r.stato === 'ok' && <input type="checkbox" checked={r.selezionata} onChange={() => setRigheEm(prev => prev.map((x, j) => j === i ? { ...x, selezionata: !x.selezionata } : x))} />}</td>
                           <td className="text-xs">{r.data ? new Date(r.data).toLocaleDateString('it-IT') : <span className="text-red-500">—</span>}</td>
                           <td className="font-medium text-xs">{r.numero}</td>
                           <td className="text-xs">{r.cliente || <span className="text-gray-400">—</span>}</td>
                           <td className="text-sm font-medium">{euro(r.totale)}</td>
                           <td className="text-sm">{euro(r.netto)}</td>
-                          <td>{r.stato === 'ok' ? <input type="date" className="input text-xs py-0.5 w-36" value={r.scadenza} onChange={e => setRigheEm(prev => prev.map((x, j) => j === i ? { ...x, scadenza: e.target.value } : x))} /> : <span className="text-xs text-gray-400">—</span>}</td>
+                          <td>
+                            {r.stato === 'ok'
+                              ? <input type="date" className="input text-xs py-0.5 w-36" value={r.scadenza} onChange={e => setRigheEm(prev => prev.map((x, j) => j === i ? { ...x, scadenza: e.target.value } : x))} />
+                              : <span className="text-xs text-gray-400">—</span>}
+                          </td>
                           <td>
                             {r.stato === 'ok' && <span className="badge badge-green">Da importare</span>}
-                            {r.stato === 'duplicato' && <span className="badge badge-amber" title={r.motivo}>Già presente</span>}
+                            {r.stato === 'duplicato' && (
+                              <div>
+                                <span className="badge badge-amber">Già presente</span>
+                                {r.fattura_esistente && <p className="text-xs text-amber-700 mt-0.5">{r.motivo}</p>}
+                              </div>
+                            )}
+                            {r.stato === 'abbinata' && (
+                              <div>
+                                <span className="badge" style={{background:'#dbeafe',color:'#1e40af'}}>🔗 Abbinata</span>
+                                <p className="text-xs text-blue-600 mt-0.5 max-w-40 truncate">{r.abbinata_label}</p>
+                              </div>
+                            )}
+                          </td>
+                          <td>
+                            {r.stato === 'ok' && (
+                              <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50 text-xs" onClick={() => apriAbbina(i, 'em')}>🔗 Abbina</button>
+                            )}
+                            {r.stato === 'abbinata' && (
+                              <button className="btn btn-sm text-gray-400 text-xs" onClick={() => annullaAbbina(i, 'em')}>✕ Sgancia</button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -512,9 +619,7 @@ export default function ImportSDI() {
                 <div><label className="label">P.IVA (opzionale)</label><input className="input" placeholder="es. 15844561009" value={nuovoEscluso.piva} onChange={e => setNuovoEscluso({...nuovoEscluso, piva: e.target.value})} /></div>
                 <div><label className="label">Motivo (opzionale)</label><input className="input" placeholder="es. Utenza elettrica" value={nuovoEscluso.motivo} onChange={e => setNuovoEscluso({...nuovoEscluso, motivo: e.target.value})} /></div>
               </div>
-              <div className="flex justify-end mt-3">
-                <button className="btn btn-primary" onClick={aggiungiEscluso}>+ Aggiungi alla lista</button>
-              </div>
+              <div className="flex justify-end mt-3"><button className="btn btn-primary" onClick={aggiungiEscluso}>+ Aggiungi alla lista</button></div>
             </div>
             <div className="card">
               <h3 className="text-sm font-medium mb-3">Fornitori esclusi ({esclusi.length})</h3>
@@ -537,6 +642,56 @@ export default function ImportSDI() {
           </>
         )}
       </main>
+
+      {/* ════════ MODAL ABBINAMENTO MANUALE ════════ */}
+      {modalAbbina && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h2 className="text-base font-semibold">🔗 Abbina a fattura esistente</h2>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Riga SDI: <strong>
+                    {modalAbbina.tipo === 'ric'
+                      ? `${righeRic[modalAbbina.rigaIdx]?.numero} — ${righeRic[modalAbbina.rigaIdx]?.fornitore}`
+                      : `${righeEm[modalAbbina.rigaIdx]?.numero} — ${righeEm[modalAbbina.rigaIdx]?.cliente}`}
+                  </strong>
+                </p>
+              </div>
+              <button onClick={() => setModalAbbina(null)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="px-5 py-3 border-b border-gray-100 flex-shrink-0">
+              <input className="input" placeholder="🔍 Cerca per numero o nome..." value={cercaAbbina} onChange={e => setCercaAbbina(e.target.value)} autoFocus />
+            </div>
+            <div className="overflow-y-auto flex-1 p-3">
+              {fattureFiltrate.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-8">Nessuna fattura trovata.</p>
+              ) : (
+                <div className="space-y-1">
+                  {fattureFiltrate.slice(0, 50).map(f => (
+                    <div key={f.id}
+                      className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-colors"
+                      onClick={() => confermaAbbina(f)}>
+                      <div>
+                        <p className="text-sm font-medium">{f.numero}</p>
+                        <p className="text-xs text-gray-500">{f.fornitore_nome || f.cliente_nome} — {new Date(f.data).toLocaleDateString('it-IT')}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold text-gray-700">{euro(f.imponibile)}</p>
+                        <p className="text-xs text-blue-600">Clicca per abbinare →</p>
+                      </div>
+                    </div>
+                  ))}
+                  {fattureFiltrate.length > 50 && <p className="text-xs text-gray-400 text-center pt-2">Affina la ricerca per vedere altri risultati.</p>}
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-end flex-shrink-0">
+              <button className="btn" onClick={() => setModalAbbina(null)}>Annulla</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
