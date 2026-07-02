@@ -72,7 +72,7 @@ export default function Dipendenti() {
   const [form, setForm] = useState({
     nome:'',cognome:'',azienda:'',mansione:'',nome_programma:'',data_nascita:'',luogo_nascita:'',
     codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',
-    tipo_contratto:'',scadenza_visita_medica:'',note:''
+    tipo_contratto:'',scadenza_visita_medica:'',note:'', tecnico: false
   })
   const [formCorso, setFormCorso] = useState({ nome_corso:'',ente_erogatore:'',data_conseguimento:'',scadenza:'',note:'' })
 
@@ -110,19 +110,23 @@ export default function Dipendenti() {
   async function sposta(dipId: string, direzione: 'su' | 'giu') {
     const dip = dipendenti.find(d => d.id === dipId)
     if (!dip) return
-    // Prendi tutti i dipendenti della stessa azienda con stesso stato attivo/ex
-    const stessaAz = dipendenti.filter(d => d.azienda === dip.azienda && d.attivo === dip.attivo)
+    // Lista ordinata della stessa azienda (stessa logica del sort in load)
+    const stessaAz = dipendenti.filter(d => d.azienda === dip.azienda)
     const idx = stessaAz.findIndex(d => d.id === dipId)
     const swapIdx = direzione === 'su' ? idx - 1 : idx + 1
     if (swapIdx < 0 || swapIdx >= stessaAz.length) return
     const other = stessaAz[swapIdx]
-    // Assegna ordine se mancante
-    const ordA = dip.ordine ?? (idx * 10)
-    const ordB = other.ordine ?? (swapIdx * 10)
-    await Promise.all([
+    // Se ordine non è ancora valorizzato, assegna valori di default
+    const ordA = dip.ordine != null ? dip.ordine : idx * 10
+    const ordB = other.ordine != null ? other.ordine : swapIdx * 10
+    const [r1, r2] = await Promise.all([
       supabase.from('dipendenti').update({ ordine: ordB }).eq('id', dipId),
       supabase.from('dipendenti').update({ ordine: ordA }).eq('id', other.id),
     ])
+    if (r1.error || r2.error) {
+      alert('Errore spostamento: ' + (r1.error?.message || r2.error?.message || 'sconosciuto') + '\n\nHai eseguito il SQL 12_sql_dipendenti_tecnico_ordine.sql in Supabase?')
+      return
+    }
     load()
   }
 
@@ -155,7 +159,7 @@ export default function Dipendenti() {
   async function salva() {
     if (!form.nome || !form.cognome || !form.azienda) { alert('Nome, cognome e azienda obbligatori'); return }
     setLoading(true)
-    await supabase.from('dipendenti').insert({ nome:form.nome, cognome:form.cognome, azienda:form.azienda, mansione:form.mansione, nome_programma:form.nome_programma||null, data_nascita:form.data_nascita||null, luogo_nascita:form.luogo_nascita, codice_fiscale:form.codice_fiscale, data_inizio_contratto:form.data_inizio_contratto||null, data_fine_contratto:form.data_fine_contratto||null, tipo_contratto:form.tipo_contratto, scadenza_visita_medica:form.scadenza_visita_medica||null, note:form.note, attivo:true })
+    await supabase.from('dipendenti').insert({ nome:form.nome, cognome:form.cognome, azienda:form.azienda, mansione:form.mansione, nome_programma:form.nome_programma||null, data_nascita:form.data_nascita||null, luogo_nascita:form.luogo_nascita, codice_fiscale:form.codice_fiscale, data_inizio_contratto:form.data_inizio_contratto||null, data_fine_contratto:form.data_fine_contratto||null, tipo_contratto:form.tipo_contratto, scadenza_visita_medica:form.scadenza_visita_medica||null, note:form.note, attivo:true, tecnico: form.tecnico })
     setModal(false)
     setForm({nome:'',cognome:'',azienda:'',mansione:'',nome_programma:'',data_nascita:'',luogo_nascita:'',codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',tipo_contratto:'',scadenza_visita_medica:'',note:''})
     setLoading(false); load()
@@ -163,7 +167,7 @@ export default function Dipendenti() {
 
   async function salvaModifica() {
     if (!modalModifica) return; setLoading(true)
-    await supabase.from('dipendenti').update({ nome:modalModifica.nome, cognome:modalModifica.cognome, azienda:modalModifica.azienda, mansione:modalModifica.mansione, nome_programma:modalModifica.nome_programma||null, data_nascita:modalModifica.data_nascita||null, luogo_nascita:modalModifica.luogo_nascita, codice_fiscale:modalModifica.codice_fiscale, data_inizio_contratto:modalModifica.data_inizio_contratto||null, data_fine_contratto:modalModifica.data_fine_contratto||null, tipo_contratto:modalModifica.tipo_contratto, scadenza_visita_medica:modalModifica.scadenza_visita_medica||null, note:modalModifica.note }).eq('id', modalModifica.id)
+    await supabase.from('dipendenti').update({ nome:modalModifica.nome, cognome:modalModifica.cognome, azienda:modalModifica.azienda, mansione:modalModifica.mansione, nome_programma:modalModifica.nome_programma||null, data_nascita:modalModifica.data_nascita||null, luogo_nascita:modalModifica.luogo_nascita, codice_fiscale:modalModifica.codice_fiscale, data_inizio_contratto:modalModifica.data_inizio_contratto||null, data_fine_contratto:modalModifica.data_fine_contratto||null, tipo_contratto:modalModifica.tipo_contratto, scadenza_visita_medica:modalModifica.scadenza_visita_medica||null, note:modalModifica.note, tecnico: !!modalModifica.tecnico }).eq('id', modalModifica.id)
     setModalModifica(null); setLoading(false); load()
     if (selezionato?.id === modalModifica.id) apriDipendente(modalModifica)
   }
@@ -338,7 +342,8 @@ export default function Dipendenti() {
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between">
                               <p className="text-sm font-medium truncate">{d.cognome} {d.nome}</p>
-                              <div className="flex gap-1 flex-shrink-0">
+                              <div className="flex gap-1 flex-shrink-0 items-center">
+                                {d.tecnico && <span className="text-xs bg-purple-100 text-purple-700 font-bold px-1 rounded" title="Tecnico">T</span>}
                                 {hasVisitaAlert(d) && <span title={`Visita: ${formatData(d.scadenza_visita_medica)}`}>⚕️</span>}
                                 {hasContrattoAlert(d) && <span title={`Contratto: ${formatData(d.data_fine_contratto)}`}>📋</span>}
                               </div>
@@ -525,6 +530,13 @@ export default function Dipendenti() {
               <div><label className="label">Scadenza visita medica</label><input className="input" type="date" value={form.scadenza_visita_medica} onChange={e=>setForm({...form,scadenza_visita_medica:e.target.value})} /></div>
               <div></div>
               <div className="col-span-2"><label className="label">Note</label><textarea className="input h-16 resize-none" value={form.note} onChange={e=>setForm({...form,note:e.target.value})} /></div>
+              <div className="col-span-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" className="w-4 h-4 rounded" checked={!!form.tecnico} onChange={e=>setForm({...form,tecnico:e.target.checked})} />
+                  <span className="text-sm font-medium text-purple-700">Tecnico</span>
+                  <span className="text-xs text-gray-500">(non va in cantiere — la sua presenza viene chiesta separatamente all'approvazione)</span>
+                </label>
+              </div>
             </div>
             <div className="flex gap-2 justify-end mt-4"><button className="btn" onClick={()=>setModal(false)}>Annulla</button><button className="btn btn-primary" onClick={salva} disabled={loading}>{loading?'Salvataggio...':'Salva'}</button></div>
           </div>
@@ -552,6 +564,13 @@ export default function Dipendenti() {
               <div><label className="label">Scadenza visita medica</label><input className="input" type="date" value={modalModifica.scadenza_visita_medica||''} onChange={e=>setModalModifica({...modalModifica,scadenza_visita_medica:e.target.value})} /></div>
               <div></div>
               <div className="col-span-2"><label className="label">Note</label><textarea className="input h-16 resize-none" value={modalModifica.note||''} onChange={e=>setModalModifica({...modalModifica,note:e.target.value})} /></div>
+              <div className="col-span-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" className="w-4 h-4 rounded" checked={!!modalModifica.tecnico} onChange={e=>setModalModifica({...modalModifica,tecnico:e.target.checked})} />
+                  <span className="text-sm font-medium text-purple-700">Tecnico</span>
+                  <span className="text-xs text-gray-500">(non va in cantiere)</span>
+                </label>
+              </div>
             </div>
             <div className="flex gap-2 justify-end mt-4"><button className="btn" onClick={()=>setModalModifica(null)}>Annulla</button><button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading?'Salvataggio...':'Salva modifiche'}</button></div>
           </div>
