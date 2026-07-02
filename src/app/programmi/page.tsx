@@ -34,6 +34,7 @@ export default function ProgrammiPage() {
   const [salvandoApprovazione, setSalvandoApprovazione] = useState(false)
   const [mezzoInSelezione, setMezzoInSelezione] = useState<{ id: string; nome: string } | null>(null)
   const [giorniNonApprovati, setGiorniNonApprovati] = useState<Record<Societa, string[]>>({ 'BC General Service': [], 'Filosofia': [] })
+  const [statiPresenzaTecnici, setStatiPresenzaTecnici] = useState<Record<string, { stato: 'presente'|'assente'|'parziale', ore: number }>>({})
 
   const cantieri = programmi[societaAttiva]
   const mezziSocieta = mezziDB.filter(m => (m.societa || 'BC General Service') === societaAttiva)
@@ -41,6 +42,7 @@ export default function ProgrammiPage() {
   const mezziUsati = new Set(cantieri.flatMap(c => c.mezzi.map(m => m.id)))
 
   const dipPerAzienda = dipendenti.reduce((acc, d) => {
+    if (d.tecnico) return acc // i tecnici non vanno nel pool cantieri
     const libero = !dipUsati.has(d.id)
     if (vistaPool === 'liberi' && !libero) return acc
     if (!acc[d.azienda]) acc[d.azienda] = []
@@ -212,6 +214,11 @@ export default function ProgrammiPage() {
     for (const c of programmi[societaAttiva]) for (const l of c.lavorazioni) for (const p of l.persone)
       stati[p.id] = { stato: 'presente', ore: 1, cantiere: c.nome || 'Cantiere senza nome' }
     setStatiPresenza(stati)
+    // Tecnici: sezione separata, tutti partono da "presente"
+    const statiTec: typeof statiPresenzaTecnici = {}
+    for (const d of dipendenti.filter(d => d.tecnico))
+      statiTec[d.id] = { stato: 'presente', ore: 1 }
+    setStatiPresenzaTecnici(statiTec)
     setConducenti({})
     setModalApprova(true)
   }
@@ -235,14 +242,36 @@ export default function ProgrammiPage() {
     if (mancanti.length > 0) { alert(`Manca il conducente per: ${mancanti.map(m => m.nomeMezzo).join(', ')}`); return }
     setSalvandoApprovazione(true)
 
-    // 1) Presenze — SOLO questa società, completamente indipendente dall'altra
+    const ora = new Date().toISOString()
+    const approvatore = currentUserEmail || 'sconosciuto'
+
+    // 1) Presenze dipendenti in cantiere
     const righePresenze = Object.entries(statiPresenza).map(([dipId, s]) => ({
       data: dataProgr, dipendente_id: dipId, societa: soc,
       stato: s.stato, ore: s.ore, origine: 'da_programma', cantiere_nome: s.cantiere || null,
-      approvato: true, approvato_da: currentUserEmail || 'sconosciuto', approvato_il: new Date().toISOString(),
+      approvato: true, approvato_da: approvatore, approvato_il: ora,
     }))
-    if (righePresenze.length > 0) {
-      const { error: errPresenze } = await supabase.from('presenze').upsert(righePresenze, { onConflict: 'data,dipendente_id' })
+
+    // 2) Presenze tecnici (sezione separata)
+    const righeTecnici = Object.entries(statiPresenzaTecnici).map(([dipId, s]) => ({
+      data: dataProgr, dipendente_id: dipId, societa: soc,
+      stato: s.stato, ore: s.ore, origine: 'tecnico', cantiere_nome: null,
+      approvato: true, approvato_da: approvatore, approvato_il: ora,
+    }))
+
+    // 3) Auto-assenti: dipendenti non tecnici non assegnati a nessun cantiere
+    const idGiaTracciati = new Set([...Object.keys(statiPresenza), ...Object.keys(statiPresenzaTecnici)])
+    const righeAssenti = dipendenti
+      .filter(d => !d.tecnico && !idGiaTracciati.has(d.id))
+      .map(d => ({
+        data: dataProgr, dipendente_id: d.id, societa: soc,
+        stato: 'assente' as const, ore: 0, origine: 'automatico', cantiere_nome: null,
+        approvato: true, approvato_da: approvatore, approvato_il: ora,
+      }))
+
+    const tutteRighe = [...righePresenze, ...righeTecnici, ...righeAssenti]
+    if (tutteRighe.length > 0) {
+      const { error: errPresenze } = await supabase.from('presenze').upsert(tutteRighe, { onConflict: 'data,dipendente_id' })
       if (errPresenze) {
         alert(`❌ Errore salvataggio presenze: ${errPresenze.message}\n\nCodice: ${errPresenze.code}`)
         setSalvandoApprovazione(false)
@@ -250,7 +279,7 @@ export default function ProgrammiPage() {
       }
     }
 
-    // 2) Utilizzo mezzi — solo quelli di questa società
+    // 4) Utilizzo mezzi
     if (mezzi.length > 0) {
       const righeMezzi = mezzi.map(m => {
         const dip = dipendenti.find(d => d.id === conducenti[m.mezzoId])
@@ -260,8 +289,8 @@ export default function ProgrammiPage() {
       if (error) console.error('Errore utilizzo mezzi:', error)
     }
 
-    // 3) Marca SOLO questa società come approvata
-    await supabase.from('programma_giornaliero').update({ presenze_approvate: true, approvato_da: currentUserEmail || 'sconosciuto', approvato_il: new Date().toISOString() }).eq('societa', soc).eq('data', dataProgr)
+    // 5) Marca questa società come approvata
+    await supabase.from('programma_giornaliero').update({ presenze_approvate: true, approvato_da: approvatore, approvato_il: ora }).eq('societa', soc).eq('data', dataProgr)
 
     setSalvandoApprovazione(false)
     setModalApprova(false)
@@ -404,11 +433,11 @@ export default function ProgrammiPage() {
                             {cantieri.map(c => (
                               <button key={c.id}
                                 className="w-full text-left text-xs px-2 py-1 rounded hover:bg-blue-200 text-blue-900 truncate block mb-0.5"
-                                onClick={() => { aggiungiMezzo(c.id, m); setMezzoInSelezione(null) }}>
+                                onClick={e => { e.stopPropagation(); aggiungiMezzo(c.id, m); setMezzoInSelezione(null) }}>
                                 📍 {c.nome || 'Cantiere senza nome'}
                               </button>
                             ))}
-                            <button className="text-xs text-gray-400 mt-1" onClick={() => setMezzoInSelezione(null)}>Annulla</button>
+                            <button className="text-xs text-gray-400 mt-1" onClick={e => { e.stopPropagation(); setMezzoInSelezione(null) }}>Annulla</button>
                           </div>
                         )}
                         {isInSelezione && cantieri.length === 0 && (
@@ -542,9 +571,40 @@ export default function ProgrammiPage() {
                   {Object.keys(statiPresenza).length === 0 && <p className="text-sm text-gray-400 text-center py-4">Nessun dipendente assegnato ai cantieri di {societaAttiva} oggi.</p>}
                 </div>
               </div>
+              {/* Sezione Tecnici */}
+              {Object.keys(statiPresenzaTecnici).length > 0 && (
+                <div>
+                  <h3 className="font-medium text-sm mb-2">🖥️ Tecnici — conferma presenza</h3>
+                  <div className="space-y-1 border border-purple-100 rounded-lg p-2 bg-purple-50">
+                    {Object.entries(statiPresenzaTecnici).map(([dipId, s]) => {
+                      const dip = dipendenti.find(d => d.id === dipId)
+                      if (!dip) return null
+                      return (
+                        <div key={dipId} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-purple-100">
+                          <p className="text-sm font-medium truncate">{dip.cognome} {dip.nome}</p>
+                          <div className="flex gap-1 flex-shrink-0">
+                            {(['presente','parziale','assente'] as const).map(opt => (
+                              <button key={opt}
+                                onClick={() => {
+                                  const ore = opt === 'presente' ? 1 : opt === 'parziale' ? 0.5 : 0
+                                  setStatiPresenzaTecnici(prev => ({ ...prev, [dipId]: { stato: opt, ore } }))
+                                }}
+                                className={`text-xs px-2 py-1 rounded-lg border font-medium transition-colors ${s.stato === opt
+                                  ? (opt === 'presente' ? 'bg-green-600 text-white border-green-600' : opt === 'parziale' ? 'bg-amber-500 text-white border-amber-500' : 'bg-red-500 text-white border-red-500')
+                                  : 'bg-white text-gray-400 border-gray-200'}`}>
+                                {opt === 'presente' ? '✓ Pres.' : opt === 'parziale' ? '½ Mezza' : '✕ Ass.'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div>
-                <h3 className="font-medium text-sm mb-2">🚐 Abbinamento mezzi (obbligatorio)</h3>
-                {mezziDaAbbinare().length === 0 ? <p className="text-sm text-gray-400">Nessun mezzo assegnato oggi.</p> : (
+                <h3 className="font-medium text-sm mb-2">🚐 Abbinamento mezzi (obbligatorio)</h3>                {mezziDaAbbinare().length === 0 ? <p className="text-sm text-gray-400">Nessun mezzo assegnato oggi.</p> : (
                   <div className="space-y-2">
                     {mezziDaAbbinare().map(m => (
                       <div key={m.mezzoId} className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
