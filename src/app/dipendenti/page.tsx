@@ -161,7 +161,7 @@ export default function Dipendenti() {
     setLoading(true)
     await supabase.from('dipendenti').insert({ nome:form.nome, cognome:form.cognome, azienda:form.azienda, mansione:form.mansione, nome_programma:form.nome_programma||null, data_nascita:form.data_nascita||null, luogo_nascita:form.luogo_nascita, codice_fiscale:form.codice_fiscale, data_inizio_contratto:form.data_inizio_contratto||null, data_fine_contratto:form.data_fine_contratto||null, tipo_contratto:form.tipo_contratto, scadenza_visita_medica:form.scadenza_visita_medica||null, note:form.note, attivo:true, tecnico: form.tecnico })
     setModal(false)
-    setForm({nome:'',cognome:'',azienda:'',mansione:'',nome_programma:'',data_nascita:'',luogo_nascita:'',codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',tipo_contratto:'',scadenza_visita_medica:'',note:''})
+    setForm({nome:'',cognome:'',azienda:'',mansione:'',nome_programma:'',data_nascita:'',luogo_nascita:'',codice_fiscale:'',data_inizio_contratto:'',data_fine_contratto:'',tipo_contratto:'',scadenza_visita_medica:'',note:'',tecnico:false})
     setLoading(false); load()
   }
 
