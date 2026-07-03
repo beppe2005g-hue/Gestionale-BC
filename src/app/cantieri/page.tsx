@@ -354,7 +354,6 @@ export default function CantieriPage() {
                       ))}
                     </tbody>
                   </table>
-                  {t => t.note && <p className="text-xs text-gray-400 px-4 py-2">{t.note}</p>}
                 </div>
               )}
             </div>
