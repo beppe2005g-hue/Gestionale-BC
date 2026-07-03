@@ -79,7 +79,7 @@ export default function ProgrammiPage() {
     setLoading(true)
     setAggiornamentoDisponibile(false)
     const [{ data: dip }, { data: mez }, { data: progBC }, { data: progFil }] = await Promise.all([
-      supabase.from('dipendenti').select('id,nome,cognome,azienda,nome_programma,foto_url').eq('attivo', true).order('cognome'),
+      supabase.from('dipendenti').select('id,nome,cognome,azienda,nome_programma,foto_url,ordine,tecnico').eq('attivo', true).order('ordine', { ascending: true, nullsFirst: false }).order('cognome'),
       supabase.from('mezzi').select('id,nome,targa,posti,societa').eq('attivo', true).order('nome'),
       supabase.from('programma_giornaliero').select('*').eq('societa', 'BC General Service').eq('data', dataProgr).limit(1),
       supabase.from('programma_giornaliero').select('*').eq('societa', 'Filosofia').eq('data', dataProgr).limit(1),
