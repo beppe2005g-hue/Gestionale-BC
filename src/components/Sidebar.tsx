@@ -15,6 +15,7 @@ const nav = [
     { href: '/costi-cantiere', label: 'Costi cantiere', icon: '💰', perm: 'perm_costi_cantiere' },
     { href: '/programmi', label: 'Programmi', icon: '📋', perm: 'perm_programmi' },
     { href: '/presenze', label: 'Presenze', icon: '📅', perm: 'perm_presenze' },
+    { href: '/cantieri', label: 'Cantieri', icon: '🏗️', perm: 'perm_cantieri' },
     { href: '/cassa-edile', label: 'Cassa Edile', icon: '🏗️', perm: 'perm_cassa_edile' },
   ]},
   { section: 'Ciclo Passivo', items: [
