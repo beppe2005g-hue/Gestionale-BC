@@ -68,15 +68,57 @@ export default function ScadenzeAziendaliPage() {
   const [form, setForm] = useState(formVuoto)
   const [editing, setEditing] = useState<any | null>(null)
   const [salvando, setSalvando] = useState(false)
+  // Pagamenti
+  const [modalPagamento, setModalPagamento] = useState<any | null>(null)
+  const [pagamentiMap, setPagamentiMap] = useState<Record<string, any[]>>({})
+  const [formPag, setFormPag] = useState({ data_pagamento: new Date().toISOString().split('T')[0], importo: '', note: '' })
+  const [salvandoPag, setSalvandoPag] = useState(false)
 
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
-    const q = supabase.from('scadenze_aziendali').select('*').order('scadenza', { ascending: true })
-    const { data } = await q
+    const { data } = await supabase.from('scadenze_aziendali').select('*').order('scadenza', { ascending: true })
     setScadenze(data || [])
+    // Carica i pagamenti per tutte le scadenze
+    if (data && data.length > 0) {
+      const ids = data.map((s: any) => s.id)
+      const { data: pags } = await supabase.from('scadenze_pagamenti')
+        .select('*').in('scadenza_id', ids).order('data_pagamento', { ascending: false })
+      const mappa: Record<string, any[]> = {}
+      for (const p of pags || []) {
+        if (!mappa[p.scadenza_id]) mappa[p.scadenza_id] = []
+        mappa[p.scadenza_id].push(p)
+      }
+      setPagamentiMap(mappa)
+    }
     setLoading(false)
+  }
+
+  async function registraPagamento() {
+    if (!modalPagamento) return
+    if (!formPag.importo) { alert('Inserisci l\'importo del pagamento'); return }
+    setSalvandoPag(true)
+    await supabase.from('scadenze_pagamenti').insert({
+      scadenza_id: modalPagamento.id,
+      data_pagamento: formPag.data_pagamento || new Date().toISOString().split('T')[0],
+      importo: parseFloat(formPag.importo.replace(',', '.')) || 0,
+      note: formPag.note.trim() || null,
+    })
+    // Se non ricorrente, archivia la scadenza
+    if (!modalPagamento.ricorrente) {
+      await supabase.from('scadenze_aziendali').update({ attiva: false, updated_at: new Date().toISOString() }).eq('id', modalPagamento.id)
+    }
+    setSalvandoPag(false)
+    setModalPagamento(null)
+    setFormPag({ data_pagamento: new Date().toISOString().split('T')[0], importo: '', note: '' })
+    load()
+  }
+
+  async function eliminaPagamento(pagId: string, scadenzaId: string) {
+    if (!confirm('Eliminare questo pagamento?')) return
+    await supabase.from('scadenze_pagamenti').delete().eq('id', pagId)
+    load()
   }
 
   function apriNuovo() {
@@ -263,6 +305,23 @@ export default function ScadenzeAziendaliPage() {
                           {s.importo && <span className="text-sm font-medium text-gray-800">💶 {formatImporto(s.importo)}</span>}
                         </div>
                         {s.note && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{s.note}</p>}
+
+                        {/* Storico pagamenti nella card */}
+                        {pagamentiMap[s.id] && pagamentiMap[s.id].length > 0 && (
+                          <div className="mt-2 border-t border-gray-100 pt-2">
+                            <p className="text-xs font-semibold text-gray-500 mb-1">💳 Pagamenti registrati</p>
+                            <div className="space-y-1">
+                              {pagamentiMap[s.id].map(p => (
+                                <div key={p.id} className="flex items-center gap-2 text-xs bg-green-50 rounded px-2 py-1">
+                                  <span className="text-gray-500">{new Date(p.data_pagamento + 'T12:00:00').toLocaleDateString('it-IT')}</span>
+                                  <span className="font-semibold text-green-700">{formatImporto(p.importo)}</span>
+                                  {p.note && <span className="text-gray-400 italic truncate flex-1">{p.note}</span>}
+                                  <button onClick={e => { e.stopPropagation(); eliminaPagamento(p.id, s.id) }} className="text-gray-300 hover:text-red-400 ml-auto">✕</button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Badge urgenza */}
@@ -275,6 +334,14 @@ export default function ScadenzeAziendaliPage() {
                   {/* Azioni */}
                   <div className="flex flex-col gap-1 flex-shrink-0">
                     <button onClick={() => apriModifica(s)} className="btn btn-sm text-xs py-1">✏️</button>
+                    {s.attiva && (
+                      <button
+                        onClick={() => { setModalPagamento(s); setFormPag({ data_pagamento: new Date().toISOString().split('T')[0], importo: s.importo ? String(s.importo) : '', note: '' }) }}
+                        className="btn btn-sm text-xs py-1 bg-green-50 text-green-700 border-green-200 hover:bg-green-100"
+                        title={s.ricorrente ? 'Registra pagamento' : 'Paga e archivia'}>
+                        💳
+                      </button>
+                    )}
                     {s.ricorrente && s.attiva && (
                       <button onClick={() => rinnova(s)} className="btn btn-sm text-xs py-1 bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100" title="Rinnova data">🔄</button>
                     )}
@@ -289,6 +356,44 @@ export default function ScadenzeAziendaliPage() {
           </div>
         </div>
       </main>
+
+      {/* Modal registra pagamento */}
+      {modalPagamento && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-md shadow-xl">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="font-semibold text-base">💳 Registra pagamento</h2>
+                <p className="text-xs text-gray-500 mt-0.5">{modalPagamento.descrizione}</p>
+                {!modalPagamento.ricorrente && (
+                  <p className="text-xs text-amber-600 mt-1">⚠️ Non ricorrente: la scadenza verrà archiviata dopo il pagamento</p>
+                )}
+              </div>
+              <button onClick={() => setModalPagamento(null)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div>
+                <label className="label">Data pagamento</label>
+                <input type="date" className="input" value={formPag.data_pagamento} onChange={e => setFormPag({ ...formPag, data_pagamento: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Importo pagato (€) *</label>
+                <input className="input" placeholder="es. 1200,00" value={formPag.importo} onChange={e => setFormPag({ ...formPag, importo: e.target.value })} />
+              </div>
+              <div>
+                <label className="label">Note</label>
+                <input className="input" placeholder="es. Bonifico n. 1234, riferimento fattura..." value={formPag.note} onChange={e => setFormPag({ ...formPag, note: e.target.value })} />
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2">
+              <button className="btn" onClick={() => setModalPagamento(null)}>Annulla</button>
+              <button className="btn btn-primary" onClick={registraPagamento} disabled={salvandoPag}>
+                {salvandoPag ? 'Salvataggio...' : modalPagamento.ricorrente ? '💳 Registra pagamento' : '💳 Paga e archivia'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal nuovo / modifica */}
       {modal && (
