@@ -43,6 +43,7 @@ export default function PresenzeMonthly() {
   const [salvandoCella, setSalvandoCella] = useState(false)
   const [hoveredCell, setHoveredCell] = useState<{ dipId: string; dayIdx: number } | null>(null)
   const [giorniNonApprovati, setGiorniNonApprovati] = useState<Set<string>>(new Set())
+  const [dipInizioMap, setDipInizioMap] = useState<Record<string, string | null>>({})
   const popoverRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { loadDati() }, [anno, mese])
@@ -62,7 +63,7 @@ export default function PresenzeMonthly() {
     const fine = `${anno}-${String(mese + 1).padStart(2, '0')}-${String(fineDate.getDate()).padStart(2, '0')}`
 
     const [{ data: dip }, { data: pres }, { data: nonApprovati }] = await Promise.all([
-      supabase.from('dipendenti').select('id,nome,cognome,azienda,ordine').eq('attivo', true).order('ordine', { ascending: true, nullsFirst: false }).order('cognome').order('nome'),
+      supabase.from('dipendenti').select('id,nome,cognome,azienda,ordine,data_inizio_contratto').eq('attivo', true).order('ordine', { ascending: true, nullsFirst: false }).order('cognome').order('nome'),
       supabase.from('presenze').select('dipendente_id,data,ore,approvato').gte('data', inizio).lte('data', fine),
       // Giorni con programma salvato ma presenze non approvate (solo passati)
       supabase.from('programma_giornaliero')
@@ -85,6 +86,11 @@ export default function PresenzeMonthly() {
       return a.nome.localeCompare(b.nome)
     })
     setDipendenti(dipOrdinati)
+
+    // Mappa dipendente → data inizio contratto
+    const inizioMap: Record<string, string | null> = {}
+    for (const d of dipOrdinati) inizioMap[d.id] = d.data_inizio_contratto || null
+    setDipInizioMap(inizioMap)
 
     const mappa: Record<string, Record<string, { ore: number, approvato: boolean }>> = {}
     for (const p of pres || []) {
@@ -220,7 +226,9 @@ export default function PresenzeMonthly() {
               <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-green-100 border border-green-400 inline-flex items-center justify-center text-green-800 font-bold">1</span> Presente</span>
               <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-amber-100 border border-amber-400 inline-flex items-center justify-center text-amber-800 font-bold text-xs">½</span> Mezza giornata</span>
               <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-red-50 border border-red-300 inline-flex items-center justify-center text-red-600 font-bold">0</span> Assente</span>
-              <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-gray-200 inline-block"></span> Domenica</span>
+              <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-yellow-300 inline-block"></span> Sabato</span>
+              <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-red-200 inline-block"></span> Domenica</span>
+              <span className="flex items-center gap-1"><span className="w-5 h-5 rounded bg-red-700 inline-block"></span> Non assunto</span>
             </div>
 
             <table className="border-collapse text-xs" style={{ fontSize: '10px', minWidth: '100%' }}>
@@ -237,12 +245,15 @@ export default function PresenzeMonthly() {
                     const isNonApprovato = giorniNonApprovati.has(keyData) && dow !== 0
                     return (
                       <th key={i} className={`border border-gray-400 text-center font-bold px-0 py-1 ${
-                        dow === 0 ? 'bg-gray-500 text-white' :
-                        dow === 6 ? 'bg-blue-700 text-white' :
+                        dow === 0 ? 'bg-red-700 text-white' :
+                        dow === 6 ? 'bg-yellow-400 text-gray-900' :
                         isOggi ? 'bg-blue-500 text-white' :
                         'bg-gray-800 text-white'
                       }`} style={{ minWidth: 24 }}>
-                        <span className="block text-gray-300" style={{ fontSize: 7 }}>{GIORNI_SETTIMANA[dow]}</span>
+                        <span style={{ fontSize: 7 }}
+                          className={`block ${dow === 6 ? 'text-gray-800' : 'text-gray-300'}`}>
+                          {GIORNI_SETTIMANA[dow]}
+                        </span>
                         <span className={`inline-block leading-none transition-all ${
                           isHovered
                             ? 'bg-yellow-300 text-gray-900 rounded font-black px-0.5'
@@ -288,8 +299,24 @@ export default function PresenzeMonthly() {
                           </td>
                           {giorni.map((g, gi) => {
                             const dow = g.getDay()
+                            const dataYMD = dateToYMD(g)
+
+                            // Pre-assunzione: rosso pieno, non cliccabile
+                            const dataInizio = dipInizioMap[d.id]
+                            if (dataInizio && dataYMD < dataInizio) {
+                              return (
+                                <td key={gi}
+                                  className="border border-red-900 bg-red-700"
+                                  style={{ minWidth: 24 }}
+                                  title={`${nomeCognome} — non ancora assunto`}
+                                  onMouseEnter={() => setHoveredCell(null)} />
+                              )
+                            }
+
+                            // Domenica: cella rossa vuota
                             if (dow === 0) return (
-                              <td key={gi} className="border border-gray-300 bg-gray-200"
+                              <td key={gi} className="border border-red-300 bg-red-200"
+                                style={{ minWidth: 24 }}
                                 onMouseEnter={() => setHoveredCell(null)}></td>
                             )
 
@@ -301,7 +328,8 @@ export default function PresenzeMonthly() {
                             const isRowHovered = hoveredCell?.dipId === d.id
 
                             let testo = ''
-                            let bgBase = dow === 6 ? 'bg-blue-50' : ''
+                            // Sabato = sfondo giallo pallido, domenica gestita sopra
+                            let bgBase = dow === 6 ? 'bg-yellow-50' : ''
                             if (isOggi) bgBase += ' ring-1 ring-inset ring-blue-400'
 
                             let colorCls = ''
