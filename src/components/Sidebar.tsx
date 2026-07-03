@@ -29,6 +29,7 @@ const nav = [
     { href: '/fatture-da-emettere', label: 'Fatture da emettere', icon: '🔔', perm: 'perm_fatture_da_emettere', badgeKey: 'fattureDaEmettere' },
   ]},
   { section: 'Controllo', items: [
+    { href: '/scadenze-aziendali', label: 'Scadenze aziendali', icon: '⏰', perm: 'perm_scadenze_aziendali', badgeKey: 'scadenzeAziendali' },
     { href: '/scadenzario', label: 'Scadenzario', icon: '📅', perm: 'perm_scadenzario' },
     { href: '/cashflow', label: 'Cash flow', icon: '📈', perm: 'perm_cashflow' },
     { href: '/budget', label: 'Budget vs Consuntivo', icon: '⚖', perm: 'perm_budget' },
@@ -109,7 +110,16 @@ export default function Sidebar() {
         inAllertaConPreavviso(m.scadenza_bollo, 30) ||
         inAllertaConPreavviso(m.scadenza_revisione, 30)
       ).length
-      setBadges({ fattureDaEmettere: countFde || 0, dipendentiScadenze: dipendentiInAllerta, mezziScadenze: mezziInAllerta })
+      const { data: scad } = await supabase
+        .from('scadenze_aziendali')
+        .select('scadenza')
+        .eq('attiva', true)
+      const oggi = new Date(); oggi.setHours(0,0,0,0)
+      const scadenzeInAllerta = (scad || []).filter(s => {
+        const giorni = Math.ceil((new Date(s.scadenza).getTime() - oggi.getTime()) / 86400000)
+        return giorni <= 30
+      }).length
+      setBadges({ fattureDaEmettere: countFde || 0, dipendentiScadenze: dipendentiInAllerta, mezziScadenze: mezziInAllerta, scadenzeAziendali: scadenzeInAllerta })
     }
     loadBadges()
   }, [])
