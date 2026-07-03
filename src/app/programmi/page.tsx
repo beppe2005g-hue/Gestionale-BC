@@ -35,6 +35,7 @@ export default function ProgrammiPage() {
   const [mezzoInSelezione, setMezzoInSelezione] = useState<{ id: string; nome: string } | null>(null)
   const [giorniNonApprovati, setGiorniNonApprovati] = useState<Record<Societa, string[]>>({ 'BC General Service': [], 'Filosofia': [] })
   const [statiPresenzaTecnici, setStatiPresenzaTecnici] = useState<Record<string, { stato: 'presente'|'assente'|'parziale', ore: number }>>({})
+  const [cantieriAperti, setCantieriAperti] = useState<string[]>([])
 
   const cantieri = programmi[societaAttiva]
   const mezziSocieta = mezziDB.filter(m => (m.societa || 'BC General Service') === societaAttiva)
@@ -58,6 +59,12 @@ export default function ProgrammiPage() {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setCurrentUserEmail(data.user?.email ?? null))
+  }, [])
+
+  useEffect(() => {
+    // Carica cantieri aperti per autocomplete
+    supabase.from('cantieri').select('nome').eq('stato', 'aperto').order('nome')
+      .then(({ data }) => setCantieriAperti((data || []).map((c: any) => c.nome)))
   }, [])
 
   useEffect(() => { load() }, [dataProgr])
@@ -460,7 +467,10 @@ export default function ProgrammiPage() {
             ) : cantieri.map(c => (
               <div key={c.id} className="border border-gray-200 rounded-xl overflow-hidden">
                 <div className={`px-3 py-2 flex items-center gap-2 ${societaAttiva === 'Filosofia' ? 'bg-orange-800' : 'bg-gray-800'}`}>
-                  <input className="flex-1 bg-transparent text-white text-sm font-semibold placeholder-gray-300 outline-none" placeholder="Nome cantiere..." value={c.nome} onChange={e => aggiornaCantiere(c.id, 'nome', e.target.value)} />
+                  <input className="flex-1 bg-transparent text-white text-sm font-semibold placeholder-gray-300 outline-none" placeholder="Nome cantiere..." value={c.nome} onChange={e => aggiornaCantiere(c.id, 'nome', e.target.value)} list={`cantieri-list-${c.id}`} />
+                  <datalist id={`cantieri-list-${c.id}`}>
+                    {cantieriAperti.map(nome => <option key={nome} value={nome} />)}
+                  </datalist>
                   <button onClick={() => rimuoviCantiere(c.id)} className="text-gray-300 hover:text-red-300 text-lg">×</button>
                 </div>
                 <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100">
