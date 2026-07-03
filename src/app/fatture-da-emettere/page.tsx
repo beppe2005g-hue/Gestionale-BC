@@ -188,7 +188,7 @@ export default function FattureDaEmetterePage() {
     const [{ data: p }, { data: cl }, { data: f }, { data: al }] = await Promise.all([
       supabase.from('progetti').select('id,codice,nome,cliente_id,modalita_pagamento_contratto,scadenza_pagamento_contratto,ritenuta_garanzia_perc,accettazione_prezzi_riferimento').order('codice'),
       // Carica tutti i dati del cliente per il blocco committente nella lettera
-      supabase.from('clienti').select('id,ragione_sociale,cf_piva,codice_sdi,indirizzo,via,comune,cap,provincia,email').eq('attivo', true).order('ragione_sociale'),
+      supabase.from('clienti').select('id,ragione_sociale,cf_piva,codice_sdi,indirizzo,via,comune,cap,provincia,email').order('ragione_sociale'),
       supabase.from('fatture_da_emettere').select('*, fatture_da_emettere_righe(*), progetti(codice,nome,ritenuta_garanzia_perc,modalita_pagamento_contratto,scadenza_pagamento_contratto)').order('created_at', { ascending: false }),
       supabase.from('aliquote_iva').select('*').eq('attiva', true).order('percentuale', { ascending: false }),
     ])
@@ -266,7 +266,7 @@ export default function FattureDaEmetterePage() {
   async function salvaFde() {
     const righeValide = formFde.righe.filter(r => r.descrizione && parseFloat(r.importo) > 0)
     if (righeValide.length === 0) { alert('Inserisci almeno una riga con descrizione e importo'); return }
-    if (!formFde.progetto_id) { alert('Seleziona il cantiere'); return }
+    if (!formFde.cliente_id) { alert('Seleziona il cliente'); return }
     if (!formFde.cliente_id) { alert('Seleziona il cliente'); return }
     if (!formFde.aliquota_id) { alert("Seleziona l'aliquota IVA"); return }
     setLoadingFde(true)
@@ -611,7 +611,7 @@ export default function FattureDaEmetterePage() {
 
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="col-span-2">
-                <label className="label">Cantiere *</label>
+                <label className="label">Cantiere (opzionale)</label>
                 <SearchableSelect
                   value={formFde.progetto_id}
                   onChange={v => onCambiaProgetto(v)}
