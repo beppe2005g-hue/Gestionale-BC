@@ -107,24 +107,27 @@ export default function Dipendenti() {
   }
 
   // Sposta dipendente su o giù nell'ordine, dentro la stessa azienda
+  // Riassegna l'intera sequenza ordine per evitare collisioni con null o valori uguali
   async function sposta(dipId: string, direzione: 'su' | 'giu') {
     const dip = dipendenti.find(d => d.id === dipId)
     if (!dip) return
-    // Lista ordinata della stessa azienda (stessa logica del sort in load)
-    const stessaAz = dipendenti.filter(d => d.azienda === dip.azienda)
-    const idx = stessaAz.findIndex(d => d.id === dipId)
+    // Lista ordinata della stessa azienda (già ordinata per ordine nel state)
+    const lista = dipendenti.filter(d => d.azienda === dip.azienda)
+    const idx = lista.findIndex(d => d.id === dipId)
     const swapIdx = direzione === 'su' ? idx - 1 : idx + 1
-    if (swapIdx < 0 || swapIdx >= stessaAz.length) return
-    const other = stessaAz[swapIdx]
-    // Se ordine non è ancora valorizzato, assegna valori di default
-    const ordA = dip.ordine != null ? dip.ordine : idx * 10
-    const ordB = other.ordine != null ? other.ordine : swapIdx * 10
-    const [r1, r2] = await Promise.all([
-      supabase.from('dipendenti').update({ ordine: ordB }).eq('id', dipId),
-      supabase.from('dipendenti').update({ ordine: ordA }).eq('id', other.id),
-    ])
-    if (r1.error || r2.error) {
-      alert('Errore spostamento: ' + (r1.error?.message || r2.error?.message || 'sconosciuto') + '\n\nHai eseguito il SQL 12_sql_dipendenti_tecnico_ordine.sql in Supabase?')
+    if (swapIdx < 0 || swapIdx >= lista.length) return
+    // Sposta nell'array in-memory
+    const nuova = [...lista]
+    const [rimosso] = nuova.splice(idx, 1)
+    nuova.splice(swapIdx, 0, rimosso)
+    // Riassegna ordine come 10, 20, 30, ... così non ci sono mai null o duplicati
+    const aggiornamenti = nuova.map((d, i) =>
+      supabase.from('dipendenti').update({ ordine: (i + 1) * 10 }).eq('id', d.id)
+    )
+    const risultati = await Promise.all(aggiornamenti)
+    const errore = risultati.find(r => r.error)?.error
+    if (errore) {
+      alert('Errore spostamento: ' + errore.message + '\n\nHai eseguito il SQL 12_sql_dipendenti_tecnico_ordine.sql in Supabase?')
       return
     }
     load()
