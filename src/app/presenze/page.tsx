@@ -62,7 +62,7 @@ export default function PresenzeMonthly() {
     const fine = `${anno}-${String(mese + 1).padStart(2, '0')}-${String(fineDate.getDate()).padStart(2, '0')}`
 
     const [{ data: dip }, { data: pres }, { data: nonApprovati }] = await Promise.all([
-      supabase.from('dipendenti').select('id,nome,cognome,azienda').eq('attivo', true).order('cognome').order('nome'),
+      supabase.from('dipendenti').select('id,nome,cognome,azienda,ordine').eq('attivo', true).order('ordine', { ascending: true, nullsFirst: false }).order('cognome').order('nome'),
       supabase.from('presenze').select('dipendente_id,data,ore,approvato').gte('data', inizio).lte('data', fine),
       // Giorni con programma salvato ma presenze non approvate (solo passati)
       supabase.from('programma_giornaliero')
