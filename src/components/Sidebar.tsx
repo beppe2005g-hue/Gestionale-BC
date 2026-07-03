@@ -119,7 +119,7 @@ export default function Sidebar() {
       const oggi = new Date(); oggi.setHours(0,0,0,0)
       const scadenzeInAllerta = (scad || []).filter(s => {
         const giorni = Math.ceil((new Date(s.scadenza).getTime() - oggi.getTime()) / 86400000)
-        return giorni <= 30
+        return giorni <= 10 && giorni >= 0
       }).length
       setBadges({ fattureDaEmettere: countFde || 0, dipendentiScadenze: dipendentiInAllerta, mezziScadenze: mezziInAllerta, scadenzeAziendali: scadenzeInAllerta })
     }
