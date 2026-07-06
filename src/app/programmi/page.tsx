@@ -179,6 +179,15 @@ export default function ProgrammiPage() {
   function aggiungiCantiere() { update([...cantieri, { id: genId(), nome: '', note: '', lavorazioni: [{ id: genId(), nome: '', persone: [] }], mezzi: [] }]) }
   function rimuoviCantiere(cid: string) { update(cantieri.filter(c => c.id !== cid)) }
   function aggiornaCantiere(cid: string, campo: string, val: string) { update(cantieri.map(c => c.id === cid ? { ...c, [campo]: val } : c)) }
+  function spostaCantiere(cid: string, direzione: 'su' | 'giu') {
+    const idx = cantieri.findIndex(c => c.id === cid)
+    if (direzione === 'su' && idx === 0) return
+    if (direzione === 'giu' && idx === cantieri.length - 1) return
+    const nuovi = [...cantieri]
+    const target = direzione === 'su' ? idx - 1 : idx + 1
+    ;[nuovi[idx], nuovi[target]] = [nuovi[target], nuovi[idx]]
+    update(nuovi)
+  }
   function aggiungiLavorazione(cid: string) { update(cantieri.map(c => c.id === cid ? { ...c, lavorazioni: [...c.lavorazioni, { id: genId(), nome: '', persone: [] }] } : c)) }
   function rimuoviLavorazione(cid: string, lid: string) { update(cantieri.map(c => c.id === cid ? { ...c, lavorazioni: c.lavorazioni.filter(l => l.id !== lid) } : c)) }
   function aggiornaLavorazione(cid: string, lid: string, nome: string) { update(cantieri.map(c => c.id === cid ? { ...c, lavorazioni: c.lavorazioni.map(l => l.id === lid ? { ...l, nome } : l) } : c)) }
@@ -471,6 +480,11 @@ export default function ProgrammiPage() {
                   <datalist id={`cantieri-list-${c.id}`}>
                     {cantieriAperti.map(nome => <option key={nome} value={nome} />)}
                   </datalist>
+                  {/* Frecce riordino */}
+                  <button onClick={e => { e.stopPropagation(); spostaCantiere(c.id, 'su') }}
+                    className="text-gray-300 hover:text-white text-sm px-0.5" title="Sposta su">↑</button>
+                  <button onClick={e => { e.stopPropagation(); spostaCantiere(c.id, 'giu') }}
+                    className="text-gray-300 hover:text-white text-sm px-0.5" title="Sposta giù">↓</button>
                   <button onClick={() => rimuoviCantiere(c.id)} className="text-gray-300 hover:text-red-300 text-lg">×</button>
                 </div>
                 <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100">
