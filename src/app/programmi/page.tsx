@@ -37,12 +37,6 @@ export default function ProgrammiPage() {
   const [statiPresenzaTecnici, setStatiPresenzaTecnici] = useState<Record<string, { stato: 'presente'|'assente'|'parziale', ore: number }>>({})
   const [cantieriAperti, setCantieriAperti] = useState<string[]>([])
   const [cantieriProgetti, setCantieriProgetti] = useState<any[]>([])
-  // Modal importa da messaggio WhatsApp
-  const [modalMessaggio, setModalMessaggio] = useState(false)
-  const [testoMessaggio, setTestoMessaggio] = useState('')
-  const [analizzando, setAnalizzando] = useState(false)
-  const [erroreAI, setErroreAI] = useState('')
-  const [anteprimaAI, setAnteprimaAI] = useState<any[] | null>(null)
   // Stato per cantieri dipendenti nel modal approvazione: dipId -> {cantiere_id, cantiere_nome, is_vario, vario_nota}
   const [cantieriApprov, setCantieriApprov] = useState<Record<string, { cantiere_id: string; cantiere_nome: string; is_vario: boolean; vario_nota: string }>>({})
   // Mezzi nel modal approvazione: { mezzoId -> cantiere_nome } (editabili)
@@ -84,6 +78,8 @@ export default function ProgrammiPage() {
       .then(({ data }) => setMezziDB(data || []))
   }, [])
 
+  const [suggestFrom, setSuggestFrom] = useState<string>('')   // data da cui è stato copiato il programma
+
   useEffect(() => { load() }, [dataProgr])
 
   // Real-time: ascolta modifiche al programma per la data corrente
@@ -99,9 +95,16 @@ export default function ProgrammiPage() {
     return () => { supabase.removeChannel(channel) }
   }, [dataProgr])
 
+  function prevWorkingDay(dateStr: string): string {
+    const d = new Date(dateStr + 'T12:00:00')
+    do { d.setDate(d.getDate() - 1) } while (d.getDay() === 0 || d.getDay() === 6)
+    return d.toISOString().split('T')[0]
+  }
+
   async function load() {
     setLoading(true)
     setAggiornamentoDisponibile(false)
+    setSuggestFrom('')
     const [{ data: dip }, { data: mez }, { data: progBC }, { data: progFil }] = await Promise.all([
       supabase.from('dipendenti').select('id,nome,cognome,azienda,nome_programma,foto_url,ordine,tecnico').eq('attivo', true).order('ordine', { ascending: true, nullsFirst: false }).order('cognome'),
       supabase.from('mezzi').select('id,nome,targa,posti,societa').eq('attivo', true).order('nome'),
@@ -117,11 +120,26 @@ export default function ProgrammiPage() {
     if (progBC && progBC.length > 0) { nuoviProgrammi['BC General Service'] = progBC[0].cantieri || []; nuoveApprovazioni['BC General Service'] = !!progBC[0].presenze_approvate }
     if (progFil && progFil.length > 0) { nuoviProgrammi['Filosofia'] = progFil[0].cantieri || []; nuoveApprovazioni['Filosofia'] = !!progFil[0].presenze_approvate }
 
+    // Feature 3: se il giorno non ha programma, carica dal giorno lavorativo precedente
+    const prevDay = prevWorkingDay(dataProgr)
     for (const soc of ['BC General Service', 'Filosofia'] as Societa[]) {
       const giaEsiste = soc === 'BC General Service' ? (progBC && progBC.length > 0) : (progFil && progFil.length > 0)
       if (!giaEsiste) {
-        const { data: ul } = await supabase.from('programma_giornaliero').select('cantieri').eq('societa', soc).eq('presenze_approvate', true).order('data', { ascending: false }).limit(1)
-        if (ul && ul.length > 0) nuoviProgrammi[soc] = ul[0].cantieri || []
+        // Prima prova il giorno lavorativo precedente (approvato o no)
+        const { data: ulPrev } = await supabase.from('programma_giornaliero')
+          .select('cantieri,data').eq('societa', soc).eq('data', prevDay).limit(1)
+        if (ulPrev && ulPrev.length > 0 && ulPrev[0].cantieri?.length > 0) {
+          nuoviProgrammi[soc] = ulPrev[0].cantieri || []
+          setSuggestFrom(prevDay)
+        } else {
+          // Fallback: ultimo programma qualsiasi
+          const { data: ul } = await supabase.from('programma_giornaliero')
+            .select('cantieri,data').eq('societa', soc).order('data', { ascending: false }).limit(1)
+          if (ul && ul.length > 0) {
+            nuoviProgrammi[soc] = ul[0].cantieri || []
+            setSuggestFrom(ul[0].data)
+          }
+        }
       }
     }
 
@@ -270,18 +288,17 @@ export default function ProgrammiPage() {
 
   async function confermaApprovazione() {
     const soc = societaAttiva
-    const mezzi = mezziDaAbbinare()
-    const mancanti = mezzi.filter(m => !conducenti[m.mezzoId])
-    if (mancanti.length > 0) { alert(`Manca il conducente per: ${mancanti.map(m => m.nomeMezzo).join(', ')}`); return }
     setSalvandoApprovazione(true)
 
     const ora = new Date().toISOString()
     const approvatore = currentUserEmail || 'sconosciuto'
 
-    // 1) Presenze dipendenti in cantiere
+    // 1) Presenze dipendenti in cantiere — include cantiere_id per costi contabilità
     const righePresenze = Object.entries(statiPresenza).map(([dipId, s]) => ({
       data: dataProgr, dipendente_id: dipId, societa: soc,
-      stato: s.stato, ore: s.ore, origine: 'da_programma', cantiere_nome: s.cantiere || null,
+      stato: s.stato, ore: s.ore, origine: 'da_programma',
+      cantiere_nome: s.cantiere || null,
+      cantiere_id: (cantieriApprov[dipId]?.cantiere_id) || null,
       approvato: true, approvato_da: approvatore, approvato_il: ora,
     }))
 
@@ -312,12 +329,20 @@ export default function ProgrammiPage() {
       }
     }
 
-    // 4) Utilizzo mezzi
-    if (mezzi.length > 0) {
-      const righeMezzi = mezzi.map(m => {
-        const dip = dipendenti.find(d => d.id === conducenti[m.mezzoId])
-        return { mezzo_id: m.mezzoId, data: dataProgr, conducente_id: conducenti[m.mezzoId], conducente_nome: dip ? `${dip.cognome} ${dip.nome}` : 'Sconosciuto', cantiere_nome: m.cantiere, societa: soc }
+    // 4) Utilizzo mezzi — tutti i mezzi con conducente assegnato
+    const righeMezzi = mezziDB
+      .filter(m => conducenti[m.id])
+      .map(m => {
+        const dip = dipendenti.find(d => d.id === conducenti[m.id])
+        const cantNome = mezziApprov[m.id] || dovePiazzatoMezzo(m.id) || ''
+        return {
+          mezzo_id: m.id, data: dataProgr,
+          conducente_id: conducenti[m.id],
+          conducente_nome: dip ? `${dip.cognome} ${dip.nome}` : 'Sconosciuto',
+          cantiere_nome: cantNome, societa: soc
+        }
       })
+    if (righeMezzi.length > 0) {
       const { error } = await supabase.from('mezzi_utilizzo_giornaliero').upsert(righeMezzi, { onConflict: 'mezzo_id,data' })
       if (error) console.error('Errore utilizzo mezzi:', error)
     }
@@ -328,57 +353,6 @@ export default function ProgrammiPage() {
     setSalvandoApprovazione(false)
     setModalApprova(false)
     load()
-  }
-
-  // ── IMPORTA DA MESSAGGIO WHATSAPP ─────────────────────────────────────────
-  async function analizzaMessaggio() {
-    if (!testoMessaggio.trim()) { setErroreAI('Incolla prima il messaggio'); return }
-    setAnalizzando(true); setErroreAI(''); setAnteprimaAI(null)
-    try {
-      const dipList = dipendenti.map(d => ({ id: d.id, nome: d.nome, cognome: d.cognome }))
-      const cantList = cantieriProgetti.map(c => ({ codice: c.codice, nome: c.nome }))
-      const prompt = `Sei un assistente per una ditta edile italiana. Analizza questo messaggio (da WhatsApp) e costruisci il programma giornaliero.
-
-DIPENDENTI (abbina i nomi del messaggio a questi usando cognome o nome parziale):
-${JSON.stringify(dipList)}
-
-CANTIERI APERTI (abbina il nome cantiere nel messaggio a questi):
-${JSON.stringify(cantList)}
-
-MESSAGGIO:
-"""
-${testoMessaggio}
-"""
-
-Rispondi SOLO con JSON valido, senza markdown:
-{"cantieri":[{"nome":"nome cantiere dalla lista","note":"note dal messaggio o stringa vuota","persone":[{"id":"uuid","nome":"Nome","cognome":"Cognome"}]}],"non_abbinati":["nomi non trovati"]}`
-
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] })
-      })
-      const data = await res.json()
-      const testo = data.content?.[0]?.text || ''
-      const parsed = JSON.parse(testo.replace(/```json|```/g, '').trim())
-      setAnteprimaAI(parsed.cantieri || [])
-      if (parsed.non_abbinati?.length) setErroreAI(`⚠️ Non abbinati: ${parsed.non_abbinati.join(', ')}`)
-    } catch (e: any) {
-      setErroreAI('Errore analisi: ' + (e.message || 'riprova'))
-    }
-    setAnalizzando(false)
-  }
-
-  function applicaAI() {
-    if (!anteprimaAI) return
-    const genId = () => Math.random().toString(36).slice(2)
-    const nuoviCantieri = anteprimaAI.map(c => ({
-      id: genId(), nome: c.nome, note: c.note || '',
-      lavorazioni: [{ id: genId(), nome: '', persone: (c.persone || []).map((p: any) => ({ ...p })) }],
-      mezzi: []
-    }))
-    setProgrammi(prev => ({ ...prev, [societaAttiva]: nuoviCantieri }))
-    setModalMessaggio(false); setTestoMessaggio(''); setAnteprimaAI(null); setErroreAI('')
   }
 
   return (
@@ -398,7 +372,6 @@ Rispondi SOLO con JSON valido, senza markdown:
           <div className="flex gap-2 items-center flex-wrap">
             <input type="date" className="input text-sm py-1 flex-1 md:flex-none" value={dataProgr} onChange={e => setDataProgr(e.target.value)} />
             <button className="btn btn-sm" onClick={nuovoProgramma}>🆕 Nuovo</button>
-            <button className="btn btn-sm bg-violet-600 text-white border-violet-600 hover:bg-violet-700" onClick={() => setModalMessaggio(true)}>✨ Dal messaggio</button>
             <button className="btn btn-sm btn-primary" onClick={salva} disabled={salvando}>{salvando ? '...' : '💾 Salva'}</button>
             <button className={`btn btn-sm font-semibold ${presenzeApprovate[societaAttiva] ? 'bg-green-600 text-white border-green-600' : 'bg-amber-500 text-white border-amber-500'}`} onClick={apriModalApprova}>
               {presenzeApprovate[societaAttiva] ? '✓ Presenze ok' : '✅ Approva presenze'}
@@ -435,6 +408,17 @@ Rispondi SOLO con JSON valido, senza markdown:
                   onClick={() => setDataProgr(d)}>
                   {new Date(d + 'T12:00:00').toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' })}
                 </button>
+
+        {/* Banner programma copiato dal giorno precedente */}
+        {suggestFrom && !presenzeApprovate[societaAttiva] && (
+          <div className="bg-blue-50 border-b border-blue-200 px-4 py-1.5 flex items-center justify-between flex-shrink-0 print:hidden">
+            <span className="text-xs text-blue-700">
+              📋 Copiato da {new Date(suggestFrom + 'T12:00:00').toLocaleDateString('it-IT', { weekday: 'long', day: '2-digit', month: 'long' })} — modifica e salva
+            </span>
+            <button onClick={() => { setProgrammi(prev => ({ ...prev, [societaAttiva]: [] })); setSuggestFrom('') }}
+              className="text-xs text-blue-400 hover:text-blue-700 ml-3">× Svuota</button>
+          </div>
+        )}
               ))}
               {giorniNonApprovati[societaAttiva].length > 8 && (
                 <span className="text-xs text-red-500">…+{giorniNonApprovati[societaAttiva].length - 8}</span>
@@ -697,20 +681,33 @@ Rispondi SOLO con JSON valido, senza markdown:
               )}
 
               <div>
-                <h3 className="font-medium text-sm mb-2">🚐 Abbinamento mezzi (obbligatorio)</h3>                {mezziDaAbbinare().length === 0 ? <p className="text-sm text-gray-400">Nessun mezzo assegnato oggi.</p> : (
+                <h3 className="font-medium text-sm mb-2">🚐 Mezzi — modifica e abbina conducente</h3>
+                {mezziDB.length === 0 ? <p className="text-sm text-gray-400">Nessun mezzo in anagrafica.</p> : (
                   <div className="space-y-2">
-                    {mezziDaAbbinare().map(m => (
-                      <div key={m.mezzoId} className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium">🚐 {m.nomeMezzo}</p>
-                          <p className="text-xs text-gray-500 truncate">📍 {m.cantiere}</p>
+                    {mezziDB.map(m => {
+                      const inProg = dovePiazzatoMezzo(m.id)
+                      return (
+                        <div key={m.id} className={`flex items-center gap-2 rounded-lg p-2 border ${conducenti[m.id] ? 'border-green-200 bg-green-50' : inProg ? 'border-amber-200 bg-amber-50' : 'border-gray-100 bg-gray-50'}`}>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium">🚐 {m.nome}{m.targa ? ` (${m.targa})` : ''}</p>
+                            <select className="input text-xs py-0.5 mt-0.5 w-full"
+                              value={mezziApprov[m.id] || (inProg ? inProg : '')}
+                              onChange={e => setMezziApprov(prev => ({ ...prev, [m.id]: e.target.value }))}>
+                              <option value="">— non utilizzato oggi —</option>
+                              {cantieriProgetti.map(p => <option key={p.id} value={p.nome}>{p.codice} — {p.nome}</option>)}
+                              {cantieri.map(c => c.nome && !cantieriProgetti.find(p => p.nome === c.nome)
+                                ? <option key={c.id} value={c.nome}>{c.nome}</option> : null)}
+                            </select>
+                          </div>
+                          <select className={`input text-xs py-1 w-44 ${conducenti[m.id] ? 'border-green-400' : (mezziApprov[m.id] || inProg) ? 'border-amber-400' : 'border-gray-200'}`}
+                            value={conducenti[m.id] || ''}
+                            onChange={e => setConducenti(prev => ({ ...prev, [m.id]: e.target.value }))}>
+                            <option value="">— conducente —</option>
+                            {dipendenti.map(d => <option key={d.id} value={d.id}>{d.cognome} {d.nome}</option>)}
+                          </select>
                         </div>
-                        <select className={`input text-xs py-1 w-48 ${!conducenti[m.mezzoId] ? 'border-amber-400' : 'border-green-400'}`} value={conducenti[m.mezzoId] || ''} onChange={e => setConducenti(prev => ({ ...prev, [m.mezzoId]: e.target.value }))}>
-                          <option value="">— scegli conducente —</option>
-                          {m.personeDisponibili.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                        </select>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -718,69 +715,6 @@ Rispondi SOLO con JSON valido, senza markdown:
             <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2 sticky bottom-0 bg-white">
               <button className="btn" onClick={() => setModalApprova(false)}>Annulla</button>
               <button className="btn btn-primary" onClick={confermaApprovazione} disabled={salvandoApprovazione}>{salvandoApprovazione ? 'Salvataggio...' : '✅ Conferma approvazione'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL IMPORTA DA MESSAGGIO WHATSAPP */}
-      {modalMessaggio && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-2xl shadow-xl max-h-[90vh] flex flex-col">
-            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
-              <div>
-                <h2 className="font-semibold">✨ Crea programma dal messaggio</h2>
-                <p className="text-xs text-gray-500 mt-0.5">Incolla il messaggio WhatsApp — Claude abbina automaticamente nomi e cantieri</p>
-              </div>
-              <button onClick={() => { setModalMessaggio(false); setAnteprimaAI(null); setErroreAI('') }} className="text-gray-400 text-xl">×</button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-5 space-y-4">
-              <div>
-                <label className="label">Messaggio WhatsApp</label>
-                <textarea className="input h-36 resize-none font-mono text-sm"
-                  placeholder={"Incolla qui il messaggio del gruppo, es:\n\nVilla Chierici: Mario Rossi, Luigi Bianchi\nCondominio Roma: Giuseppe Neri\nVario: Antonio Verde (ritira materiale)"}
-                  value={testoMessaggio}
-                  onChange={e => { setTestoMessaggio(e.target.value); setAnteprimaAI(null); setErroreAI('') }} />
-              </div>
-              <button className="btn btn-primary w-full" onClick={analizzaMessaggio} disabled={analizzando || !testoMessaggio.trim()}>
-                {analizzando ? '✨ Analisi in corso...' : '✨ Analizza messaggio'}
-              </button>
-              {erroreAI && (
-                <div className={`text-xs px-3 py-2 rounded-lg border ${erroreAI.startsWith('⚠️') ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-red-50 border-red-200 text-red-600'}`}>
-                  {erroreAI}
-                </div>
-              )}
-              {anteprimaAI && anteprimaAI.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Anteprima — {societaAttiva}</p>
-                  <div className="space-y-2">
-                    {anteprimaAI.map((c: any, i: number) => (
-                      <div key={i} className="border border-gray-200 rounded-lg overflow-hidden">
-                        <div className="bg-gray-800 text-white px-3 py-2 flex items-center justify-between">
-                          <span className="font-semibold text-sm">{c.nome}</span>
-                          <span className="text-xs text-gray-400">{(c.persone || []).length} persone</span>
-                        </div>
-                        {c.note && <div className="px-3 py-1 text-xs text-gray-500 bg-gray-50 border-b border-gray-100">{c.note}</div>}
-                        <div className="px-3 py-2 flex flex-wrap gap-1">
-                          {(c.persone || []).map((p: any, j: number) => (
-                            <span key={j} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                              {p.cognome} {p.nome}
-                            </span>
-                          ))}
-                          {(c.persone || []).length === 0 && <span className="text-xs text-gray-400 italic">Nessuna persona abbinata</span>}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-xs text-gray-400 mt-2">Puoi modificare il programma dopo l'importazione. Sovrascrive il programma {societaAttiva} esistente per la data selezionata.</p>
-                </div>
-              )}
-            </div>
-            <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2 flex-shrink-0">
-              <button className="btn" onClick={() => { setModalMessaggio(false); setAnteprimaAI(null); setErroreAI('') }}>Annulla</button>
-              {anteprimaAI && anteprimaAI.length > 0 && (
-                <button className="btn btn-primary" onClick={applicaAI}>✅ Crea programma ({anteprimaAI.length} cantieri)</button>
-              )}
             </div>
           </div>
         </div>
