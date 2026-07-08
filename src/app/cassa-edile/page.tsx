@@ -252,10 +252,19 @@ export default function CassaEdilePage() {
                 </div>
 
                 {pool.length===0 ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-gray-400 p-6 text-center">
-                    <p className="text-2xl mb-2">📋</p>
-                    <p className="text-sm">Nessuna presenza approvata per {meseStr}</p>
-                    <p className="text-xs mt-1">Approva le presenze dalla pagina Programmi</p>
+                  <div className="flex-1 flex flex-col items-center justify-center text-gray-500 p-6 text-center">
+                    <p className="text-3xl mb-3">📋</p>
+                    <p className="text-sm font-semibold mb-2">Nessuna presenza approvata</p>
+                    <p className="text-xs text-gray-400 mb-1">Mese selezionato: <strong>{meseStr}</strong></p>
+                    <p className="text-xs text-gray-400 mb-4">Società: <strong>{soc}</strong></p>
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700 text-left space-y-1">
+                      <p className="font-semibold">Per associare le ore devi prima:</p>
+                      <p>1. Vai su <strong>Programmi</strong></p>
+                      <p>2. Seleziona i giorni del mese</p>
+                      <p>3. Premi <strong>✅ Approva presenze</strong></p>
+                      <p>4. Torna qui — i nomi appariranno a sinistra</p>
+                    </div>
+                    <a href="/programmi" className="mt-3 btn btn-sm btn-primary">→ Vai a Programmi</a>
                   </div>
                 ) : (
                   <div className="flex-1 overflow-y-auto">
@@ -269,24 +278,27 @@ export default function CassaEdilePage() {
                           const tutteAss = d.oreDisp < 0.1
                           const parzAss = d.oreAss > 0 && !tutteAss
                           return (
-                            <div key={d.id} className="border-b border-gray-100 px-4 py-2.5 flex items-center justify-between gap-2 hover:bg-blue-50 transition-colors">
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm font-medium truncate">{d.cognome} {d.nome}</p>
-                                <p className="text-xs text-gray-400 truncate">📍 {d.cantReale}</p>
-                              </div>
-                              <div className="flex items-center gap-2 flex-shrink-0">
-                                <div className="text-right">
-                                  <p className={`text-xs font-bold ${tutteAss?'text-green-600':parzAss?'text-amber-600':'text-gray-600'}`}>
-                                    {tutteAss ? '✓ ok' : `${fmt(d.oreDisp)}h libere`}
-                                  </p>
-                                  {parzAss && <p className="text-xs text-gray-400">{fmt(d.oreAss)}/{fmt(d.oreTot)}h</p>}
+                            <button key={d.id} onClick={()=>apriAss(d)}
+                              className={`w-full text-left border-b border-gray-100 px-4 py-3 hover:bg-blue-50 active:bg-blue-100 transition-colors cursor-pointer ${tutteAss?'bg-green-50':''}`}>
+                              <div className="flex items-center justify-between">
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-semibold text-gray-900">{d.cognome} {d.nome}</p>
+                                  <p className="text-xs text-gray-400 mt-0.5">📍 {d.cantReale}</p>
                                 </div>
-                                <button onClick={()=>apriAss(d)}
-                                  className="btn btn-sm text-xs py-1 px-2 bg-blue-600 text-white border-blue-600 hover:bg-blue-700 flex-shrink-0">
-                                  ↔️ Associa
-                                </button>
+                                <div className="ml-3 flex-shrink-0 text-right">
+                                  {tutteAss
+                                    ? <span className="text-xs font-bold text-green-600">✓ {fmt(d.oreTot)}h ok</span>
+                                    : <><p className="text-sm font-bold text-blue-700">{fmt(d.oreDisp)}h</p>
+                                       {parzAss && <p className="text-xs text-gray-400">{fmt(d.oreAss)}/{fmt(d.oreTot)}</p>}</>
+                                  }
+                                </div>
                               </div>
-                            </div>
+                              {!tutteAss && (
+                                <div className="mt-1.5 text-xs text-blue-600 font-medium">
+                                  👆 Clicca per associare ai cantieri CE →
+                                </div>
+                              )}
+                            </button>
                           )
                         })}
                       </div>
