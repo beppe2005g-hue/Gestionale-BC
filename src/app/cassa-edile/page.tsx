@@ -231,7 +231,7 @@ export default function CassaEdilePage() {
               <div className="w-80 flex-shrink-0 border-r border-gray-200 flex flex-col overflow-hidden">
                 <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50 flex-shrink-0">
                   <p className="text-sm font-semibold text-gray-700">Presenze approvate</p>
-                  <p className="text-xs text-gray-400">{pool.length} dipendenti · {fmt(pool.reduce((s,d)=>s+d.oreTot,0))}h tot — clicca per associare</p>
+                  <p className="text-xs text-gray-400">{pool.length} dipendenti · premi <strong>↔️ Associa</strong> per smistare le ore</p>
                 </div>
 
                 {pool.length===0 ? (
@@ -252,19 +252,24 @@ export default function CassaEdilePage() {
                           const tutteAss = d.oreDisp < 0.1
                           const parzAss = d.oreAss > 0 && !tutteAss
                           return (
-                            <button key={d.id} onClick={()=>apriAss(d)}
-                              className={`w-full text-left px-4 py-2.5 border-b border-gray-100 hover:bg-blue-50 transition-colors flex items-center justify-between gap-2 ${tutteAss?'opacity-60':''}`}>
-                              <div className="min-w-0">
+                            <div key={d.id} className="border-b border-gray-100 px-4 py-2.5 flex items-center justify-between gap-2 hover:bg-blue-50 transition-colors">
+                              <div className="min-w-0 flex-1">
                                 <p className="text-sm font-medium truncate">{d.cognome} {d.nome}</p>
                                 <p className="text-xs text-gray-400 truncate">📍 {d.cantReale}</p>
                               </div>
-                              <div className="text-right flex-shrink-0">
-                                <p className={`text-sm font-bold ${tutteAss?'text-green-600':parzAss?'text-amber-600':'text-gray-700'}`}>
-                                  {tutteAss ? `✓ ${fmt(d.oreTot)}h` : `${fmt(d.oreDisp)}h`}
-                                </p>
-                                {parzAss && <p className="text-xs text-gray-400">{fmt(d.oreAss)}/{fmt(d.oreTot)}h</p>}
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                <div className="text-right">
+                                  <p className={`text-xs font-bold ${tutteAss?'text-green-600':parzAss?'text-amber-600':'text-gray-600'}`}>
+                                    {tutteAss ? '✓ ok' : `${fmt(d.oreDisp)}h libere`}
+                                  </p>
+                                  {parzAss && <p className="text-xs text-gray-400">{fmt(d.oreAss)}/{fmt(d.oreTot)}h</p>}
+                                </div>
+                                <button onClick={()=>apriAss(d)}
+                                  className="btn btn-sm text-xs py-1 px-2 bg-blue-600 text-white border-blue-600 hover:bg-blue-700 flex-shrink-0">
+                                  ↔️ Associa
+                                </button>
                               </div>
-                            </button>
+                            </div>
                           )
                         })}
                       </div>
@@ -312,7 +317,7 @@ export default function CassaEdilePage() {
                         </div>
                       </div>
                       {assCE.length===0 ? (
-                        <p className="text-xs text-gray-400 text-center py-3 italic">Nessun dipendente associato — clicca un nominativo nel pool</p>
+                        <p className="text-xs text-gray-400 text-center py-3 italic">Nessuno associato — usa il bottone <strong>↔️ Associa</strong> nel pannello a sinistra</p>
                       ) : (
                         <div>
                           {AZIENDE_ORD.filter(az=>assCE.some((a:any)=>a.azienda===az)).map(az=>(
@@ -671,7 +676,15 @@ export default function CassaEdilePage() {
             </div>
             <div className="flex-1 overflow-y-auto p-5 space-y-2">
               <p className="text-xs text-gray-400 mb-3">Inserisci le ore per ogni cantiere CE (lascia vuoto = nessuna)</p>
-              {ceAttivi.map((ce,i)=>(
+              {ceAttivi.length === 0 ? (
+                <div className="text-center py-6 text-gray-400">
+                  <p className="text-2xl mb-2">🏗️</p>
+                  <p className="text-sm">Nessun cantiere CE attivo.</p>
+                  <button className="mt-3 btn btn-sm btn-primary" onClick={()=>{ setModalAss(null); setTab('cantieri_ce') }}>
+                    ⚙️ Vai a Cantieri CE per aggiungerne
+                  </button>
+                </div>
+              ) : ceAttivi.map((ce,i)=>(
                 <div key={ce.id} className="flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{ce.numero}. {ce.nome}</p>
