@@ -408,6 +408,13 @@ export default function ProgrammiPage() {
                   onClick={() => setDataProgr(d)}>
                   {new Date(d + 'T12:00:00').toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' })}
                 </button>
+              ))}
+              {giorniNonApprovati[societaAttiva].length > 8 && (
+                <span className="text-xs text-red-500">…+{giorniNonApprovati[societaAttiva].length - 8}</span>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Banner programma copiato dal giorno precedente */}
         {suggestFrom && !presenzeApprovate[societaAttiva] && (
@@ -417,13 +424,6 @@ export default function ProgrammiPage() {
             </span>
             <button onClick={() => { setProgrammi(prev => ({ ...prev, [societaAttiva]: [] })); setSuggestFrom('') }}
               className="text-xs text-blue-400 hover:text-blue-700 ml-3">× Svuota</button>
-          </div>
-        )}
-              ))}
-              {giorniNonApprovati[societaAttiva].length > 8 && (
-                <span className="text-xs text-red-500">…+{giorniNonApprovati[societaAttiva].length - 8}</span>
-              )}
-            </div>
           </div>
         )}
 
