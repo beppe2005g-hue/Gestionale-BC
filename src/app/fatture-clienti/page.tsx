@@ -33,6 +33,8 @@ export default function FattureClienti() {
   const [cercaTesto, setCercaTesto] = useState('')
   const [formPagamento, setFormPagamento] = useState({ rata: 1, importo: '', data_pagamento: '', note: '' })
   const [loadingPagamento, setLoadingPagamento] = useState(false)
+  const [modalRitenuta, setModalRitenuta] = useState<{ fattura: any; rata: number; importoResiduo: number } | null>(null)
+  const [formRitenuta, setFormRitenuta] = useState({ percentuale: '4', importo: '', data: new Date().toISOString().split('T')[0] })
 
   const [form, setForm] = useState({
     data: '', numero: '', cliente_id: '', progetto_id: '', descrizione: '',
@@ -95,6 +97,43 @@ export default function FattureClienti() {
   async function apriDettaglio(f: any) {
     setModalDettaglio(f)
     setFormPagamento({ rata: 1, importo: '', data_pagamento: new Date().toISOString().split('T')[0], note: '' })
+  }
+
+  async function salvaRitenuta() {
+    if (!modalRitenuta) return
+    const importo = parseFloat(formRitenuta.importo) || 0
+    if (importo <= 0) { alert('Inserisci l\'importo della ritenuta'); return }
+    const { fattura, rata } = modalRitenuta
+    // 1. Registra come pagamento → esce dallo scadenzario
+    await supabase.from('pagamenti_clienti').insert({
+      fattura_id: fattura.id, rata, importo,
+      data_pagamento: formRitenuta.data,
+      note: `Ritenuta d'acconto condominio ${formRitenuta.percentuale}%`,
+    })
+    // Aggiorna stato rata
+    const nuovoPagato = pagatoSuRata(fattura.id, rata) + importo
+    const importoRata = fattura[`rata${rata}_importo`] || 0
+    await supabase.from('fatture_clienti').update({
+      [`rata${rata}_stato`]: nuovoPagato >= importoRata - 0.01 ? 'Incassata' : 'Parziale'
+    }).eq('id', fattura.id)
+    // 2. Salva in ritenute_acconto → appare nella sezione ritenute
+    const anno = new Date(formRitenuta.data).getFullYear()
+    await supabase.from('ritenute_acconto').insert({
+      cliente_nome: fattura.cliente_nome,
+      fattura_numero: fattura.numero,
+      importo_fattura: fattura.imponibile || 0,
+      percentuale: parseFloat(formRitenuta.percentuale) || 4,
+      importo_ritenuta: importo,
+      data_fattura: fattura.data || null,
+      anno_fiscale: anno,
+      note: `Ritenuta su Ft ${fattura.numero} — ${fattura.cliente_nome}`,
+    })
+    setModalRitenuta(null)
+    setFormRitenuta({ percentuale: '4', importo: '', data: new Date().toISOString().split('T')[0] })
+    showToast(`Ritenuta di ${euro(importo)} registrata — rimossa dallo scadenzario`, 'ok')
+    await load()
+    const { data: agg } = await supabase.from('fatture_clienti').select('*').eq('id', fattura.id).single()
+    if (agg) setModalDettaglio(agg)
   }
 
   async function registraPagamento(rataTarget: number) {
@@ -589,7 +628,7 @@ export default function FattureClienti() {
                       </div>
                     )}
                     {stato !== 'incassata' && (
-                      <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+                      <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100 flex-wrap">
                         <input className="input text-xs py-1 w-28" type="number" step="0.01" placeholder="Importo €"
                           value={formPagamento.rata === n ? formPagamento.importo : ''}
                           onChange={e => setFormPagamento({ rata: n, importo: e.target.value, data_pagamento: formPagamento.data_pagamento || new Date().toISOString().split('T')[0], note: formPagamento.note })} />
@@ -602,6 +641,17 @@ export default function FattureClienti() {
                         <button className="btn btn-sm btn-success" disabled={loadingPagamento} onClick={() => registraPagamento(n)}>
                           {loadingPagamento ? '...' : '+ Registra incasso'}
                         </button>
+                        <button
+                          className="btn btn-sm text-amber-700 border-amber-300 bg-amber-50 hover:bg-amber-100"
+                          title="Il condominio trattiene la ritenuta d'acconto e paga solo il netto"
+                          onClick={() => {
+                            const residuo = importoRata - pagatoRata
+                            const perc = 4
+                            setFormRitenuta({ percentuale: String(perc), importo: (residuo).toFixed(2), data: new Date().toISOString().split('T')[0] })
+                            setModalRitenuta({ fattura: modalDettaglio, rata: n, importoResiduo: residuo })
+                          }}>
+                          💼 Segna ritenuta
+                        </button>
                       </div>
                     )}
                   </div>
@@ -612,6 +662,64 @@ export default function FattureClienti() {
               <button className="btn text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(modalDettaglio.id, modalDettaglio.numero)}>✕ Elimina fattura</button>
               <button className="btn btn-primary" onClick={() => { setModalModifica({...modalDettaglio}); setModalDettaglio(null) }}>✏️ Modifica fattura</button>
               <button className="btn" onClick={() => setModalDettaglio(null)}>Chiudi</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* MODAL RITENUTA D'ACCONTO CONDOMINI */}
+      {modalRitenuta && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-md shadow-xl">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="font-semibold">💼 Segna ritenuta d'acconto</h2>
+                <p className="text-xs text-gray-500 mt-0.5">Ft {modalRitenuta.fattura.numero} — {modalRitenuta.fattura.cliente_nome} — Rata {modalRitenuta.rata}</p>
+              </div>
+              <button onClick={() => setModalRitenuta(null)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+                Il condominio ha trattenuto la ritenuta e pagato solo il netto. L'importo verrà rimosso dallo scadenzario e registrato nelle ritenute d'acconto come credito fiscale.
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">% Ritenuta</label>
+                  <select className="input" value={formRitenuta.percentuale}
+                    onChange={e => {
+                      const perc = parseFloat(e.target.value) || 4
+                      const imp = (modalRitenuta.importoResiduo * perc / 100).toFixed(2)
+                      setFormRitenuta(f => ({ ...f, percentuale: e.target.value, importo: imp }))
+                    }}>
+                    <option value="4">4%</option>
+                    <option value="20">20%</option>
+                    <option value="11.50">11.5%</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Importo ritenuta (€) *</label>
+                  <input className="input font-semibold text-amber-700" type="number" step="0.01"
+                    value={formRitenuta.importo}
+                    onChange={e => setFormRitenuta(f => ({ ...f, importo: e.target.value }))} />
+                </div>
+              </div>
+              <div>
+                <label className="label">Data</label>
+                <input type="date" className="input" value={formRitenuta.data}
+                  onChange={e => setFormRitenuta(f => ({ ...f, data: e.target.value }))} />
+              </div>
+              {formRitenuta.importo && (
+                <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2 text-xs text-green-700">
+                  ✅ Residuo aperto: {euro(modalRitenuta.importoResiduo)}<br/>
+                  Ritenuta da registrare: {euro(parseFloat(formRitenuta.importo) || 0)}<br/>
+                  Rimanente dopo ritenuta: {euro(Math.max(0, modalRitenuta.importoResiduo - (parseFloat(formRitenuta.importo) || 0)))}
+                </div>
+              )}
+            </div>
+            <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2">
+              <button className="btn" onClick={() => setModalRitenuta(null)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaRitenuta}>
+                💼 Registra ritenuta
+              </button>
             </div>
           </div>
         </div>
