@@ -616,6 +616,16 @@ export default function CassaEdilePage() {
                         </div>
                       </div>
 
+                      {/* Dettaglio info cantiere */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 px-4 py-2 bg-gray-50 border-b border-gray-200 text-xs text-gray-600">
+                        {ce.committente && <div><span className="font-semibold text-gray-400 block">Committente</span>{ce.committente}</div>}
+                        {ce.appaltatore && <div><span className="font-semibold text-gray-400 block">Appaltatore</span>{ce.appaltatore}</div>}
+                        {(ce.data_inizio || ce.data_fine) && <div><span className="font-semibold text-gray-400 block">Periodo</span>{ce.data_inizio ? new Date(ce.data_inizio).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'2-digit'}) : '?'} → {ce.data_fine ? new Date(ce.data_fine).toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'2-digit'}) : '?'}</div>}
+                        {ce.importo_lavori && <div><span className="font-semibold text-gray-400 block">Importo</span>€ {(ce.importo_lavori||0).toLocaleString('it-IT')}</div>}
+                        {ce.cig_cup && <div className="col-span-2"><span className="font-semibold text-gray-400 block">CIG/CUP</span>{ce.cig_cup}</div>}
+                        {ce.cnce && <div className="col-span-2"><span className="font-semibold text-gray-400 block">CNCE</span>{ce.cnce}</div>}
+                      </div>
+
                       {/* Stati aziende inline */}
                       {azStatoCE.length>0 && (
                         <div className="flex gap-2 px-4 py-2 bg-gray-800 flex-wrap">
