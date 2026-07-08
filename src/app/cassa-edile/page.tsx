@@ -26,6 +26,7 @@ export default function CassaEdilePage() {
   const [assegnazioni, setAssegnazioni] = useState<any[]>([])
   const [presenzeApprovate, setPresenzeApprovate] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [societaFiltroCE, setSocietaFiltroCE] = useState<'BC General Service' | 'Filosofia'>('BC General Service')
 
   // Modal assegna
   const [modalAssegna, setModalAssegna] = useState<{ dipendente: any; oreDisp: number } | null>(null)
@@ -44,7 +45,7 @@ export default function CassaEdilePage() {
 
   const meseData = `${anno}-${String(mese + 1).padStart(2, '0')}-01`
 
-  useEffect(() => { load() }, [mese, anno])
+  useEffect(() => { load() }, [mese, anno, societaFiltroCE])
 
   async function load() {
     setLoading(true)
@@ -58,7 +59,7 @@ export default function CassaEdilePage() {
       supabase.from('cantieri_ce_aziende').select('*'),
       supabase.from('ce_assegnazioni').select('*').eq('mese', meseData),
       supabase.from('presenze').select('dipendente_id,ore')
-        .gte('data', dataInizio).lte('data', dataFine).eq('approvato', true).gt('ore', 0),
+        .gte('data', dataInizio).lte('data', dataFine).eq('approvato', true).gt('ore', 0).eq('societa', societaFiltroCE),
     ])
     setDipendenti(dip || [])
     setCantieriCE(ce || [])
@@ -231,6 +232,20 @@ export default function CassaEdilePage() {
             </select>
             <button className="btn btn-sm" onClick={() => window.print()}>🖨️ Stampa</button>
           </div>
+        </div>
+
+        {/* Tab BC / Filosofia */}
+        <div className="flex gap-2 px-6 pb-2 pt-1 bg-white border-b border-gray-200 flex-shrink-0">
+          {(['BC General Service', 'Filosofia'] as const).map(soc => (
+            <button key={soc} onClick={() => setSocietaFiltroCE(soc)}
+              className={`flex-1 py-2 rounded-lg border-2 text-sm font-bold transition-all ${
+                soc === 'BC General Service'
+                  ? societaFiltroCE === soc ? 'bg-blue-600 text-white border-blue-600 shadow' : 'bg-blue-50 text-blue-700 border-blue-300'
+                  : societaFiltroCE === soc ? 'bg-orange-500 text-white border-orange-500 shadow' : 'bg-orange-50 text-orange-700 border-orange-300'
+              }`}>
+              {soc === 'BC General Service' ? '🏗 BC General Service' : '🏢 Filosofia'}
+            </button>
+          ))}
         </div>
 
         {/* Tab bar */}
