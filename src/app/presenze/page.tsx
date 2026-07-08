@@ -44,9 +44,10 @@ export default function PresenzeMonthly() {
   const [hoveredCell, setHoveredCell] = useState<{ dipId: string; dayIdx: number } | null>(null)
   const [giorniNonApprovati, setGiorniNonApprovati] = useState<Set<string>>(new Set())
   const [dipInizioMap, setDipInizioMap] = useState<Record<string, string | null>>({})
+  const [societaFiltro, setSocietaFiltro] = useState<'BC General Service' | 'Filosofia'>('BC General Service')
   const popoverRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => { loadDati() }, [anno, mese])
+  useEffect(() => { loadDati() }, [anno, mese, societaFiltro])
 
   useEffect(() => {
     function handler(e: MouseEvent) {
@@ -64,10 +65,11 @@ export default function PresenzeMonthly() {
 
     const [{ data: dip }, { data: pres }, { data: nonApprovati }] = await Promise.all([
       supabase.from('dipendenti').select('id,nome,cognome,azienda,ordine,data_inizio_contratto').eq('attivo', true).order('ordine', { ascending: true, nullsFirst: false }).order('cognome').order('nome'),
-      supabase.from('presenze').select('dipendente_id,data,ore,approvato').gte('data', inizio).lte('data', fine),
+      supabase.from('presenze').select('dipendente_id,data,ore,approvato').gte('data', inizio).lte('data', fine).eq('societa', societaFiltro),
       // Giorni con programma salvato ma presenze non approvate (solo passati)
       supabase.from('programma_giornaliero')
         .select('data')
+        .eq('societa', societaFiltro)
         .eq('presenze_approvate', false)
         .gte('data', inizio)
         .lte('data', fine)
@@ -295,6 +297,20 @@ export default function PresenzeMonthly() {
             </div>
             <button onClick={() => window.print()} className="btn btn-sm btn-primary">🖨️ Stampa</button>
           </div>
+        </div>
+
+        {/* Tab BC / Filosofia */}
+        <div className="flex gap-2 px-4 pb-2 pt-1 bg-white border-b border-gray-200 print:hidden flex-shrink-0">
+          {(['BC General Service', 'Filosofia'] as const).map(soc => (
+            <button key={soc} onClick={() => setSocietaFiltro(soc)}
+              className={`flex-1 py-2 rounded-lg border-2 text-sm font-bold transition-all ${
+                soc === 'BC General Service'
+                  ? societaFiltro === soc ? 'bg-blue-600 text-white border-blue-600 shadow' : 'bg-blue-50 text-blue-700 border-blue-300'
+                  : societaFiltro === soc ? 'bg-orange-500 text-white border-orange-500 shadow' : 'bg-orange-50 text-orange-700 border-orange-300'
+              }`}>
+              {soc === 'BC General Service' ? '🏗 BC General Service' : '🏢 Filosofia'}
+            </button>
+          ))}
         </div>
 
         {loading ? (
