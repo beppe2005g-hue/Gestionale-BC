@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import { logActivity } from '@/lib/logActivity'
@@ -13,6 +13,45 @@ interface Voce {
   descrizione: string; macro_categoria: string; categoria: string
   unita_misura: string; quantita: number; prezzo_unitario: number; importo_totale: number
 }
+
+
+// Componente riga voce con stato locale - evita re-render dell'intero array ad ogni tasto
+const VoceRow = React.memo(({ voce, idx, onUpdate, onDelete, MACRO_CATEGORIE }: {
+  voce: any; idx: number;
+  onUpdate: (idx: number, campo: string, valore: any) => void;
+  onDelete: (idx: number) => void;
+  MACRO_CATEGORIE: string[]
+}) => {
+  const [local, setLocal] = React.useState(voce)
+  React.useEffect(() => { setLocal(voce) }, [voce.id])
+
+  function aggiornaLocale(campo: string, valore: any) {
+    const n = { ...local, [campo]: valore }
+    if (campo === 'quantita' || campo === 'prezzo_unitario') {
+      const q = campo === 'quantita' ? parseFloat(valore) || 0 : parseFloat(local.quantita) || 0
+      const pu = campo === 'prezzo_unitario' ? parseFloat(valore) || 0 : parseFloat(local.prezzo_unitario) || 0
+      n.importo_totale = Math.round(q * pu * 100) / 100
+    }
+    setLocal(n)
+  }
+
+  function flush(campo: string) { onUpdate(idx, campo, local[campo]); if (campo === 'quantita' || campo === 'prezzo_unitario') onUpdate(idx, 'importo_totale', local.importo_totale) }
+
+  return (
+    <tr>
+      <td><input className="input text-xs py-1" value={local.descrizione || ''} onChange={e => aggiornaLocale('descrizione', e.target.value)} onBlur={() => flush('descrizione')} /></td>
+      <td><select className="input text-xs py-1" value={local.macro_categoria || 'Altro'} onChange={e => { aggiornaLocale('macro_categoria', e.target.value); onUpdate(idx, 'macro_categoria', e.target.value) }}>
+        {MACRO_CATEGORIE.map(m => <option key={m}>{m}</option>)}
+      </select></td>
+      <td><input className="input text-xs py-1 w-14" value={local.unita_misura || ''} onChange={e => aggiornaLocale('unita_misura', e.target.value)} onBlur={() => flush('unita_misura')} /></td>
+      <td><input className="input text-xs py-1 w-20" type="number" step="0.001" value={local.quantita || ''} onChange={e => aggiornaLocale('quantita', e.target.value)} onBlur={() => { onUpdate(idx, 'quantita', local.quantita); onUpdate(idx, 'importo_totale', local.importo_totale) }} /></td>
+      <td><input className="input text-xs py-1 w-24" type="number" step="0.0001" value={local.prezzo_unitario || ''} onChange={e => aggiornaLocale('prezzo_unitario', e.target.value)} onBlur={() => { onUpdate(idx, 'prezzo_unitario', local.prezzo_unitario); onUpdate(idx, 'importo_totale', local.importo_totale) }} /></td>
+      <td className="font-medium text-sm">{euro(local.importo_totale || 0)}</td>
+      <td><button className="text-gray-300 hover:text-red-500 text-sm" onClick={() => onDelete(idx)}>✕</button></td>
+    </tr>
+  )
+})
+VoceRow.displayName = 'VoceRow'
 
 export default function DDTPage() {
   const [ddts, setDdts] = useState<any[]>([])
@@ -61,11 +100,7 @@ export default function DDTPage() {
     setVoci(prev => {
       const n = [...prev]
       n[idx] = { ...n[idx], [campo]: valore }
-      if (campo === 'quantita' || campo === 'prezzo_unitario') {
-        const q = campo === 'quantita' ? parseFloat(valore) || 0 : n[idx].quantita
-        const pu = campo === 'prezzo_unitario' ? parseFloat(valore) || 0 : n[idx].prezzo_unitario
-        n[idx].importo_totale = Math.round(q * pu * 100) / 100
-      }
+      // importo_totale viene passato direttamente dal VoceRow dopo il calcolo locale
       return n
     })
   }
