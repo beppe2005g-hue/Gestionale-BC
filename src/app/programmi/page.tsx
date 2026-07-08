@@ -37,7 +37,6 @@ export default function ProgrammiPage() {
   const [statiPresenzaTecnici, setStatiPresenzaTecnici] = useState<Record<string, { stato: 'presente'|'assente'|'parziale', ore: number }>>({})
   const [cantieriAperti, setCantieriAperti] = useState<string[]>([])
   const [cantieriProgetti, setCantieriProgetti] = useState<any[]>([])
-  const [mezziDB, setMezziDB] = useState<any[]>([])
   // Stato per cantieri dipendenti nel modal approvazione: dipId -> {cantiere_id, cantiere_nome, is_vario, vario_nota}
   const [cantieriApprov, setCantieriApprov] = useState<Record<string, { cantiere_id: string; cantiere_nome: string; is_vario: boolean; vario_nota: string }>>({})
   // Mezzi nel modal approvazione: { mezzoId -> cantiere_nome } (editabili)
