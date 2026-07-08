@@ -64,7 +64,6 @@ export default function FattureClienti() {
     setPagamenti(pag || [])
   }
 
-  // Calcola il totale fattura (imponibile + IVA)
   function totalefattura(f: any): number {
     return (f.imponibile || 0) * (1 + (f.iva_percentuale || 0) / 100)
   }
@@ -150,50 +149,28 @@ export default function FattureClienti() {
     setModalDettaglio(null); load()
   }
 
-  // ── FIX: stessa correzione applicata a fatture_fornitori ──
-  // Prima: errore swallowed silenziosamente → le modifiche sparivano senza avviso
-  // Ora: cattura l'errore e mostra un toast con il messaggio esatto
   async function salvaModifica() {
     if (!modalModifica) return
     setLoading(true)
-
     const r1i = parseFloat(modalModifica.rata1_importo) || 0
     const r2i = parseFloat(modalModifica.rata2_importo) || 0
     const r3i = parseFloat(modalModifica.rata3_importo) || 0
-
-    // Aggiorna stata rate: se importo → 0, stato = null; se aggiunta nuova rata, stato = 'Da Incassare'
     const rata1_stato = r1i > 0 ? (modalModifica.rata1_stato || 'Da Incassare') : null
     const rata2_stato = r2i > 0 ? (modalModifica.rata2_stato || 'Da Incassare') : null
     const rata3_stato = r3i > 0 ? (modalModifica.rata3_stato || 'Da Incassare') : null
-
     const { error } = await supabase.from('fatture_clienti').update({
-      data: modalModifica.data,
-      numero: modalModifica.numero,
-      descrizione: modalModifica.descrizione || '',
-      imponibile: parseFloat(modalModifica.imponibile) || 0,
-      iva_percentuale: parseFloat(modalModifica.iva_percentuale) || 0,
-      nota: modalModifica.note || '',
-      rata1_importo: r1i,
-      rata1_scadenza: modalModifica.rata1_scadenza || null,
-      rata1_stato,
-      rata2_importo: r2i,
-      rata2_scadenza: modalModifica.rata2_scadenza || null,
-      rata2_stato,
-      rata3_importo: r3i,
-      rata3_scadenza: modalModifica.rata3_scadenza || null,
-      rata3_stato,
-      note: modalModifica.note || '',
+      data: modalModifica.data, numero: modalModifica.numero, descrizione: modalModifica.descrizione || '',
+      imponibile: parseFloat(modalModifica.imponibile) || 0, iva_percentuale: parseFloat(modalModifica.iva_percentuale) || 0,
+      nota: modalModifica.note || '', rata1_importo: r1i, rata1_scadenza: modalModifica.rata1_scadenza || null, rata1_stato,
+      rata2_importo: r2i, rata2_scadenza: modalModifica.rata2_scadenza || null, rata2_stato,
+      rata3_importo: r3i, rata3_scadenza: modalModifica.rata3_scadenza || null, rata3_stato, note: modalModifica.note || '',
     }).eq('id', modalModifica.id)
-
-    if (error) {
-      showToast(`Errore salvataggio: ${error.message}`, 'err')
-      setLoading(false)
-      return
-    }
+    if (error) { showToast(`Errore salvataggio: ${error.message}`, 'err'); setLoading(false); return }
     showToast('Modifiche salvate', 'ok')
     setModalModifica(null); setLoading(false); load()
   }
 
+  // ── SALVA FATTURA / NC ──────────────────────────────────────────────────
   async function salva() {
     if (!form.numero || !form.imponibile || !form.cliente_id) {
       alert('Compilare N° fattura, cliente e imponibile'); return
@@ -205,7 +182,8 @@ export default function FattureClienti() {
     const prj = progetti.find(p => p.id === form.progetto_id)
     const imp = parseFloat(form.imponibile) || 0
     const isNC = form.tipo === 'Nota di credito'
-    const { error } = await supabase.from('fatture_clienti').insert({
+
+    const { data: inserted, error } = await supabase.from('fatture_clienti').insert({
       data: form.data || new Date().toISOString().split('T')[0],
       numero: form.numero, cliente_id: form.cliente_id, cliente_nome: cli?.ragione_sociale || '',
       progetto_id: form.progetto_id || null, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
@@ -219,10 +197,52 @@ export default function FattureClienti() {
       rata2_scadenza: isNC ? null : (form.r2s || null),
       rata2_stato: isNC ? null : (form.r2i ? 'Da Incassare' : null),
       rata3_importo: 0, rata3_scadenza: null, rata3_stato: null, note: form.note
-    })
+    }).select('id').single()
+
     if (error) { showToast(`Errore inserimento: ${error.message}`, 'err'); setLoading(false); return }
-    showToast('Fattura inserita', 'ok')
-    setModal(false); setLoading(false); load()
+
+    // ── NOTA DI CREDITO: registra incasso automatico sulla fattura collegata ──
+    if (isNC && form.fattura_collegata_id && imp > 0) {
+      const fattCollegata = fatture.find(f => f.id === form.fattura_collegata_id)
+      if (fattCollegata) {
+        // Trova la prima rata non ancora incassata
+        let rataTarget = 1
+        for (const n of [1, 2, 3]) {
+          const impRata = fattCollegata[`rata${n}_importo`] || 0
+          if (impRata > 0 && statoRata(fattCollegata.id, n, impRata) !== 'incassata') {
+            rataTarget = n; break
+          }
+        }
+        const noteNC = `Nota di credito N°${form.numero}`
+        await supabase.from('pagamenti_clienti').insert({
+          fattura_id: form.fattura_collegata_id,
+          rata: rataTarget,
+          importo: imp,
+          data_pagamento: form.data || new Date().toISOString().split('T')[0],
+          note: noteNC,
+        })
+        // Aggiorna stato rata della fattura originale
+        const pagatoRataAggiornato = pagatoSuRata(form.fattura_collegata_id, rataTarget) + imp
+        const impRata = fattCollegata[`rata${rataTarget}_importo`] || 0
+        await supabase.from('fatture_clienti').update({
+          [`rata${rataTarget}_stato`]: pagatoRataAggiornato >= impRata - 0.01 ? 'Incassata' : 'Parziale'
+        }).eq('id', form.fattura_collegata_id)
+        // Registra anche in cash flow come uscita (riduce credito)
+        await supabase.from('cash_flow').insert({
+          data: form.data || new Date().toISOString().split('T')[0],
+          descrizione: `Nota di credito ${form.numero} su ft. ${fattCollegata.numero} — ${cli?.ragione_sociale}`,
+          conto: 'Conto 1', tipologia: 'Nota di Credito', entrata: 0, uscita: imp,
+          progetto_id: form.progetto_id || null, riferimento_fattura: form.numero
+        })
+        showToast(`NC salvata — incasso automatico di ${euro(imp)} registrato su Ft. ${fattCollegata.numero}`, 'ok')
+      }
+    } else {
+      showToast('Fattura inserita', 'ok')
+    }
+
+    setModal(false); setLoading(false)
+    setForm({ data: '', numero: '', cliente_id: '', progetto_id: '', descrizione: '', imponibile: '', iva_percentuale: '0', tipo: 'Fattura', fattura_collegata_id: '', r1i: '', r1s: '', r2i: '', r2s: '', r3i: '', r3s: '', note: '' })
+    load()
   }
 
   function badgeStatoRata(stato: string) {
@@ -232,6 +252,11 @@ export default function FattureClienti() {
   }
 
   const isNC = (f: any) => f.tipo === 'Nota di credito'
+
+  // Incassi NC sulla fattura (pagamenti con nota "Nota di credito")
+  function incassiNCsuFattura(fatturaId: string) {
+    return pagamenti.filter(p => p.fattura_id === fatturaId && p.note?.startsWith('Nota di credito'))
+  }
 
   const fattureFiltrate = useMemo(() => {
     let r = fatture
@@ -258,7 +283,7 @@ export default function FattureClienti() {
       <main className="flex-1 p-6 overflow-auto">
 
         {toast && (
-          <div className={`fixed top-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-white text-sm font-medium ${toast.type === 'ok' ? 'bg-green-600' : 'bg-red-600'}`}>
+          <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-white text-sm font-medium max-w-sm ${toast.type === 'ok' ? 'bg-green-600' : 'bg-red-600'}`}>
             {toast.type === 'ok' ? '✓ ' : '⚠️ '}{toast.msg}
           </div>
         )}
@@ -306,16 +331,8 @@ export default function FattureClienti() {
           <table className="table-base">
             <thead>
               <tr>
-                <th>Data</th>
-                <th>N° Fattura</th>
-                <th>Tipo</th>
-                <th>Cliente</th>
-                <th>Cantiere</th>
-                <th>Imponibile</th>
-                <th>Totale (IVA incl.)</th>
-                <th>Incassato</th>
-                <th>Stato</th>
-                <th></th>
+                <th>Data</th><th>N° Fattura</th><th>Tipo</th><th>Cliente</th><th>Cantiere</th>
+                <th>Imponibile</th><th>Totale (IVA incl.)</th><th>Incassato</th><th>Stato</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -327,6 +344,7 @@ export default function FattureClienti() {
                 const saldata = nc ? false : fatturaSaldata(f)
                 const collegata = nc && f.fattura_collegata_id ? fatture.find(x => x.id === f.fattura_collegata_id) : null
                 const totale = totalefattura(f)
+                const ncSuQuesta = !nc ? incassiNCsuFattura(f.id) : []
                 return (
                   <tr key={f.id} className={`cursor-pointer ${nc ? 'bg-purple-50 hover:bg-purple-100' : 'hover:bg-gray-50'}`}
                     onClick={() => !nc && apriDettaglio(f)}>
@@ -340,19 +358,16 @@ export default function FattureClienti() {
                     <td className="text-sm">{f.cliente_nome}</td>
                     <td className="text-xs text-gray-500">
                       {f.progetto_nome || '—'}
-                      {collegata && <span className="block text-purple-500 text-xs">→ comp. {collegata.numero}</span>}
+                      {collegata && <span className="block text-purple-500 text-xs">📝 comp. Ft {collegata.numero}</span>}
+                      {ncSuQuesta.length > 0 && (
+                        <span className="block text-purple-400 text-xs">📝 NC: -{euro(ncSuQuesta.reduce((s,p) => s + (p.importo||0), 0))}</span>
+                      )}
                     </td>
-                    {/* Imponibile */}
                     <td className={`font-medium text-sm ${nc ? 'text-purple-700' : ''}`}>
                       {nc ? '- ' : ''}{euro(f.imponibile)}
-                      {(f.iva_percentuale || 0) > 0 && !nc && (
-                        <span className="block text-xs text-gray-400 font-normal">IVA {f.iva_percentuale}%</span>
-                      )}
-                      {(f.iva_percentuale || 0) === 0 && !nc && (
-                        <span className="block text-xs text-gray-400 font-normal">RC</span>
-                      )}
+                      {(f.iva_percentuale || 0) > 0 && !nc && <span className="block text-xs text-gray-400 font-normal">IVA {f.iva_percentuale}%</span>}
+                      {(f.iva_percentuale || 0) === 0 && !nc && <span className="block text-xs text-gray-400 font-normal">RC</span>}
                     </td>
-                    {/* Totale con IVA inclusa */}
                     <td className={`font-semibold text-sm ${nc ? 'text-purple-600' : 'text-gray-900'}`}>
                       {nc ? <span className="text-xs text-gray-400">—</span> : euro(totale)}
                     </td>
@@ -392,45 +407,60 @@ export default function FattureClienti() {
             <div className="grid grid-cols-2 gap-3">
               <div><label className="label">Tipo documento *</label>
                 <select className="input" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value, r1i: '', r1s: '', r2i: '', r2s: '', fattura_collegata_id: ''})}>
-                  <option value="Fattura">Fattura</option><option value="Nota di credito">Nota di credito</option>
-                </select></div>
+                  <option value="Fattura">🧾 Fattura</option>
+                  <option value="Nota di credito">📝 Nota di credito</option>
+                </select>
+              </div>
               <div><label className="label">Data</label><input className="input" type="date" value={form.data} onChange={e => setForm({...form, data: e.target.value})} /></div>
-              <div><label className="label">N° Fattura *</label><input className="input" placeholder="es. FT/2026/001" value={form.numero} onChange={e => setForm({...form, numero: e.target.value})} /></div>
+              <div><label className="label">N° {form.tipo === 'Nota di credito' ? 'Nota di credito' : 'Fattura'} *</label>
+                <input className="input" placeholder={form.tipo === 'Nota di credito' ? 'es. NC/2026/001' : 'es. FT/2026/001'} value={form.numero} onChange={e => setForm({...form, numero: e.target.value})} /></div>
               <div><label className="label">Cliente *</label>
                 <select className="input" value={form.cliente_id} onChange={e => setForm({...form, cliente_id: e.target.value, fattura_collegata_id: ''})}>
                   <option value="">-- seleziona --</option>
                   {clienti.map(c => <option key={c.id} value={c.id}>{c.ragione_sociale}</option>)}
-                </select></div>
+                </select>
+              </div>
+
+              {/* NC: fattura di riferimento OBBLIGATORIA */}
               {form.tipo === 'Nota di credito' && (
                 <div className="col-span-2">
-                  <label className="label">Fattura di riferimento (opzionale)</label>
+                  <label className="label">Fattura di riferimento *</label>
                   <select className="input" value={form.fattura_collegata_id} onChange={e => setForm({...form, fattura_collegata_id: e.target.value})}>
-                    <option value="">-- nessuna --</option>
-                    {fatture.filter(f => !isNC(f) && f.cliente_id === form.cliente_id).map(f => (
-                      <option key={f.id} value={f.id}>{f.numero} — {euro(f.imponibile)} — {new Date(f.data).toLocaleDateString('it-IT')}</option>
+                    <option value="">-- seleziona la fattura da compensare --</option>
+                    {fatture.filter(f => !isNC(f) && (!form.cliente_id || f.cliente_id === form.cliente_id)).map(f => (
+                      <option key={f.id} value={f.id}>Ft {f.numero} — {euro(f.imponibile)} — {new Date(f.data).toLocaleDateString('it-IT')} — {f.cliente_nome}</option>
                     ))}
                   </select>
+                  {form.fattura_collegata_id && (
+                    <div className="mt-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 text-xs text-purple-700">
+                      📝 Verrà registrato automaticamente un incasso di <strong>{euro(parseFloat(form.imponibile) || 0)}</strong> sulla fattura selezionata con nota "Nota di credito N°{form.numero || '…'}"
+                    </div>
+                  )}
                 </div>
               )}
-              <div><label className="label">Cantiere</label>
+
+              <div><label className="label">Cantiere (opzionale)</label>
                 <select className="input" value={form.progetto_id} onChange={e => setForm({...form, progetto_id: e.target.value})}>
                   <option value="">-- seleziona --</option>
                   {progetti.map(p => <option key={p.id} value={p.id}>{p.codice} - {p.nome}</option>)}
-                </select></div>
-              <div><label className="label">Imponibile (€) *</label><input className="input" type="number" step="0.01" value={form.imponibile} onChange={e => setForm({...form, imponibile: e.target.value})} /></div>
+                </select>
+              </div>
+              <div><label className="label">Imponibile (€) *</label>
+                <input className="input" type="number" step="0.01" value={form.imponibile} onChange={e => setForm({...form, imponibile: e.target.value})} />
+              </div>
               <div><label className="label">IVA %</label>
                 <select className="input" value={form.iva_percentuale} onChange={e => setForm({...form, iva_percentuale: e.target.value})}>
                   <option value="0">0% (RC)</option><option value="22">22%</option><option value="10">10%</option>
-                </select></div>
-              {/* Anteprima totale in tempo reale */}
+                </select>
+              </div>
               {form.imponibile && (
                 <div className="col-span-2 bg-gray-50 rounded-lg px-3 py-2 text-sm flex items-center justify-between">
-                  <span className="text-gray-500">Totale fattura (imponibile + IVA)</span>
-                  <span className="font-bold text-gray-900">
-                    {euro((parseFloat(form.imponibile) || 0) * (1 + (parseFloat(form.iva_percentuale) || 0) / 100))}
-                  </span>
+                  <span className="text-gray-500">Totale {form.tipo === 'Nota di credito' ? 'NC' : 'fattura'} (imponibile + IVA)</span>
+                  <span className="font-bold text-gray-900">{euro((parseFloat(form.imponibile) || 0) * (1 + (parseFloat(form.iva_percentuale) || 0) / 100))}</span>
                 </div>
               )}
+
+              {/* Rate solo per fatture normali */}
               {form.tipo === 'Fattura' && (
                 <>
                   <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate di incasso</div>
@@ -444,7 +474,7 @@ export default function FattureClienti() {
             </div>
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn" onClick={() => setModal(false)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salva} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva'}</button>
+              <button className="btn btn-primary" onClick={salva} disabled={loading}>{loading ? 'Salvataggio...' : form.tipo === 'Nota di credito' ? '📝 Salva NC' : '🧾 Salva fattura'}</button>
             </div>
           </div>
         </div>
@@ -465,14 +495,12 @@ export default function FattureClienti() {
               <div><label className="label">IVA %</label>
                 <select className="input" value={modalModifica.iva_percentuale || '0'} onChange={e => setModalModifica({...modalModifica, iva_percentuale: e.target.value})}>
                   <option value="0">0% (RC)</option><option value="22">22%</option><option value="10">10%</option>
-                </select></div>
-              {/* Anteprima totale in modifica */}
+                </select>
+              </div>
               {modalModifica.imponibile && (
                 <div className="col-span-2 bg-blue-50 rounded-lg px-3 py-2 text-sm flex items-center justify-between">
-                  <span className="text-blue-600">Totale fattura (imponibile + IVA)</span>
-                  <span className="font-bold text-blue-900">
-                    {euro((parseFloat(modalModifica.imponibile) || 0) * (1 + (parseFloat(modalModifica.iva_percentuale) || 0) / 100))}
-                  </span>
+                  <span className="text-blue-600">Totale fattura</span>
+                  <span className="font-bold text-blue-900">{euro((parseFloat(modalModifica.imponibile) || 0) * (1 + (parseFloat(modalModifica.iva_percentuale) || 0) / 100))}</span>
                 </div>
               )}
               <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate</div>
@@ -505,21 +533,27 @@ export default function FattureClienti() {
             </div>
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-4 text-sm">
               <div><span className="text-gray-400 text-xs block">Data emissione</span>{new Date(modalDettaglio.data).toLocaleDateString('it-IT')}</div>
-              <div>
-                <span className="text-gray-400 text-xs block">Imponibile</span>
-                {euro(modalDettaglio.imponibile)}
-                <span className="text-xs text-gray-400 block">IVA {modalDettaglio.iva_percentuale}%</span>
-              </div>
-              <div>
-                <span className="text-gray-400 text-xs block">Totale fattura</span>
-                <span className="font-bold">{euro(totalefattura(modalDettaglio))}</span>
-              </div>
+              <div><span className="text-gray-400 text-xs block">Imponibile</span>{euro(modalDettaglio.imponibile)}<span className="text-xs text-gray-400 block">IVA {modalDettaglio.iva_percentuale}%</span></div>
+              <div><span className="text-gray-400 text-xs block">Totale fattura</span><span className="font-bold">{euro(totalefattura(modalDettaglio))}</span></div>
               <div><span className="text-gray-400 text-xs block">Incassato</span>{euro(totaleIncassatoFattura(modalDettaglio))}</div>
               <div><span className="text-gray-400 text-xs block">Stato</span>
                 {fatturaSaldata(modalDettaglio) ? <span className="badge badge-green">✓ Saldata</span> : <span className="badge badge-amber">Aperta</span>}
               </div>
               {modalDettaglio.note && <div className="col-span-4"><span className="text-gray-400 text-xs block">Note</span>{modalDettaglio.note}</div>}
             </div>
+
+            {/* Incassi NC su questa fattura */}
+            {incassiNCsuFattura(modalDettaglio.id).length > 0 && (
+              <div className="mb-4 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
+                <p className="text-xs font-semibold text-purple-700 mb-1">📝 Note di credito applicate</p>
+                {incassiNCsuFattura(modalDettaglio.id).map(p => (
+                  <div key={p.id} className="text-xs text-purple-600 flex justify-between">
+                    <span>{p.note}</span>
+                    <span className="font-semibold">- {euro(p.importo)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="space-y-4">
               {[1, 2, 3].map(n => {
@@ -546,7 +580,9 @@ export default function FattureClienti() {
                       <div className="bg-gray-50 rounded-lg p-2 mb-2 space-y-1">
                         {pagamentiRata.map(p => (
                           <div key={p.id} className="flex items-center justify-between text-xs">
-                            <span className="text-gray-600">💰 {euro(p.importo)} — {new Date(p.data_pagamento).toLocaleDateString('it-IT')}{p.note && ` · ${p.note}`}</span>
+                            <span className={`${p.note?.startsWith('Nota di credito') ? 'text-purple-600 font-medium' : 'text-gray-600'}`}>
+                              {p.note?.startsWith('Nota di credito') ? '📝' : '💰'} {euro(p.importo)} — {new Date(p.data_pagamento).toLocaleDateString('it-IT')}{p.note && ` · ${p.note}`}
+                            </span>
                             <button className="text-gray-300 hover:text-red-500" onClick={() => eliminaPagamento(p.id, modalDettaglio.id, n, importoRata)}>✕</button>
                           </div>
                         ))}
@@ -572,7 +608,6 @@ export default function FattureClienti() {
                 )
               })}
             </div>
-
             <div className="flex gap-2 justify-end mt-4">
               <button className="btn text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(modalDettaglio.id, modalDettaglio.numero)}>✕ Elimina fattura</button>
               <button className="btn btn-primary" onClick={() => { setModalModifica({...modalDettaglio}); setModalDettaglio(null) }}>✏️ Modifica fattura</button>
