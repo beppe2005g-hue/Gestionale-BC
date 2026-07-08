@@ -62,7 +62,7 @@ export default function CassaEdilePage() {
     const fine = new Date(anno, mese+1, 0).toISOString().split('T')[0]
     const [{ data: dip },{ data: ce },{ data: az },{ data: ass },{ data: pres }] = await Promise.all([
       supabase.from('dipendenti').select('id,nome,cognome,azienda,ordine').eq('attivo',true),
-      supabase.from('cantieri_ce').select('*'),
+      supabase.from('cantieri_ce').select('id,numero,nome,indirizzo,note,attivo,data_inizio,data_fine,importo_lavori,num_lavoratori,descrizione_lavori,macchinari,appaltatore,committente,cig_cup,cnce'),
       supabase.from('cantieri_ce_aziende').select('*'),
       supabase.from('ce_assegnazioni').select('*').eq('mese', meseKey),
       supabase.from('presenze').select('dipendente_id,ore,cantiere_nome')
@@ -117,6 +117,10 @@ export default function CassaEdilePage() {
 
   // ── Azioni ──────────────────────────────────────────────────────────────
   function apriAss(d: any) {
+    if (cantieriCE.filter(c=>c.attivo).length === 0) {
+      alert('Nessun cantiere CE attivo. Vai nel tab ⚙️ Cantieri CE e creane almeno uno.')
+      return
+    }
     const es = assegnazioni.filter(a => a.dipendente_id === d.id)
     setFrmAss(cantieriCE.filter(c=>c.attivo).map(c => {
       const e = es.find(x=>x.cantiere_ce_id===c.id)
@@ -155,7 +159,20 @@ export default function CassaEdilePage() {
   async function salvaCE() {
     if (!frmCE.numero||!frmCE.nome) { alert('Inserisci numero e nome'); return }
     setSalvCE(true)
-    const p = { numero:frmCE.numero, nome:frmCE.nome, indirizzo:frmCE.indirizzo||null, note:frmCE.note||null }
+    const p = {
+      numero: frmCE.numero, nome: frmCE.nome,
+      indirizzo: frmCE.indirizzo||null, note: frmCE.note||null,
+      data_inizio:        (frmCE as any).data_inizio        || null,
+      data_fine:          (frmCE as any).data_fine          || null,
+      importo_lavori:     (frmCE as any).importo_lavori     ? parseFloat((frmCE as any).importo_lavori) : null,
+      num_lavoratori:     (frmCE as any).num_lavoratori     ? parseInt((frmCE as any).num_lavoratori) : null,
+      descrizione_lavori: (frmCE as any).descrizione_lavori || null,
+      macchinari:         (frmCE as any).macchinari         || null,
+      appaltatore:        (frmCE as any).appaltatore        || null,
+      committente:        (frmCE as any).committente        || null,
+      cig_cup:            (frmCE as any).cig_cup            || null,
+      cnce:               (frmCE as any).cnce               || null,
+    }
     if (modalCE==='modifica') await supabase.from('cantieri_ce').update(p).eq('id',frmCE.id)
     else await supabase.from('cantieri_ce').insert({...p, attivo:true})
     setSalvCE(false); setModalCE(null); load()
@@ -754,23 +771,90 @@ export default function CassaEdilePage() {
         </div>
       )}
 
-      {/* ── MODAL NUOVO / MODIFICA CANTIERE CE ── */}
       {modalCE && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-md shadow-xl">
-            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div className="bg-white rounded-xl w-full max-w-2xl shadow-xl max-h-[90vh] flex flex-col">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
               <h2 className="font-semibold">{modalCE==='nuovo'?'+ Nuovo cantiere CE':'✏️ Modifica cantiere CE'}</h2>
               <button onClick={()=>setModalCE(null)} className="text-gray-400 text-xl">×</button>
             </div>
-            <div className="p-5 space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="label">Numero *</label><input className="input" placeholder="es. 15" value={frmCE.numero} onChange={e=>setFrmCE(f=>({...f,numero:e.target.value}))} /></div>
-                <div><label className="label">Nome *</label><input className="input" placeholder="Nome cantiere…" value={frmCE.nome} onChange={e=>setFrmCE(f=>({...f,nome:e.target.value}))} /></div>
+            <div className="flex-1 overflow-y-auto p-5 space-y-3">
+              {/* Riga 1: Numero + Nome */}
+              <div className="grid grid-cols-4 gap-3">
+                <div>
+                  <label className="label">N° Cantiere *</label>
+                  <input className="input" placeholder="es. 15" value={frmCE.numero} onChange={e=>setFrmCE(f=>({...f,numero:e.target.value}))} />
+                </div>
+                <div className="col-span-3">
+                  <label className="label">Nome cantiere *</label>
+                  <input className="input" placeholder="Nome cantiere…" value={frmCE.nome} onChange={e=>setFrmCE(f=>({...f,nome:e.target.value}))} />
+                </div>
               </div>
-              <div><label className="label">Indirizzo</label><input className="input" value={frmCE.indirizzo} onChange={e=>setFrmCE(f=>({...f,indirizzo:e.target.value}))} /></div>
-              <div><label className="label">Note</label><input className="input" value={frmCE.note} onChange={e=>setFrmCE(f=>({...f,note:e.target.value}))} /></div>
+              {/* Riga 2: Date */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Data inizio</label>
+                  <input type="date" className="input" value={(frmCE as any).data_inizio||''} onChange={e=>setFrmCE(f=>({...f,data_inizio:e.target.value}))} />
+                </div>
+                <div>
+                  <label className="label">Data fine</label>
+                  <input type="date" className="input" value={(frmCE as any).data_fine||''} onChange={e=>setFrmCE(f=>({...f,data_fine:e.target.value}))} />
+                </div>
+              </div>
+              {/* Riga 3: Descrizione lavori */}
+              <div>
+                <label className="label">Descrizione lavori</label>
+                <textarea className="input h-16 resize-none" placeholder="Descrizione delle lavorazioni…" value={(frmCE as any).descrizione_lavori||''} onChange={e=>setFrmCE(f=>({...f,descrizione_lavori:e.target.value}))} />
+              </div>
+              {/* Riga 4: Importo + N° lavoratori */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Importo dei lavori (€)</label>
+                  <input type="number" step="0.01" className="input" placeholder="es. 50000" value={(frmCE as any).importo_lavori||''} onChange={e=>setFrmCE(f=>({...f,importo_lavori:e.target.value}))} />
+                </div>
+                <div>
+                  <label className="label">N° lavoratori</label>
+                  <input type="number" className="input" placeholder="es. 4" value={(frmCE as any).num_lavoratori||''} onChange={e=>setFrmCE(f=>({...f,num_lavoratori:e.target.value}))} />
+                </div>
+              </div>
+              {/* Riga 5: Macchinari */}
+              <div>
+                <label className="label">Macchinari utilizzati</label>
+                <input className="input" placeholder="es. Flessibile, trapano, sega circolare…" value={(frmCE as any).macchinari||''} onChange={e=>setFrmCE(f=>({...f,macchinari:e.target.value}))} />
+              </div>
+              {/* Riga 6: Appaltatore */}
+              <div>
+                <label className="label">Dati appaltatore</label>
+                <input className="input" placeholder="Ragione sociale, sede, P.IVA…" value={(frmCE as any).appaltatore||''} onChange={e=>setFrmCE(f=>({...f,appaltatore:e.target.value}))} />
+              </div>
+              {/* Riga 7: Committente */}
+              <div>
+                <label className="label">Dati committente</label>
+                <input className="input" placeholder="Nome committente, codice fiscale…" value={(frmCE as any).committente||''} onChange={e=>setFrmCE(f=>({...f,committente:e.target.value}))} />
+              </div>
+              {/* Riga 8: CIG/CUP + CNCE */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">CIG o CUP</label>
+                  <input className="input" placeholder="es. CIG 992966391F" value={(frmCE as any).cig_cup||''} onChange={e=>setFrmCE(f=>({...f,cig_cup:e.target.value}))} />
+                </div>
+                <div>
+                  <label className="label">CNCE</label>
+                  <input className="input" placeholder="es. CNCEC9012857509" value={(frmCE as any).cnce||''} onChange={e=>setFrmCE(f=>({...f,cnce:e.target.value}))} />
+                </div>
+              </div>
+              {/* Riga 9: Indirizzo */}
+              <div>
+                <label className="label">Indirizzo</label>
+                <input className="input" placeholder="Via, numero civico, comune, CAP…" value={frmCE.indirizzo||''} onChange={e=>setFrmCE(f=>({...f,indirizzo:e.target.value}))} />
+              </div>
+              {/* Riga 10: Note */}
+              <div>
+                <label className="label">Note</label>
+                <input className="input" value={frmCE.note||''} onChange={e=>setFrmCE(f=>({...f,note:e.target.value}))} />
+              </div>
             </div>
-            <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2">
+            <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2 flex-shrink-0">
               <button className="btn" onClick={()=>setModalCE(null)}>Annulla</button>
               <button className="btn btn-primary" onClick={salvaCE} disabled={salvCE}>{salvCE?'Salvataggio…':modalCE==='nuovo'?'Aggiungi':'Salva'}</button>
             </div>
@@ -780,11 +864,12 @@ export default function CassaEdilePage() {
 
       <style>{`
         @media print {
-          @page { size:A4; margin:10mm }
-          body * { visibility:hidden !important }
-          #report-ce, #report-ce * { visibility:visible !important }
-          #report-ce { position:static !important; width:100% !important; padding:0 !important }
-          aside { display:none !important }
+          @page { size: A3 landscape; margin: 8mm; }
+          aside, header, .no-print { display: none !important; }
+          .flex.min-h-screen { display: block !important; }
+          main { overflow: visible !important; height: auto !important; max-height: none !important; display: block !important; }
+          #report-ce { display: block !important; padding: 0 !important; overflow: visible !important; }
+          .flex-1.overflow-auto { overflow: visible !important; height: auto !important; }
         }
       `}</style>
     </div>
