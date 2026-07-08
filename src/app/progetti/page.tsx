@@ -112,6 +112,14 @@ function FormProgetto({ data, setData, clienti, utenti, isNuovo }: { data: any, 
   )
 }
 
+
+const statoBadgeFatturazione = (s: string) => {
+  if (s === 'completa') return <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-800 font-semibold">✅ Fatt. completa</span>
+  if (s === 'incompleta') return <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold">⚠️ Fatt. incompleta</span>
+  if (s === 'ritenute_da_svincolare') return <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 font-semibold">🔒 Ritenute da svincolare</span>
+  return <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-semibold">💰 In pari</span>
+}
+
 export default function Progetti() {
   const [progetti, setProgetti] = useState<any[]>([])
   const [clienti, setClienti] = useState<any[]>([])
@@ -469,6 +477,7 @@ export default function Progetti() {
                             {(p.societa || 'BC General Service') === 'Filosofia' ? '🏢 Filosofia' : '🏗 BC'}
                           </span>
                           {!p.modalita_pagamento_contratto && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">⚠️ Dati contrattuali mancanti</span>}
+                          {statoBadgeFatturazione(p.stato_fatturazione || 'in_pari')}
                         </div>
                         <h3 className="font-semibold text-base">{p.nome}</h3>
                         <p className="text-sm text-gray-500">{p.cliente_nome || '—'}</p>
