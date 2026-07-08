@@ -197,6 +197,89 @@ export default function PresenzeMonthly() {
 
   const oggiStr = dateToYMD(new Date())
 
+
+  function apriStampa() {
+    const win = window.open('', '_blank', 'width=1200,height=900')
+    if (!win) return
+    const oggi = new Date()
+    const meseStr = oggi.toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })
+
+    // Colori aziende
+    const aziendaColori: Record<string, { bg: string; text: string; header: string }> = {
+      'BC General Service': { bg: '#fff7ed', text: '#7c2d12', header: '#ea580c' },
+      'Atena': { bg: '#eff6ff', text: '#1e3a8a', header: '#2563eb' },
+      'Beta': { bg: '#f0fdf4', text: '#14532d', header: '#16a34a' },
+      'Omega': { bg: '#faf5ff', text: '#4a1d96', header: '#9333ea' },
+    }
+    const coloreAzienda = (az: string) => aziendaColori[az] || { bg: '#f9fafb', text: '#111827', header: '#374151' }
+
+    // Genera le righe della tabella
+    let righeHTML = ''
+    let azPrec = ''
+    for (const d of dipendenti.filter(x => !filtroAzienda || x.azienda === filtroAzienda)) {
+      const c = coloreAzienda(d.azienda)
+      // Intestazione azienda quando cambia
+      if (d.azienda !== azPrec) {
+        righeHTML += `<tr style="background:${c.header};color:white;font-weight:700;font-size:11px"><td colspan="${giorni.length + 2}" style="padding:4px 8px">${d.azienda}</td></tr>`
+        azPrec = d.azienda
+      }
+      let celle = ''
+      for (const g of giorni) {
+        const dow = g.getDay()
+        const dataYMD = dateToYMD(g)
+        const dataInizio = dipInizioMap[d.id]
+        if (dataInizio && dataYMD < dataInizio) {
+          celle += `<td style="background:#b91c1c;border:1px solid #e5e7eb"></td>`
+          continue
+        }
+        if (dow === 0) { celle += `<td style="background:#fee2e2;border:1px solid #e5e7eb"></td>`; continue }
+        const val = valoreCella(d.id, g)
+        let sfondo = dow === 6 ? '#fef9c3' : (c.bg)
+        let testo = ''
+        if (val !== null) {
+          if (val.ore >= 1) { testo = '1'; sfondo = '#dcfce7' }
+          else if (val.ore > 0) { testo = '½'; sfondo = '#fef3c7' }
+          else { testo = '0'; sfondo = '#fee2e2' }
+        }
+        celle += `<td style="background:${sfondo};border:1px solid #e5e7eb;text-align:center;font-size:9px;font-weight:600;color:#111">${testo}</td>`
+      }
+      // Conta giorni lavorati
+      const presenti = giorni.filter(g => { const v = valoreCella(d.id, g); return v && v.ore >= 1 }).length
+      const meta = giorni.filter(g => { const v = valoreCella(d.id, g); return v && v.ore > 0 && v.ore < 1 }).length
+      righeHTML += `<tr style="background:${c.bg}">
+        <td style="padding:3px 6px;font-size:10px;font-weight:600;color:${c.text};white-space:nowrap;border:1px solid #e5e7eb">${d.cognome} ${d.nome}</td>
+        ${celle}
+        <td style="padding:3px 6px;font-size:10px;font-weight:700;text-align:center;border:1px solid #e5e7eb;background:#f8faff">${presenti}${meta > 0 ? '+' + meta + '½' : ''}</td>
+      </tr>`
+    }
+
+    // Intestazioni giorni
+    let testeGiorni = '<th style="padding:4px;font-size:9px;min-width:20px">Nome</th>'
+    for (const g of giorni) {
+      const dow = g.getDay()
+      let bg = dow === 0 ? '#dc2626' : dow === 6 ? '#ca8a04' : '#1e3a8a'
+      const GIORNI_S = ['D','L','M','M','G','V','S']
+      testeGiorni += `<th style="padding:2px;font-size:8px;background:${bg};color:white;min-width:20px;text-align:center">${g.getDate()}<br/><span style="font-size:7px">${GIORNI_S[dow]}</span></th>`
+    }
+    testeGiorni += '<th style="padding:4px;font-size:9px;background:#1e3a8a;color:white">Tot</th>'
+
+    const html = `<!DOCTYPE html><html><head><title>Presenze ${meseStr}</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 10mm; }
+      table { border-collapse: collapse; width: 100%; font-size: 9px; }
+      @media print { @page { size: A3 landscape; margin: 8mm; } body { margin: 0; } }
+    </style></head><body>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid #1e3a8a">
+      <div><p style="font-size:14px;font-weight:800;color:#1e3a8a;margin:0">BC GENERAL SERVICE</p><p style="font-size:10px;color:#6b7280;margin:0">Registro presenze — ${meseStr}</p></div>
+      <div style="text-align:right"><p style="font-size:10px;color:#6b7280;margin:0">Stampato il ${new Date().toLocaleDateString('it-IT')}</p></div>
+    </div>
+    <table><thead><tr style="background:#1e3a8a;color:white">${testeGiorni}</tr></thead><tbody>${righeHTML}</tbody></table>
+    <script>window.onload = () => { window.print() }</script></body></html>`
+
+    win.document.write(html)
+    win.document.close()
+  }
+
   return (
     <div className="flex min-h-screen">
       <Sidebar />
