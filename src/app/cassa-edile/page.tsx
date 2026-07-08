@@ -1,218 +1,146 @@
 'use client'
-import { useEffect, useState, useRef } from 'react'
-import * as XLSX from 'xlsx'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 
-// ─── Mesi italiani ────────────────────────────────────────────────────────────
-const MESI_IT: Record<string, number> = {
-  GENNAIO:1, FEBBRAIO:2, MARZO:3, APRILE:4, MAGGIO:5, GIUGNO:6,
-  LUGLIO:7, AGOSTO:8, SETTEMBRE:9, OTTOBRE:10, NOVEMBRE:11, DICEMBRE:12
-}
-const MESI_LABEL = ['','Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre']
+function fmt2(n: number) { return n.toFixed(2).replace('.', ',') }
+function fmtOre(n: number) { return n % 1 === 0 ? String(Math.round(n)) : fmt2(n) }
 
-function parseItMese(str: string): string | null {
-  if (!str) return null
-  const parts = str.trim().toUpperCase().replace(/\s+/g, ' ').split(' ')
-  const mese = MESI_IT[parts[0]]
-  const anno = parseInt(parts[parts.length - 1])
-  if (!mese || !anno || anno < 2020 || anno > 2050) return null
-  return `${anno}-${String(mese).padStart(2,'0')}-01`
-}
+const MESI = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre']
 
-function labelMese(d: string) {
-  const [y, m] = d.split('-')
-  return `${MESI_LABEL[parseInt(m)]} ${y}`
-}
-
-// ─── Parsing Excel (foglio Tot) ───────────────────────────────────────────────
-type RigaImport = { azienda: string; nome: string; cantiere: string; ore: number }
-
-function parseExcel(file: File): Promise<{ mese: string; righe: RigaImport[]; cantieri: string[]; errore?: string }> {
-  return new Promise(resolve => {
-    const reader = new FileReader()
-    reader.onload = e => {
-      try {
-        const data = new Uint8Array(e.target!.result as ArrayBuffer)
-        const wb = XLSX.read(data, { type: 'array' })
-
-        // Cerca il foglio Tot (primo foglio o foglio chiamato Tot/Totale)
-        const nomeSheet = wb.SheetNames.find(n => n.toLowerCase().startsWith('tot')) || wb.SheetNames[0]
-        const ws = wb.Sheets[nomeSheet]
-        const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as any[][]
-
-        if (!rows.length) { resolve({ mese: '', righe: [], cantieri: [], errore: 'Foglio vuoto' }); return }
-
-        // Riga 0 = header: [mese, cantiere1, cantiere2, ..., '', 'Tot ore persona']
-        const headerRow = rows[0]
-        const meseStr = String(headerRow[0] || '').trim()
-        const mese = parseItMese(meseStr)
-        if (!mese) { resolve({ mese: '', righe: [], cantieri: [], errore: `Non riesco a leggere il mese: "${meseStr}"` }); return }
-
-        // Trova i cantieri (colonne 1..N prima della colonna vuota o "Tot")
-        const cantieri: string[] = []
-        const cantiereStartCol = 1
-        let cantiereEndCol = cantiereStartCol
-        for (let c = cantiereStartCol; c < headerRow.length; c++) {
-          const v = String(headerRow[c] || '').trim()
-          if (!v || v.toLowerCase().includes('tot')) break
-          cantieri.push(v)
-          cantiereEndCol = c
-        }
-
-        if (!cantieri.length) { resolve({ mese, righe: [], cantieri: [], errore: 'Nessun cantiere trovato nel foglio Tot' }); return }
-
-        // Scansione righe: aziende e dipendenti
-        let currentAzienda = ''
-        const righe: RigaImport[] = []
-
-        for (let r = 1; r < rows.length; r++) {
-          const row = rows[r]
-          if (!row || !row[0]) continue
-          const col0 = String(row[0]).trim()
-          if (!col0) continue
-
-          // È un'intestazione azienda? (non inizia con numero)
-          if (!/^\d/.test(col0)) {
-            currentAzienda = col0
-            continue
-          }
-
-          // È una riga dipendente
-          const nome = col0.replace(/^\d+[\.,]\s*/, '').trim()
-          if (!nome || !currentAzienda) continue
-
-          // Ore per ogni cantiere
-          for (let ci = 0; ci < cantieri.length; ci++) {
-            const val = row[cantiereStartCol + ci]
-            const ore = typeof val === 'number' ? val : parseFloat(String(val || '0')) || 0
-            if (ore > 0) {
-              righe.push({ azienda: currentAzienda, nome, cantiere: cantieri[ci], ore })
-            }
-          }
-        }
-
-        resolve({ mese, righe, cantieri })
-      } catch (err: any) {
-        resolve({ mese: '', righe: [], cantieri: [], errore: `Errore parsing: ${err.message}` })
-      }
-    }
-    reader.readAsArrayBuffer(file)
-  })
-}
-
-// ─── Componente principale ────────────────────────────────────────────────────
 export default function CassaEdilePage() {
-  const [tab, setTab] = useState<'visualizza' | 'importa'>('visualizza')
-  const [mesiDisponibili, setMesiDisponibili] = useState<string[]>([])
-  const [meseSelezionato, setMeseSelezionato] = useState<string>('')
-  const [filtroAzienda, setFiltroAzienda] = useState<string>('tutti')
-  const [dati, setDati] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
+  const oggi = new Date()
+  const [mese, setMese] = useState(oggi.getMonth())
+  const [anno, setAnno] = useState(oggi.getFullYear())
+  const [tab, setTab] = useState<'resoconto' | 'cantiere' | 'spostamenti'>('resoconto')
+  const [cantiereSel, setCantiereSel] = useState('')
 
-  // Import
-  const [preview, setPreview] = useState<{ mese: string; righe: RigaImport[]; cantieri: string[] } | null>(null)
-  const [erroreImport, setErroreImport] = useState<string>('')
-  const [salvando, setSalvando] = useState(false)
-  const [salvato, setSalvato] = useState<string>('')
-  const fileRef = useRef<HTMLInputElement>(null)
+  // Dati
+  const [presenze, setPresenze] = useState<any[]>([])
+  const [dipendenti, setDipendenti] = useState<any[]>([])
+  const [progetti, setProgetti] = useState<any[]>([])
+  const [spostamenti, setSpostamenti] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
 
-  useEffect(() => { loadMesi() }, [])
-  useEffect(() => { if (meseSelezionato) loadDati(meseSelezionato) }, [meseSelezionato])
+  // Modal spostamento
+  const [modalSposta, setModalSposta] = useState(false)
+  const [formSposta, setFormSposta] = useState({ dipendente_id: '', dipendente_nome: '', cantiere_origine_nome: '', cantiere_destinazione_id: '', ore: '' })
+  const [salvandoSposta, setSalvandoSposta] = useState(false)
 
-  async function loadMesi() {
-    const { data } = await supabase.from('cassa_edile_mensile').select('mese').order('mese', { ascending: false })
-    const unici = Array.from(new Set((data || []).map((r: any) => r.mese))).sort().reverse()
-    setMesiDisponibili(unici as string[])
-    if (unici.length > 0) setMeseSelezionato(unici[0] as string)
-  }
+  useEffect(() => { load() }, [mese, anno])
 
-  async function loadDati(mese: string) {
+  async function load() {
     setLoading(true)
-    const { data } = await supabase.from('cassa_edile_mensile')
-      .select('*')
-      .eq('mese', mese)
-      .order('azienda').order('dipendente_nome').order('cantiere_nome')
-    setDati(data || [])
+    const meseStr = `${anno}-${String(mese + 1).padStart(2, '0')}`
+    const dataInizio = `${meseStr}-01`
+    const dataFine = new Date(anno, mese + 1, 0).toISOString().split('T')[0]
+
+    const [{ data: pres }, { data: dip }, { data: proj }, { data: sposta }] = await Promise.all([
+      supabase.from('presenze').select('*').gte('data', dataInizio).lte('data', dataFine).eq('approvato', true).gt('ore', 0),
+      supabase.from('dipendenti').select('id,nome,cognome,azienda,mansione,ordine').eq('attivo', true).order('ordine', { nullsFirst: false }).order('cognome'),
+      supabase.from('progetti').select('id,codice,nome,a_congruita,societa').order('nome'),
+      supabase.from('ce_spostamenti').select('*').eq('mese', dataInizio),
+    ])
+
+    setPresenze(pres || [])
+    setDipendenti(dip || [])
+    setProgetti(proj || [])
+    setSpostamenti(sposta || [])
     setLoading(false)
   }
 
-  async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setErroreImport('')
-    setSalvato('')
-    setPreview(null)
-    const res = await parseExcel(file)
-    if (res.errore) { setErroreImport(res.errore); return }
-    if (!res.righe.length) { setErroreImport('Nessuna riga con ore > 0 trovata nel foglio Tot'); return }
-    setPreview(res)
-  }
-
-  async function salvaImport() {
-    if (!preview) return
-    setSalvando(true)
-    const payload = preview.righe.map(r => ({
-      mese: preview.mese,
-      azienda: r.azienda,
-      dipendente_nome: r.nome,
-      cantiere_nome: r.cantiere,
-      ore: r.ore,
-    }))
-
-    const { error } = await supabase.from('cassa_edile_mensile')
-      .upsert(payload, { onConflict: 'mese,azienda,dipendente_nome,cantiere_nome' })
-
-    setSalvando(false)
-    if (error) { setErroreImport('Errore salvataggio: ' + error.message); return }
-
-    setSalvato(`✅ Importate ${payload.length} righe per ${labelMese(preview.mese)}`)
-    setPreview(null)
-    if (fileRef.current) fileRef.current.value = ''
-    await loadMesi()
-    setMeseSelezionato(preview.mese)
-    setTab('visualizza')
-  }
-
-  async function eliminaMese() {
-    if (!meseSelezionato) return
-    if (!confirm(`Eliminare tutti i dati di ${labelMese(meseSelezionato)}?`)) return
-    await supabase.from('cassa_edile_mensile').delete().eq('mese', meseSelezionato)
-    setDati([])
-    loadMesi()
-  }
-
-  // ── Costruzione pivot per visualizzazione ──────────────────────────────────
-  const cantieri = Array.from(new Set(dati.map((r: any) => r.cantiere_nome))).sort()
-  const aziende = Array.from(new Set(dati.map((r: any) => r.azienda)))
-  const aziendeFiltrate = filtroAzienda === 'tutti' ? aziende : [filtroAzienda]
-
-  // pivot: [azienda][dipendente][cantiere] = ore
-  const pivot: Record<string, Record<string, Record<string, number>>> = {}
-  for (const r of dati) {
-    if (!pivot[r.azienda]) pivot[r.azienda] = {}
-    if (!pivot[r.azienda][r.dipendente_nome]) pivot[r.azienda][r.dipendente_nome] = {}
-    pivot[r.azienda][r.dipendente_nome][r.cantiere_nome] = r.ore
-  }
-
-  // Totali colonna per cantiere
-  const totaliCantiere: Record<string, number> = {}
-  for (const r of dati) {
-    totaliCantiere[r.cantiere_nome] = (totaliCantiere[r.cantiere_nome] || 0) + r.ore
-  }
-  const totaleTotale = Object.values(totaliCantiere).reduce((a, b) => a + b, 0)
-
-  // Preview: pivot azienda → dipendenti
-  const previewCantieri = preview?.cantieri || []
-  const previewPivot: Record<string, Record<string, number[]>> = {}
-  if (preview) {
-    for (const r of preview.righe) {
-      if (!previewPivot[r.azienda]) previewPivot[r.azienda] = {}
-      if (!previewPivot[r.azienda][r.nome]) previewPivot[r.azienda][r.nome] = new Array(previewCantieri.length).fill(0)
-      const ci = previewCantieri.indexOf(r.cantiere)
-      if (ci >= 0) previewPivot[r.azienda][r.nome][ci] = r.ore
+  // ── Calcolo ore per dipendente × cantiere ──────────────────────────────────
+  // Include gli spostamenti: rimuove da cantiere origine, aggiunge a destinazione
+  const datiCE = useMemo(() => {
+    // Raggruppo presenze per dipendente e cantiere
+    const mappa: Record<string, Record<string, number>> = {} // dipId -> cantiereNome -> ore
+    for (const p of presenze) {
+      if (!p.dipendente_id) continue
+      const cantNome = p.is_vario ? null : (p.cantiere_nome || null)
+      if (!cantNome) continue // ignoro vario e senza cantiere
+      if (!mappa[p.dipendente_id]) mappa[p.dipendente_id] = {}
+      const ore = (p.ore || 0) * 8 // converti giorni → ore
+      mappa[p.dipendente_id][cantNome] = (mappa[p.dipendente_id][cantNome] || 0) + ore
     }
+    // Applico spostamenti
+    for (const s of spostamenti) {
+      const did = s.dipendente_id
+      if (!did) continue
+      if (!mappa[did]) mappa[did] = {}
+      const orig = s.cantiere_origine_nome
+      const dest = s.cantiere_destinazione_nome
+      const ore = Number(s.ore) || 0
+      if (orig && mappa[did][orig]) mappa[did][orig] = Math.max(0, mappa[did][orig] - ore)
+      if (dest) mappa[did][dest] = (mappa[did][dest] || 0) + ore
+    }
+    return mappa
+  }, [presenze, spostamenti])
+
+  // Lista cantieri presenti nel mese (con dati CE)
+  const cantieriMese = useMemo(() => {
+    const nomi = new Set<string>()
+    for (const dipMap of Object.values(datiCE)) {
+      for (const nome of Object.keys(dipMap)) { if (dipMap[nome] > 0) nomi.add(nome) }
+    }
+    return Array.from(nomi).sort()
+  }, [datiCE])
+
+  // Dipendenti con almeno un'ora nel mese
+  const dipConOre = useMemo(() => {
+    return dipendenti.filter(d => {
+      const dm = datiCE[d.id]
+      return dm && Object.values(dm).some(v => v > 0)
+    })
+  }, [dipendenti, datiCE])
+
+  // Totale ore per dipendente (somma cantieri)
+  function oreTotDip(dipId: string) {
+    const dm = datiCE[dipId] || {}
+    return Object.values(dm).reduce((s, v) => s + v, 0)
   }
+  // Totale ore per cantiere (somma dipendenti)
+  function oreTotCantiere(cantNome: string) {
+    return dipConOre.reduce((s, d) => s + ((datiCE[d.id] || {})[cantNome] || 0), 0)
+  }
+
+  async function salvaSposta() {
+    if (!formSposta.dipendente_id || !formSposta.cantiere_origine_nome || !formSposta.cantiere_destinazione_id || !formSposta.ore) {
+      alert('Compila tutti i campi'); return
+    }
+    setSalvandoSposta(true)
+    const meseData = `${anno}-${String(mese + 1).padStart(2, '0')}-01`
+    const destProj = progetti.find(p => p.id === formSposta.cantiere_destinazione_id)
+    const dip = dipendenti.find(d => d.id === formSposta.dipendente_id)
+    await supabase.from('ce_spostamenti').insert({
+      mese: meseData,
+      dipendente_id: formSposta.dipendente_id,
+      dipendente_nome: dip ? `${dip.cognome} ${dip.nome}` : '',
+      cantiere_origine_nome: formSposta.cantiere_origine_nome,
+      cantiere_destinazione_id: formSposta.cantiere_destinazione_id,
+      cantiere_destinazione_nome: destProj ? `${destProj.codice} - ${destProj.nome}` : '',
+      ore: parseFloat(formSposta.ore.replace(',', '.')) || 0,
+    })
+    setSalvandoSposta(false)
+    setModalSposta(false)
+    setFormSposta({ dipendente_id: '', dipendente_nome: '', cantiere_origine_nome: '', cantiere_destinazione_id: '', ore: '' })
+    load()
+  }
+
+  async function eliminaSposta(id: string) {
+    if (!confirm('Eliminare questo spostamento?')) return
+    await supabase.from('ce_spostamenti').delete().eq('id', id)
+    load()
+  }
+
+  // Cantieri NON a congruità nel mese
+  const cantieriNonCongruita = useMemo(() => {
+    return cantieriMese.filter(nome => {
+      const proj = progetti.find(p => `${p.codice} - ${p.nome}` === nome || p.nome === nome)
+      return proj && proj.a_congruita === false
+    })
+  }, [cantieriMese, progetti])
+
+  const meseStr = `${MESI[mese]} ${anno}`
 
   return (
     <div className="flex min-h-screen">
@@ -223,236 +151,234 @@ export default function CassaEdilePage() {
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white flex-shrink-0">
           <div>
             <h1 className="text-lg font-semibold">🏗️ Cassa Edile</h1>
-            <p className="text-xs text-gray-500 mt-0.5">Ore per persona per cantiere — separato dai cantieri aperti</p>
+            <p className="text-xs text-gray-500 mt-0.5">Generata automaticamente dalle presenze approvate</p>
           </div>
-          <div className="flex gap-2">
-            {(['visualizza', 'importa'] as const).map(t => (
-              <button key={t} onClick={() => setTab(t)}
-                className={`btn btn-sm ${tab === t ? 'btn-primary' : ''}`}>
-                {t === 'visualizza' ? '📊 Visualizza' : '📥 Importa Excel'}
-              </button>
-            ))}
+          <div className="flex gap-2 items-center">
+            {/* Selettore mese/anno */}
+            <select className="input w-36 text-sm" value={mese} onChange={e => setMese(Number(e.target.value))}>
+              {MESI.map((m, i) => <option key={i} value={i}>{m}</option>)}
+            </select>
+            <select className="input w-24 text-sm" value={anno} onChange={e => setAnno(Number(e.target.value))}>
+              {[anno - 1, anno, anno + 1].map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+            <button className="btn btn-sm" onClick={() => window.print()}>🖨️ Stampa</button>
           </div>
         </div>
 
-        {/* ─── TAB VISUALIZZA ─── */}
-        {tab === 'visualizza' && (
-          <div className="flex-1 overflow-hidden flex flex-col">
-            {/* Barra filtri */}
-            <div className="flex items-center gap-3 px-6 py-3 border-b border-gray-200 bg-gray-50 flex-shrink-0 flex-wrap">
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600 font-medium">Mese:</label>
-                <select className="input text-sm py-1"
-                  value={meseSelezionato}
-                  onChange={e => setMeseSelezionato(e.target.value)}>
-                  {mesiDisponibili.length === 0 && <option value="">— nessun dato importato —</option>}
-                  {mesiDisponibili.map(m => <option key={m} value={m}>{labelMese(m)}</option>)}
-                </select>
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600 font-medium">Azienda:</label>
-                <select className="input text-sm py-1" value={filtroAzienda} onChange={e => setFiltroAzienda(e.target.value)}>
-                  <option value="tutti">Tutte</option>
-                  {aziende.map(a => <option key={a} value={a}>{a}</option>)}
-                </select>
-              </div>
-              {meseSelezionato && (
-                <button onClick={eliminaMese} className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50 ml-auto">
-                  🗑️ Elimina mese
-                </button>
-              )}
-            </div>
+        {/* Avviso cantieri non a congruità */}
+        {cantieriNonCongruita.length > 0 && (
+          <div className="mx-6 mt-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-xs text-amber-800 flex items-center gap-2">
+            ⚠️ <strong>Cantieri non a congruità:</strong> {cantieriNonCongruita.join(', ')} — 
+            <button onClick={() => { setTab('spostamenti'); setModalSposta(true) }} className="underline font-semibold ml-1">Gestisci spostamenti ore →</button>
+          </div>
+        )}
 
-            {/* Tabella pivot */}
-            <div className="flex-1 overflow-auto p-4">
-              {loading && <p className="text-gray-400 text-sm text-center py-12">Caricamento...</p>}
-              {!loading && mesiDisponibili.length === 0 && (
-                <div className="flex flex-col items-center justify-center h-48 text-gray-400">
-                  <p className="text-4xl mb-2">📥</p>
-                  <p className="text-sm">Nessun dato. Usa "Importa Excel" per caricare il tuo file.</p>
-                  <button className="mt-3 btn btn-sm btn-primary" onClick={() => setTab('importa')}>Importa adesso</button>
-                </div>
-              )}
-              {!loading && mesiDisponibili.length > 0 && dati.length > 0 && (
-                <div className="overflow-x-auto">
-                  <table className="text-xs border-collapse w-full">
+        {/* Tab */}
+        <div className="flex gap-2 px-6 pt-4 border-b border-gray-200 flex-shrink-0">
+          <button onClick={() => setTab('resoconto')} className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${tab === 'resoconto' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500'}`}>📊 Resoconto Tot.</button>
+          {cantieriMese.map(c => (
+            <button key={c} onClick={() => { setTab('cantiere'); setCantiereSel(c) }} className={`px-3 py-2 text-xs font-medium border-b-2 -mb-px transition-colors ${tab === 'cantiere' && cantiereSel === c ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              {c.length > 18 ? c.slice(0, 18) + '…' : c}
+            </button>
+          ))}
+          <button onClick={() => setTab('spostamenti')} className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ml-auto ${tab === 'spostamenti' ? 'border-orange-500 text-orange-700' : 'border-transparent text-gray-500'}`}>↔️ Spostamenti ({spostamenti.length})</button>
+        </div>
+
+        <div className="flex-1 overflow-auto p-6">
+          {loading && <p className="text-gray-400 text-sm text-center py-12">Caricamento...</p>}
+
+          {/* ── RESOCONTO TOT ── */}
+          {!loading && tab === 'resoconto' && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-semibold text-sm">Resoconto Cassa Edile — {meseStr}</h2>
+                <span className="text-xs text-gray-500">{dipConOre.length} dipendenti · {cantieriMese.length} cantieri</span>
+              </div>
+              {dipConOre.length === 0 ? (
+                <div className="text-center text-gray-400 py-16"><p className="text-3xl mb-2">📋</p><p>Nessuna presenza approvata per {meseStr}</p></div>
+              ) : (
+                <div className="overflow-auto">
+                  <table className="text-xs border-collapse" style={{ minWidth: 600 }}>
                     <thead>
-                      <tr className="bg-gray-800 text-white">
-                        <th className="sticky left-0 z-10 bg-gray-800 border border-gray-700 px-3 py-2 text-left whitespace-nowrap" style={{ minWidth: 180 }}>
-                          Dipendente
-                        </th>
-                        {cantieri.map(c => (
-                          <th key={c} className="border border-gray-700 px-2 py-2 text-center whitespace-nowrap font-medium" style={{ minWidth: 80 }}>
-                            {c}
-                          </th>
-                        ))}
-                        <th className="border border-gray-700 px-2 py-2 text-center font-bold bg-gray-700">TOTALE</th>
+                      <tr>
+                        <th className="border border-gray-300 bg-gray-800 text-white px-3 py-2 text-left sticky left-0 z-10 min-w-40">Dipendente</th>
+                        {cantieriMese.map(c => {
+                          const proj = progetti.find(p => `${p.codice} - ${p.nome}` === c || p.nome === c)
+                          const nonCongruita = proj && proj.a_congruita === false
+                          return (
+                            <th key={c} className={`border border-gray-300 px-2 py-1 text-center font-semibold ${nonCongruita ? 'bg-amber-700 text-white' : 'bg-gray-700 text-white'}`} style={{ minWidth: 70 }}>
+                              <span title={nonCongruita ? 'Non a congruità' : ''}>{nonCongruita ? '⚠️ ' : ''}</span>
+                              {c.length > 12 ? c.slice(0, 12) + '…' : c}
+                            </th>
+                          )
+                        })}
+                        <th className="border border-gray-300 bg-blue-800 text-white px-2 py-2 text-center">Totale</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {aziendeFiltrate.map((az, ai) => {
-                        const dipList = Object.keys(pivot[az] || {}).sort()
-                        const totAz = dipList.reduce((s, d) => s + Object.values(pivot[az][d]).reduce((a, b) => a + b, 0), 0)
-                        return [
-                          // Header azienda
-                          <tr key={`az-${az}`} className="bg-blue-900 text-white">
-                            <td className="sticky left-0 z-10 bg-blue-900 border border-blue-800 px-3 py-1.5 font-bold text-xs uppercase tracking-wide" colSpan={cantieri.length + 2}>
-                              🏢 {az}
-                            </td>
-                          </tr>,
-                          // Righe dipendenti
-                          ...dipList.map((dip, di) => {
-                            const oreRow = pivot[az][dip]
-                            const totDip = Object.values(oreRow).reduce((a, b) => a + b, 0)
-                            return (
-                              <tr key={`${az}-${dip}`} className={di % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                <td className={`sticky left-0 z-10 border border-gray-200 px-3 py-1.5 font-medium ${di % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
-                                  {dip}
-                                </td>
-                                {cantieri.map(c => {
-                                  const ore = oreRow[c] || 0
-                                  return (
-                                    <td key={c} className={`border border-gray-200 text-center py-1.5 px-1 ${ore > 0 ? 'text-blue-800 font-semibold bg-blue-50' : 'text-gray-300'}`}>
-                                      {ore > 0 ? ore : '—'}
-                                    </td>
-                                  )
-                                })}
-                                <td className="border border-gray-300 text-center py-1.5 px-2 font-bold bg-gray-100 text-gray-800">
-                                  {totDip}
-                                </td>
-                              </tr>
-                            )
-                          }),
-                          // Subtotale azienda
-                          <tr key={`tot-${az}`} className="bg-blue-50 border-t-2 border-blue-200">
-                            <td className="sticky left-0 z-10 bg-blue-50 border border-blue-200 px-3 py-1.5 font-bold text-blue-800 text-xs">
-                              Totale {az}
-                            </td>
-                            {cantieri.map(c => {
-                              const tot = dipList.reduce((s, d) => s + (pivot[az][d][c] || 0), 0)
+                      {dipConOre.map((d, i) => {
+                        const dm = datiCE[d.id] || {}
+                        const tot = oreTotDip(d.id)
+                        return (
+                          <tr key={d.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                            <td className="border border-gray-300 px-3 py-1.5 font-medium sticky left-0 bg-inherit z-10">{d.cognome} {d.nome}</td>
+                            {cantieriMese.map(c => {
+                              const ore = dm[c] || 0
                               return (
-                                <td key={c} className={`border border-blue-200 text-center py-1.5 px-1 font-bold ${tot > 0 ? 'text-blue-700' : 'text-gray-300'}`}>
-                                  {tot > 0 ? tot : '—'}
+                                <td key={c} className={`border border-gray-300 text-center py-1 px-1 ${ore > 0 ? 'font-semibold text-blue-800' : 'text-gray-300'}`}>
+                                  {ore > 0 ? fmtOre(ore) : '—'}
                                 </td>
                               )
                             })}
-                            <td className="border border-blue-300 text-center py-1.5 px-2 font-black text-blue-900 bg-blue-100">{totAz}</td>
+                            <td className="border border-gray-300 text-center font-bold text-blue-900 bg-blue-50 py-1">{fmtOre(tot)}</td>
                           </tr>
-                        ]
+                        )
                       })}
-
-                      {/* Totale generale */}
-                      {filtroAzienda === 'tutti' && (
-                        <tr className="bg-gray-800 text-white border-t-2 border-gray-600">
-                          <td className="sticky left-0 z-10 bg-gray-800 border border-gray-700 px-3 py-2 font-black uppercase text-xs">
-                            TOTALE GENERALE
-                          </td>
-                          {cantieri.map(c => (
-                            <td key={c} className={`border border-gray-700 text-center py-2 px-1 font-bold ${totaliCantiere[c] > 0 ? 'text-yellow-300' : 'text-gray-600'}`}>
-                              {totaliCantiere[c] > 0 ? totaliCantiere[c] : '—'}
-                            </td>
-                          ))}
-                          <td className="border border-gray-700 text-center py-2 px-2 font-black text-yellow-300 text-sm">{totaleTotale}</td>
-                        </tr>
-                      )}
+                      {/* Riga totali */}
+                      <tr className="bg-gray-800 text-white font-bold">
+                        <td className="border border-gray-600 px-3 py-2 sticky left-0 bg-gray-800 z-10">TOTALE</td>
+                        {cantieriMese.map(c => (
+                          <td key={c} className="border border-gray-600 text-center py-1">{fmtOre(oreTotCantiere(c))}</td>
+                        ))}
+                        <td className="border border-gray-600 text-center py-1">{fmtOre(dipConOre.reduce((s, d) => s + oreTotDip(d.id), 0))}</td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>
               )}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* ─── TAB IMPORTA ─── */}
-        {tab === 'importa' && (
-          <div className="flex-1 overflow-y-auto p-6">
-            <div className="max-w-5xl mx-auto space-y-6">
+          {/* ── SINGOLO CANTIERE ── */}
+          {!loading && tab === 'cantiere' && cantiereSel && (
+            <div>
+              <h2 className="font-semibold text-sm mb-3">📋 {cantiereSel} — {meseStr}</h2>
+              <div className="overflow-auto">
+                <table className="text-xs border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="border border-gray-300 bg-gray-800 text-white px-3 py-2 text-left min-w-40">Dipendente</th>
+                      <th className="border border-gray-300 bg-gray-800 text-white px-3 py-2 text-left">Azienda</th>
+                      <th className="border border-gray-300 bg-gray-800 text-white px-3 py-2 text-left">Mansione</th>
+                      <th className="border border-gray-300 bg-blue-700 text-white px-3 py-2 text-center min-w-20">Ore CE</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dipConOre.filter(d => ((datiCE[d.id] || {})[cantiereSel] || 0) > 0).map((d, i) => (
+                      <tr key={d.id} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="border border-gray-300 px-3 py-1.5 font-medium">{d.cognome} {d.nome}</td>
+                        <td className="border border-gray-300 px-3 py-1.5 text-gray-600">{d.azienda}</td>
+                        <td className="border border-gray-300 px-3 py-1.5 text-gray-600">{d.mansione || '—'}</td>
+                        <td className="border border-gray-300 text-center font-bold text-blue-800 py-1">{fmtOre((datiCE[d.id] || {})[cantiereSel] || 0)}</td>
+                      </tr>
+                    ))}
+                    <tr className="bg-gray-800 text-white font-bold">
+                      <td colSpan={3} className="border border-gray-600 px-3 py-2 text-right">TOTALE</td>
+                      <td className="border border-gray-600 text-center py-1">{fmtOre(oreTotCantiere(cantiereSel))}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
-              {/* Upload */}
-              <div className="bg-white rounded-xl border-2 border-dashed border-gray-300 p-8 text-center">
-                <p className="text-4xl mb-3">📥</p>
-                <p className="font-semibold text-gray-700 mb-1">Carica il file Excel Cassa Edile</p>
-                <p className="text-xs text-gray-500 mb-4">Formato: il tuo Excel con il foglio "Tot" e i fogli per cantiere. Legge automaticamente mese, cantieri e ore per persona.</p>
-                <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" id="file-ce" onChange={onFileChange} />
-                <label htmlFor="file-ce" className="btn btn-primary cursor-pointer inline-block">Scegli file .xlsx</label>
+          {/* ── SPOSTAMENTI ── */}
+          {!loading && tab === 'spostamenti' && (
+            <div className="max-w-3xl">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="font-semibold text-sm">↔️ Spostamenti ore CE — {meseStr}</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">Sposta ore da cantieri non a congruità verso cantieri aperti. Non modifica le presenze reali.</p>
+                </div>
+                <button className="btn btn-primary btn-sm" onClick={() => { setFormSposta({ dipendente_id: '', dipendente_nome: '', cantiere_origine_nome: '', cantiere_destinazione_id: '', ore: '' }); setModalSposta(true) }}>+ Nuovo spostamento</button>
               </div>
 
-              {erroreImport && (
-                <div className="bg-red-50 border border-red-300 rounded-xl p-4 text-red-700 text-sm">
-                  ❌ {erroreImport}
+              {spostamenti.length === 0 ? (
+                <div className="text-center text-gray-400 py-12 bg-gray-50 rounded-xl border-2 border-dashed border-gray-300">
+                  <p className="text-2xl mb-2">↔️</p>
+                  <p className="text-sm">Nessuno spostamento per {meseStr}</p>
                 </div>
-              )}
-
-              {salvato && (
-                <div className="bg-green-50 border border-green-300 rounded-xl p-4 text-green-700 text-sm font-medium">
-                  {salvato}
-                </div>
-              )}
-
-              {/* Preview */}
-              {preview && (
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                  <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
-                    <div>
-                      <h2 className="font-semibold text-base">📋 Anteprima importazione</h2>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        <strong>{labelMese(preview.mese)}</strong> — {preview.righe.length} righe con ore &gt; 0 su {previewCantieri.length} cantieri
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button className="btn" onClick={() => { setPreview(null); if (fileRef.current) fileRef.current.value = '' }}>Annulla</button>
-                      <button className="btn btn-primary" onClick={salvaImport} disabled={salvando}>
-                        {salvando ? 'Salvataggio...' : `✅ Importa ${preview.righe.length} righe`}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="overflow-x-auto max-h-96">
-                    <table className="text-xs border-collapse w-full">
-                      <thead>
-                        <tr className="bg-gray-100 sticky top-0 z-10">
-                          <th className="border border-gray-300 px-3 py-2 text-left whitespace-nowrap">Azienda</th>
-                          <th className="border border-gray-300 px-3 py-2 text-left whitespace-nowrap" style={{ minWidth: 160 }}>Dipendente</th>
-                          {previewCantieri.map(c => (
-                            <th key={c} className="border border-gray-300 px-2 py-2 text-center whitespace-nowrap font-medium" style={{ minWidth: 70 }}>
-                              {c.length > 15 ? c.slice(0, 15) + '…' : c}
-                            </th>
-                          ))}
-                          <th className="border border-gray-300 px-2 py-2 text-center font-bold">TOT</th>
+              ) : (
+                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                  <table className="table-base text-sm">
+                    <thead><tr><th>Dipendente</th><th>Da cantiere</th><th>A cantiere</th><th>Ore</th><th>Note</th><th></th></tr></thead>
+                    <tbody>
+                      {spostamenti.map(s => (
+                        <tr key={s.id}>
+                          <td>{s.dipendente_nome}</td>
+                          <td className="text-amber-700 font-medium">{s.cantiere_origine_nome}</td>
+                          <td className="text-green-700 font-medium">{s.cantiere_destinazione_nome}</td>
+                          <td className="font-semibold">{fmtOre(s.ore)}</td>
+                          <td className="text-xs text-gray-400">{s.note || '—'}</td>
+                          <td><button className="btn btn-sm text-red-500" onClick={() => eliminaSposta(s.id)}>✕</button></td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {Object.entries(previewPivot).map(([az, dips]) => [
-                          <tr key={`paz-${az}`} className="bg-blue-900 text-white">
-                            <td className="border border-blue-800 px-3 py-1 font-bold text-xs uppercase" colSpan={previewCantieri.length + 3}>
-                              🏢 {az}
-                            </td>
-                          </tr>,
-                          ...Object.entries(dips).sort(([a],[b]) => a.localeCompare(b)).map(([dip, oreArr], di) => {
-                            const tot = oreArr.reduce((a, b) => a + b, 0)
-                            return (
-                              <tr key={`p${az}-${dip}`} className={di % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                                <td className="border border-gray-200 px-3 py-1 text-gray-500">{az.slice(0,12)}</td>
-                                <td className="border border-gray-200 px-3 py-1 font-medium">{dip}</td>
-                                {oreArr.map((ore, ci) => (
-                                  <td key={ci} className={`border border-gray-200 text-center py-1 ${ore > 0 ? 'text-blue-800 font-semibold bg-blue-50' : 'text-gray-300'}`}>
-                                    {ore > 0 ? ore : '—'}
-                                  </td>
-                                ))}
-                                <td className="border border-gray-300 text-center py-1 font-bold bg-gray-100">{tot}</td>
-                              </tr>
-                            )
-                          })
-                        ])}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </main>
+
+      {/* Modal spostamento */}
+      {modalSposta && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-md shadow-xl">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div><h2 className="font-semibold">↔️ Nuovo spostamento ore</h2><p className="text-xs text-gray-500 mt-0.5">{meseStr}</p></div>
+              <button onClick={() => setModalSposta(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div>
+                <label className="label">Dipendente *</label>
+                <select className="input" value={formSposta.dipendente_id} onChange={e => { const d = dipendenti.find(x => x.id === e.target.value); setFormSposta(f => ({ ...f, dipendente_id: e.target.value, dipendente_nome: d ? `${d.cognome} ${d.nome}` : '', cantiere_origine_nome: '' })) }}>
+                  <option value="">— Seleziona —</option>
+                  {dipConOre.map(d => <option key={d.id} value={d.id}>{d.cognome} {d.nome}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Cantiere origine (sposta ORE DA qui) *</label>
+                <select className="input" value={formSposta.cantiere_origine_nome} onChange={e => setFormSposta(f => ({ ...f, cantiere_origine_nome: e.target.value }))}>
+                  <option value="">— Seleziona —</option>
+                  {formSposta.dipendente_id && Object.entries(datiCE[formSposta.dipendente_id] || {}).filter(([, ore]) => ore > 0).map(([nome, ore]) => (
+                    <option key={nome} value={nome}>{nome} ({fmtOre(ore)} ore)</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="label">Cantiere destinazione (sposta ORE A qui) *</label>
+                <select className="input" value={formSposta.cantiere_destinazione_id} onChange={e => setFormSposta(f => ({ ...f, cantiere_destinazione_id: e.target.value }))}>
+                  <option value="">— Seleziona —</option>
+                  {progetti.filter(p => p.a_congruita !== false).map(p => <option key={p.id} value={p.id}>{p.codice} – {p.nome}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="label">Ore da spostare *</label>
+                <input className="input" type="number" step="0.5" min="0.5" placeholder="es. 8" value={formSposta.ore} onChange={e => setFormSposta(f => ({ ...f, ore: e.target.value }))} />
+                {formSposta.cantiere_origine_nome && formSposta.dipendente_id && (
+                  <p className="text-xs text-gray-400 mt-1">Disponibili: {fmtOre((datiCE[formSposta.dipendente_id] || {})[formSposta.cantiere_origine_nome] || 0)} ore</p>
+                )}
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2">
+              <button className="btn" onClick={() => setModalSposta(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaSposta} disabled={salvandoSposta}>{salvandoSposta ? 'Salvataggio...' : '↔️ Salva spostamento'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @media print {
+          @page { size: A3 landscape; margin: 8mm; }
+          body * { visibility: hidden !important; }
+          main, main * { visibility: visible !important; }
+          aside { display: none !important; }
+          .no-print { display: none !important; }
+        }
+      `}</style>
     </div>
   )
 }
