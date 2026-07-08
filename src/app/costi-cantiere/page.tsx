@@ -77,6 +77,9 @@ export default function CostiCantiere() {
   const [loadingEsterna, setLoadingEsterna] = useState(false)
   const [noteEsterna, setNoteEsterna] = useState('')
   const [printMode, setPrintMode] = useState<PrintMode>(null)
+  const [modalFatturaDdt, setModalFatturaDdt] = useState<any>(null)
+  const [numFatturaDdt, setNumFatturaDdt] = useState('')
+  const [salvandoFatturaDdt, setSalvandoFatturaDdt] = useState(false)
 
   useEffect(() => { loadAll() }, [])
   useEffect(() => { if (progettoSel) { loadCosti(); loadDdt(); loadSal(); loadFatture() } }, [progettoSel])
@@ -100,6 +103,26 @@ export default function CostiCantiere() {
     const primoSoc = (p || []).find((x: any) => (x.societa || 'BC General Service') === 'BC General Service')
     if (primoSoc) setProgettoSel(primoSoc.id)
     else if (p && p.length > 0) setProgettoSel(p[0].id)
+  }
+
+
+  async function segnaDdtFatturato() {
+    if (!modalFatturaDdt || !numFatturaDdt.trim()) { alert('Inserisci il numero della fattura'); return }
+    setSalvandoFatturaDdt(true)
+    await supabase.from('ddt').update({ stato: 'Fatturato', fattura_abbinata: numFatturaDdt.trim() }).eq('id', modalFatturaDdt.id)
+    // Aggiorna stato_fatturazione del progetto se tutti i DDT sono fatturati
+    const { data: tuttiDdt } = await supabase.from('ddt').select('stato').eq('progetto_id', progettoSel)
+    const tuttiOk = (tuttiDdt || []).every(d => d.stato === 'Fatturato')
+    if (tuttiOk) {
+      await supabase.from('progetti').update({ stato_fatturazione: 'completa' }).eq('id', progettoSel)
+    } else {
+      await supabase.from('progetti').update({ stato_fatturazione: 'incompleta' }).eq('id', progettoSel)
+    }
+    await logActivity('modifica', 'ddt', modalFatturaDdt.id, `DDT ${modalFatturaDdt.numero} segnato Fatturato — ft. ${numFatturaDdt}`)
+    setSalvandoFatturaDdt(false)
+    setModalFatturaDdt(null)
+    setNumFatturaDdt('')
+    loadDdt()
   }
 
   async function loadCosti() {
@@ -467,7 +490,13 @@ export default function CostiCantiere() {
                         <td className="font-semibold text-sm text-purple-800">{euro(d.importo)}</td>
                         <td>{statoBadge(d.stato)}</td>
                         <td className="text-xs text-gray-500">{d.mese_fattura_previsto || '—'}</td>
-                        <td onClick={e => e.stopPropagation()}>{d.stato === 'Da Fatturare' && <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaDdt(d.id)}>✕</button>}</td>
+                        <td onClick={e => e.stopPropagation()}>
+                        <div className="flex gap-1">
+                          {d.stato === 'Da Fatturare' && <button className="btn btn-sm text-green-600 border-green-200 hover:bg-green-50" onClick={() => { setModalFatturaDdt(d); setNumFatturaDdt('') }} title="Segna fatturato">🧾</button>}
+                          {d.stato === 'Da Fatturare' && <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaDdt(d.id)}>✕</button>}
+                          {d.stato === 'Fatturato' && <span className="text-xs text-green-600 font-medium">{d.fattura_abbinata}</span>}
+                        </div>
+                      </td>
                       </tr>
                     ))}
                   </tbody>
@@ -739,6 +768,24 @@ export default function CostiCantiere() {
             </div>
           </div>
         )}
+      </div></div>)}
+
+
+      {/* MODAL SEGNA FATTURATO DDT */}
+      {modalFatturaDdt && (<div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"><div className="bg-white rounded-xl w-full max-w-sm shadow-xl">
+        <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div><h2 className="font-semibold">🧾 Segna come fatturato</h2><p className="text-xs text-gray-500 mt-0.5">DDT {modalFatturaDdt.numero} — {modalFatturaDdt.fornitore_nome}</p></div>
+          <button onClick={() => setModalFatturaDdt(null)} className="text-gray-400 text-xl">×</button>
+        </div>
+        <div className="p-5">
+          <label className="label">N° fattura abbinata *</label>
+          <input className="input" placeholder="es. FT/2026/0042" value={numFatturaDdt} onChange={e => setNumFatturaDdt(e.target.value)} onKeyDown={e => e.key === 'Enter' && segnaDdtFatturato()} autoFocus />
+          <p className="text-xs text-gray-400 mt-2">Il DDT cambierà stato in "Fatturato" e lo stato fatturazione del cantiere verrà aggiornato.</p>
+        </div>
+        <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2">
+          <button className="btn" onClick={() => setModalFatturaDdt(null)}>Annulla</button>
+          <button className="btn btn-primary" onClick={segnaDdtFatturato} disabled={salvandoFatturaDdt}>{salvandoFatturaDdt ? 'Salvataggio...' : '✅ Conferma'}</button>
+        </div>
       </div></div>)}
 
       <style>{`
