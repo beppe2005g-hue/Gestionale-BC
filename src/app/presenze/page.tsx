@@ -216,7 +216,7 @@ export default function PresenzeMonthly() {
     // Genera le righe della tabella
     let righeHTML = ''
     let azPrec = ''
-    for (const d of dipendenti.filter(x => !filtroAzienda || x.azienda === filtroAzienda)) {
+    for (const d of dipendenti) {
       const c = coloreAzienda(d.azienda)
       // Intestazione azienda quando cambia
       if (d.azienda !== azPrec) {
