@@ -1,680 +1,1010 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 
-const HEADER = `LEGGERE ATTENTAMENTE\nLE DISPOSIZIONI ORGANIZZATIVE ;\n*VERIFICARE SCHEDA ATTREZZI FURGONE PRIMA DI PARTIRE SIETE RESPONSABILI DELL'ATTREZZATURA ASSEGNATA\n⚠️"Ricordo ai Capi Squadra  contrassegnati( " ) che sono responsabili della produzione in cantiere e delle comunicazioni con la Direzione ufficio.⚠️\n——`
-const FOOTER = `⚠️ VERIFICARE SCHEDA ATTREZZI CON FURGONE PRIMA DI PARTIRE.⚠️\n*La Collaborazione con i vostri colleghi è necessaria per fare funzionare la squadra.*\nGrazie 🏗️🔝`
+const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const euroShort = (n: number) => (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-function genId() { return Math.random().toString(36).slice(2, 9) }
+const oggi = new Date()
+oggi.setHours(0, 0, 0, 0)
 
-interface Persona { id: string; nomeBreve: string; nomeFull: string; capocantiere: boolean }
-interface Mezzo { id: string; nome: string }
-interface Lavorazione { id: string; nome: string; persone: Persona[] }
-interface Cantiere { id: string; nome: string; note: string; lavorazioni: Lavorazione[]; mezzi: Mezzo[] }
-type Societa = 'BC General Service' | 'Filosofia'
+function giorniAllaScadenza(data: string | null): number | null {
+  if (!data) return null
+  const d = new Date(data); d.setHours(0,0,0,0)
+  return Math.round((d.getTime() - oggi.getTime()) / 86400000)
+}
+function meseLabel(data: string | null): string {
+  if (!data) return 'Senza scadenza'
+  return new Date(data).toLocaleDateString('it-IT', { month: 'long', year: 'numeric' })
+}
+function meseKey(data: string | null): string {
+  if (!data) return '9999-99'
+  return data.substring(0, 7)
+}
 
-export default function ProgrammiPage() {
-  const [societaAttiva, setSocietaAttiva] = useState<Societa>('BC General Service')
-  const [dipendenti, setDipendenti] = useState<any[]>([])
-  const [mezziDB, setMezziDB] = useState<any[]>([])
-  const [programmi, setProgrammi] = useState<Record<Societa, Cantiere[]>>({ 'BC General Service': [], 'Filosofia': [] })
-  const [presenzeApprovate, setPresenzeApprovate] = useState<Record<Societa, boolean>>({ 'BC General Service': false, 'Filosofia': false })
+interface RigaPagamento {
+  id: string; numero: string; fornitore_nome: string; cantiere: string
+  rata: number; importo: number; scadenza: string | null; gg: number | null; stato: string
+  data_fattura: string | null
+}
+interface RigaIncasso {
+  fattura_id: string; numero: string; data_fattura: string | null
+  cliente_nome: string; progetto_nome: string
+  rata: number; importo: number; scadenza: string | null; gg: number | null
+  scaduta: boolean; mese_key: string; mese_label: string
+}
+type OrdinamentoPagare = 'scadenza' | 'fornitore'
+
+export default function Scadenzario() {
+  const [tab, setTab] = useState<'da_pagare' | 'da_incassare' | 'ritenute'>('da_pagare')
+
+  const [pagamenti, setPagamenti] = useState<RigaPagamento[]>([])
+  const [ordinamentoPagare, setOrdinamentoPagare] = useState<OrdinamentoPagare>('scadenza')
+  const [soloScadutePagare, setSoloScadutePagare] = useState(false)
+  const [cercaFornitore, setCercaFornitore] = useState('')
+  const [scadenzaDA, setScadenzaDA] = useState('')
+  const [scadenzaA, setScadenzaA] = useState('')
+  const [modalStampa, setModalStampa] = useState(false)
+  const [fornitoriSelezionati, setFornitoriSelezionati] = useState<Set<string>>(new Set())
+  const [soloScadutoStampa, setSoloScadutoStampa] = useState(false)
+  const [stampaScadenzaDA, setStampaScadenzaDA] = useState('')
+  const [stampaScadenzaA, setStampaScadenzaA] = useState('')
+
+  const [fattureClienti, setFattureClienti] = useState<any[]>([])
+  const [filtroCliente, setFiltroCliente] = useState('')
+  const [soloScaduteIncassare, setSoloScaduteIncassare] = useState(false)
+  const [loadingIncassare, setLoadingIncassare] = useState(true)
+
   const [loading, setLoading] = useState(true)
-  const [copiato, setCopiato] = useState(false)
-  const [salvando, setSalvando] = useState(false)
-  const [dataProgr, setDataProgr] = useState(new Date().toISOString().split('T')[0])
-  const [vistaPool, setVistaPool] = useState<'liberi' | 'tutti'>('liberi')
-  const [tabMobile, setTabMobile] = useState<'pool' | 'cantieri' | 'anteprima'>('cantieri')
-  const [aggiornamentoDisponibile, setAggiornamentoDisponibile] = useState(false)
-  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null)
-  const [modalApprova, setModalApprova] = useState(false)
-  const [statiPresenza, setStatiPresenza] = useState<Record<string, { stato: 'presente'|'assente'|'parziale', ore: number, cantiere: string }>>({})
-  const [conducenti, setConducenti] = useState<Record<string, string>>({})
-  const [salvandoApprovazione, setSalvandoApprovazione] = useState(false)
-  const [mezzoInSelezione, setMezzoInSelezione] = useState<{ id: string; nome: string } | null>(null)
-  const [giorniNonApprovati, setGiorniNonApprovati] = useState<Record<Societa, string[]>>({ 'BC General Service': [], 'Filosofia': [] })
-  const [statiPresenzaTecnici, setStatiPresenzaTecnici] = useState<Record<string, { stato: 'presente'|'assente'|'parziale', ore: number }>>({})
-  const [cantieriAperti, setCantieriAperti] = useState<string[]>([])
-  const [cantieriProgetti, setCantieriProgetti] = useState<any[]>([])
-  // Stato per cantieri dipendenti nel modal approvazione: dipId -> {cantiere_id, cantiere_nome, is_vario, vario_nota}
-  const [cantieriApprov, setCantieriApprov] = useState<Record<string, { cantiere_id: string; cantiere_nome: string; is_vario: boolean; vario_nota: string }>>({})
-  // Mezzi nel modal approvazione: { mezzoId -> cantiere_nome } (editabili)
-  const [mezziApprov, setMezziApprov] = useState<Record<string, string>>({})
+  const [pagamentiClienti, setPagamentiClienti] = useState<any[]>([])
+  const [ncFornitori, setNcFornitori] = useState<any[]>([])
+  const [ncClienti, setNcClienti] = useState<any[]>([])
 
-  const cantieri = programmi[societaAttiva]
-  const mezziSocieta = mezziDB.filter(m => (m.societa || 'BC General Service') === societaAttiva)
-  const dipUsati = new Set(cantieri.flatMap(c => c.lavorazioni.flatMap(l => l.persone.map(p => p.id))))
-  const mezziUsati = new Set(cantieri.flatMap(c => c.mezzi.map(m => m.id)))
-
-  const dipPerAzienda = dipendenti.reduce((acc, d) => {
-    if (d.tecnico) return acc // i tecnici non vanno nel pool cantieri
-    const libero = !dipUsati.has(d.id)
-    if (vistaPool === 'liberi' && !libero) return acc
-    if (!acc[d.azienda]) acc[d.azienda] = []
-    acc[d.azienda].push({ ...d, libero })
-    return acc
-  }, {} as Record<string, any[]>)
-
-  const aziendeOrdinate = Object.keys(dipPerAzienda).sort((a, b) => {
-    if (a.toUpperCase().startsWith('BC')) return -1
-    if (b.toUpperCase().startsWith('BC')) return 1
-    return a.localeCompare(b)
+  const [subTab, setSubTab] = useState<'garanzia' | 'acconto'>('garanzia')
+  const [ritenutaGaranzia, setRitenutaGaranzia] = useState<any[]>([])
+  const [ritenutaAcconto, setRitenutaAcconto] = useState<any[]>([])
+  const [progetti, setProgetti] = useState<any[]>([])
+  const [clienti, setClienti] = useState<any[]>([])
+  const [loadingRitenute, setLoadingRitenute] = useState(false)
+  const [modalGaranzia, setModalGaranzia] = useState(false)
+  const [modalAcconto, setModalAcconto] = useState(false)
+  const [modalSvincolo, setModalSvincolo] = useState<any>(null)
+  const [formGaranzia, setFormGaranzia] = useState({
+    progetto_id: '', progetto_nome: '', fattura_riferimento: '',
+    importo_fattura: '', percentuale: '5', data_fattura: '', note: ''
   })
+  const [formAcconto, setFormAcconto] = useState({
+    cliente_nome: '', fattura_numero: '', importo_fattura: '',
+    percentuale: '4', data_fattura: '', note: ''
+  })
+  const [formSvincolo, setFormSvincolo] = useState({ data_svincolo: '', importo_svincolato: '' })
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setCurrentUserEmail(data.user?.email ?? null))
+    load()
+    window.addEventListener('gestionale:refresh', load)
+    return () => window.removeEventListener('gestionale:refresh', load)
   }, [])
 
   useEffect(() => {
-    // Carica cantieri aperti per autocomplete
-    supabase.from('cantieri').select('nome').eq('stato', 'aperto').order('nome')
-      .then(({ data }) => setCantieriAperti((data || []).map((c: any) => c.nome)))
-    // Carica progetti aperti per dropdown approvazione
-    supabase.from('progetti').select('id,codice,nome').eq('stato', 'In Corso').order('nome')
-      .then(({ data }) => setCantieriProgetti(data || []))
-    // Carica mezzi
-    supabase.from('mezzi').select('id,nome,targa').eq('attivo', true).order('nome')
-      .then(({ data }) => setMezziDB(data || []))
-  }, [])
-
-  useEffect(() => { load() }, [dataProgr])
-
-  // Real-time: ascolta modifiche al programma per la data corrente
-  useEffect(() => {
-    const channel = supabase
-      .channel(`programmi-rt-${dataProgr}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'programma_giornaliero' }, (payload: any) => {
-        if (payload.new?.data === dataProgr || payload.old?.data === dataProgr) {
-          setAggiornamentoDisponibile(true)
-        }
-      })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
-  }, [dataProgr])
+    if (tab === 'ritenute') loadRitenute()
+  }, [tab])
 
   async function load() {
-    setLoading(true)
-    setAggiornamentoDisponibile(false)
-    const [{ data: dip }, { data: mez }, { data: progBC }, { data: progFil }] = await Promise.all([
-      supabase.from('dipendenti').select('id,nome,cognome,azienda,nome_programma,foto_url,ordine,tecnico').eq('attivo', true).order('ordine', { ascending: true, nullsFirst: false }).order('cognome'),
-      supabase.from('mezzi').select('id,nome,targa,posti,societa').eq('attivo', true).order('nome'),
-      supabase.from('programma_giornaliero').select('*').eq('societa', 'BC General Service').eq('data', dataProgr).limit(1),
-      supabase.from('programma_giornaliero').select('*').eq('societa', 'Filosofia').eq('data', dataProgr).limit(1),
+    setLoading(true); setLoadingIncassare(true)
+    const [{ data: ff }, { data: fc }, { data: pagCli }, { data: ncFF }, { data: ncFC }, { data: pr }, { data: cl }] = await Promise.all([
+      supabase.from('fatture_fornitori').select('id,numero,data,fornitore_nome,progetto_nome,tipo,rata1_importo,rata1_scadenza,rata1_stato,rata2_importo,rata2_scadenza,rata2_stato,rata3_importo,rata3_scadenza,rata3_stato'),
+      supabase.from('fatture_clienti').select('*').order('cliente_nome').order('data'),
+      supabase.from('pagamenti_clienti').select('fattura_id,rata,importo'),
+      supabase.from('fatture_fornitori').select('fornitore_nome,imponibile').eq('tipo', 'Nota di credito'),
+      supabase.from('fatture_clienti').select('cliente_nome,imponibile').eq('tipo', 'Nota di credito'),
+      supabase.from('progetti').select('id,codice,nome').order('codice'),
+      supabase.from('clienti').select('id,ragione_sociale').order('ragione_sociale'),
     ])
-    setDipendenti(dip || [])
-    setMezziDB(mez || [])
-
-    const nuoviProgrammi: Record<Societa, Cantiere[]> = { 'BC General Service': [], 'Filosofia': [] }
-    const nuoveApprovazioni: Record<Societa, boolean> = { 'BC General Service': false, 'Filosofia': false }
-
-    if (progBC && progBC.length > 0) { nuoviProgrammi['BC General Service'] = progBC[0].cantieri || []; nuoveApprovazioni['BC General Service'] = !!progBC[0].presenze_approvate }
-    if (progFil && progFil.length > 0) { nuoviProgrammi['Filosofia'] = progFil[0].cantieri || []; nuoveApprovazioni['Filosofia'] = !!progFil[0].presenze_approvate }
-
-    for (const soc of ['BC General Service', 'Filosofia'] as Societa[]) {
-      const giaEsiste = soc === 'BC General Service' ? (progBC && progBC.length > 0) : (progFil && progFil.length > 0)
-      if (!giaEsiste) {
-        const { data: ul } = await supabase.from('programma_giornaliero').select('cantieri').eq('societa', soc).eq('presenze_approvate', true).order('data', { ascending: false }).limit(1)
-        if (ul && ul.length > 0) nuoviProgrammi[soc] = ul[0].cantieri || []
-      }
-    }
-
-    setProgrammi(nuoviProgrammi)
-    setPresenzeApprovate(nuoveApprovazioni)
-
-    // Controlla giorni passati non approvati (per badge notifica)
-    const oggi = new Date().toISOString().split('T')[0]
-    const { data: nonApprovati } = await supabase.from('programma_giornaliero')
-      .select('data,societa')
-      .eq('presenze_approvate', false)
-      .lt('data', oggi)
-      .order('data', { ascending: false })
-    const naBC = (nonApprovati || []).filter(r => r.societa === 'BC General Service').map(r => r.data)
-    const naFil = (nonApprovati || []).filter(r => r.societa === 'Filosofia').map(r => r.data)
-    setGiorniNonApprovati({ 'BC General Service': naBC, 'Filosofia': naFil })
-
-    setLoading(false)
-  }
-
-  function nomeBreve(d: any) { return d.nome_programma || d.nome || '' }
-  function labelMezzoUI(m: any) { return m.posti ? `${m.nome} (${m.posti}p)` : m.nome }
-
-  function generaMessaggio(list: Cantiere[]) {
-    const righe: string[] = [HEADER, '']
-    for (const c of list) {
-      if (!c.nome) continue
-      righe.push(`-${c.nome}${c.note ? ' +\n' + c.note : ''} =`)
-      for (const lav of c.lavorazioni) {
-        if (lav.nome) righe.push(`++${lav.nome}`)
-        if (lav.persone.length > 0) righe.push(lav.persone.map((p, i) => i === 0 ? `"${p.nomeBreve}` : p.nomeBreve).join(' + '))
-      }
-      if (c.mezzi.length > 0) righe.push(c.mezzi.map(m => `*${m.nome}`).join('+'))
-      righe.push('')
-    }
-    righe.push(FOOTER)
-    return righe.join('\n')
-  }
-
-  const messaggio = generaMessaggio(cantieri)
-  function update(nuoviCantieri: Cantiere[]) { setProgrammi(prev => ({ ...prev, [societaAttiva]: nuoviCantieri })) }
-
-  function dovePiazzatoAltraSocieta(dipId: string): { societa: Societa, cantiere: string } | null {
-    const altra: Societa = societaAttiva === 'BC General Service' ? 'Filosofia' : 'BC General Service'
-    for (const c of programmi[altra]) for (const l of c.lavorazioni)
-      if (l.persone.find(p => p.id === dipId)) return { societa: altra, cantiere: c.nome || 'Cantiere senza nome' }
-    return null
-  }
-
-  function aggiungiPersona(cid: string, lid: string, dip: any) {
-    if (dipUsati.has(dip.id)) return
-    const altraSoc = dovePiazzatoAltraSocieta(dip.id)
-    if (altraSoc) { if (!confirm(`⚠️ ${nomeBreve(dip)} è già in "${altraSoc.cantiere}" (${altraSoc.societa}). Confermi?`)) return }
-    const persona: Persona = { id: dip.id, nomeBreve: nomeBreve(dip), nomeFull: `${dip.cognome} ${dip.nome}`.trim(), capocantiere: false }
-    update(cantieri.map(c => c.id === cid ? { ...c, lavorazioni: c.lavorazioni.map(l => {
-      if (l.id !== lid) return l
-      return { ...l, persone: [...l.persone, { ...persona, capocantiere: l.persone.length === 0 }] }
-    }) } : c))
-  }
-
-  function rimuoviPersona(cid: string, lid: string, dipId: string) {
-    update(cantieri.map(c => c.id === cid ? { ...c, lavorazioni: c.lavorazioni.map(l => l.id === lid ? { ...l, persone: l.persone.filter(p => p.id !== dipId) } : l) } : c))
-  }
-  function toggleCapo(cid: string, lid: string, dipId: string) {
-    update(cantieri.map(c => c.id === cid ? { ...c, lavorazioni: c.lavorazioni.map(l => l.id === lid ? { ...l, persone: l.persone.map(p => p.id === dipId ? { ...p, capocantiere: !p.capocantiere } : p) } : l) } : c))
-  }
-  function aggiungiMezzo(cid: string, m: any) {
-    if (mezziUsati.has(m.id)) return
-    update(cantieri.map(c => c.id === cid ? { ...c, mezzi: [...c.mezzi, { id: m.id, nome: m.nome }] } : c))
-  }
-  function rimuoviMezzo(cid: string, mezzoId: string) { update(cantieri.map(c => c.id === cid ? { ...c, mezzi: c.mezzi.filter(m => m.id !== mezzoId) } : c)) }
-  function aggiungiCantiere() { update([...cantieri, { id: genId(), nome: '', note: '', lavorazioni: [{ id: genId(), nome: '', persone: [] }], mezzi: [] }]) }
-  function rimuoviCantiere(cid: string) { update(cantieri.filter(c => c.id !== cid)) }
-  function aggiornaCantiere(cid: string, campo: string, val: string) { update(cantieri.map(c => c.id === cid ? { ...c, [campo]: val } : c)) }
-  function spostaCantiere(cid: string, direzione: 'su' | 'giu') {
-    const idx = cantieri.findIndex(c => c.id === cid)
-    if (direzione === 'su' && idx === 0) return
-    if (direzione === 'giu' && idx === cantieri.length - 1) return
-    const nuovi = [...cantieri]
-    const target = direzione === 'su' ? idx - 1 : idx + 1
-    ;[nuovi[idx], nuovi[target]] = [nuovi[target], nuovi[idx]]
-    update(nuovi)
-  }
-  function aggiungiLavorazione(cid: string) { update(cantieri.map(c => c.id === cid ? { ...c, lavorazioni: [...c.lavorazioni, { id: genId(), nome: '', persone: [] }] } : c)) }
-  function rimuoviLavorazione(cid: string, lid: string) { update(cantieri.map(c => c.id === cid ? { ...c, lavorazioni: c.lavorazioni.filter(l => l.id !== lid) } : c)) }
-  function aggiornaLavorazione(cid: string, lid: string, nome: string) { update(cantieri.map(c => c.id === cid ? { ...c, lavorazioni: c.lavorazioni.map(l => l.id === lid ? { ...l, nome } : l) } : c)) }
-
-  async function salva() {
-    setSalvando(true)
-    for (const soc of ['BC General Service', 'Filosofia'] as Societa[]) {
-      const { data: es } = await supabase.from('programma_giornaliero').select('id').eq('societa', soc).eq('data', dataProgr).limit(1)
-      if (es && es.length > 0) {
-        await supabase.from('programma_giornaliero').update({ cantieri: programmi[soc], updated_at: new Date().toISOString() }).eq('id', es[0].id)
-      } else {
-        await supabase.from('programma_giornaliero').insert({ data: dataProgr, societa: soc, cantieri: programmi[soc], presenze_approvate: false, updated_at: new Date().toISOString() })
-      }
-    }
-    setSalvando(false)
-  }
-
-  function nuovoProgramma() {
-    if (!confirm(`Creare un nuovo programma ${societaAttiva}?`)) return
-    setProgrammi(prev => ({ ...prev, [societaAttiva]: [] }))
-    load()
-  }
-
-  async function copiaMessaggio() {
-    await navigator.clipboard.writeText(messaggio)
-    setCopiato(true); setTimeout(() => setCopiato(false), 2000)
-  }
-
-  function dovePiazzato(dipId: string): string {
-    for (const c of cantieri) for (const l of c.lavorazioni) if (l.persone.find(p => p.id === dipId)) return c.nome || 'Cantiere senza nome'
-    return ''
-  }
-  function dovePiazzatoMezzo(mezzoId: string): string {
-    for (const c of cantieri) if (c.mezzi.find(m => m.id === mezzoId)) return c.nome || 'Cantiere senza nome'
-    return ''
-  }
-
-  function apriModalApprova() {
-    const stati: typeof statiPresenza = {}
-    for (const c of programmi[societaAttiva]) for (const l of c.lavorazioni) for (const p of l.persone)
-      stati[p.id] = { stato: 'presente', ore: 1, cantiere: c.nome || 'Cantiere senza nome' }
-    setStatiPresenza(stati)
-    // Tecnici: sezione separata, tutti partono da "presente"
-    const statiTec: typeof statiPresenzaTecnici = {}
-    for (const d of dipendenti.filter(d => d.tecnico))
-      statiTec[d.id] = { stato: 'presente', ore: 1 }
-    setStatiPresenzaTecnici(statiTec)
-    setConducenti({})
-    setModalApprova(true)
-  }
-
-  function cambiaStato(dipId: string, stato: 'presente'|'assente'|'parziale') {
-    const ore = stato === 'presente' ? 1 : stato === 'parziale' ? 0.5 : 0
-    setStatiPresenza(prev => ({ ...prev, [dipId]: { ...prev[dipId], stato, ore } }))
-  }
-
-  function mezziDaAbbinare() {
-    return programmi[societaAttiva].flatMap(c => c.mezzi.map(m => ({
-      mezzoId: m.id, nomeMezzo: m.nome, cantiere: c.nome || 'Cantiere senza nome',
-      personeDisponibili: c.lavorazioni.flatMap(l => l.persone.map(p => ({ id: p.id, nome: p.nomeBreve })))
-    })))
-  }
-
-  async function confermaApprovazione() {
-    const soc = societaAttiva
-    const mezzi = mezziDaAbbinare()
-    const mancanti = mezzi.filter(m => !conducenti[m.mezzoId])
-    if (mancanti.length > 0) { alert(`Manca il conducente per: ${mancanti.map(m => m.nomeMezzo).join(', ')}`); return }
-    setSalvandoApprovazione(true)
-
-    const ora = new Date().toISOString()
-    const approvatore = currentUserEmail || 'sconosciuto'
-
-    // 1) Presenze dipendenti in cantiere
-    const righePresenze = Object.entries(statiPresenza).map(([dipId, s]) => ({
-      data: dataProgr, dipendente_id: dipId, societa: soc,
-      stato: s.stato, ore: s.ore, origine: 'da_programma', cantiere_nome: s.cantiere || null,
-      approvato: true, approvato_da: approvatore, approvato_il: ora,
-    }))
-
-    // 2) Presenze tecnici (sezione separata)
-    const righeTecnici = Object.entries(statiPresenzaTecnici).map(([dipId, s]) => ({
-      data: dataProgr, dipendente_id: dipId, societa: soc,
-      stato: s.stato, ore: s.ore, origine: 'tecnico', cantiere_nome: null,
-      approvato: true, approvato_da: approvatore, approvato_il: ora,
-    }))
-
-    // 3) Auto-assenti: dipendenti non tecnici non assegnati a nessun cantiere
-    const idGiaTracciati = new Set([...Object.keys(statiPresenza), ...Object.keys(statiPresenzaTecnici)])
-    const righeAssenti = dipendenti
-      .filter(d => !d.tecnico && !idGiaTracciati.has(d.id))
-      .map(d => ({
-        data: dataProgr, dipendente_id: d.id, societa: soc,
-        stato: 'assente' as const, ore: 0, origine: 'automatico', cantiere_nome: null,
-        approvato: true, approvato_da: approvatore, approvato_il: ora,
-      }))
-
-    const tutteRighe = [...righePresenze, ...righeTecnici, ...righeAssenti]
-    if (tutteRighe.length > 0) {
-      const { error: errPresenze } = await supabase.from('presenze').upsert(tutteRighe, { onConflict: 'data,dipendente_id' })
-      if (errPresenze) {
-        alert(`❌ Errore salvataggio presenze: ${errPresenze.message}\n\nCodice: ${errPresenze.code}`)
-        setSalvandoApprovazione(false)
-        return
-      }
-    }
-
-    // 4) Utilizzo mezzi
-    if (mezzi.length > 0) {
-      const righeMezzi = mezzi.map(m => {
-        const dip = dipendenti.find(d => d.id === conducenti[m.mezzoId])
-        return { mezzo_id: m.mezzoId, data: dataProgr, conducente_id: conducenti[m.mezzoId], conducente_nome: dip ? `${dip.cognome} ${dip.nome}` : 'Sconosciuto', cantiere_nome: m.cantiere, societa: soc }
+    setPagamentiClienti(pagCli || [])
+    setNcFornitori(ncFF || [])
+    setNcClienti(ncFC || [])
+    setProgetti(pr || [])
+    setClienti(cl || [])
+    const righePagare: RigaPagamento[] = []
+    ;(ff || []).forEach((f: any) => {
+      if (f.tipo === 'Nota di credito') return
+      ;[1,2,3].forEach(n => {
+        const imp = f[`rata${n}_importo`], scad = f[`rata${n}_scadenza`], stato = f[`rata${n}_stato`]
+        if (imp > 0 && stato !== 'Pagata') {
+          righePagare.push({ id: f.id, numero: f.numero, fornitore_nome: f.fornitore_nome,
+            cantiere: f.progetto_nome, rata: n, importo: imp, scadenza: scad,
+            gg: giorniAllaScadenza(scad), stato, data_fattura: f.data })
+        }
       })
-      const { error } = await supabase.from('mezzi_utilizzo_giornaliero').upsert(righeMezzi, { onConflict: 'mezzo_id,data' })
-      if (error) console.error('Errore utilizzo mezzi:', error)
-    }
-
-    // 5) Marca questa società come approvata
-    await supabase.from('programma_giornaliero').update({ presenze_approvate: true, approvato_da: approvatore, approvato_il: ora }).eq('societa', soc).eq('data', dataProgr)
-
-    setSalvandoApprovazione(false)
-    setModalApprova(false)
-    load()
+    })
+    setPagamenti(righePagare)
+    setLoading(false)
+    setFattureClienti((fc || []).filter((f: any) => f.tipo !== 'Nota di credito'))
+    setLoadingIncassare(false)
   }
+
+  async function loadRitenute() {
+    setLoadingRitenute(true)
+    const [{ data: rg }, { data: ra }] = await Promise.all([
+      supabase.from('ritenute_garanzia').select('*').order('data_fattura', { ascending: false }),
+      supabase.from('ritenute_acconto').select('*').order('data_fattura', { ascending: false }),
+    ])
+    setRitenutaGaranzia(rg || [])
+    setRitenutaAcconto(ra || [])
+    setLoadingRitenute(false)
+  }
+
+  async function salvaGaranzia() {
+    const imp = parseFloat(formGaranzia.importo_fattura) || 0
+    const perc = parseFloat(formGaranzia.percentuale) || 5
+    const ritenuta = Math.round(imp * perc / 100 * 100) / 100
+    const prj = progetti.find(p => p.id === formGaranzia.progetto_id)
+    await supabase.from('ritenute_garanzia').insert({
+      progetto_id: formGaranzia.progetto_id || null,
+      progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : formGaranzia.progetto_nome,
+      fattura_riferimento: formGaranzia.fattura_riferimento,
+      importo_fattura: imp, percentuale: perc, importo_ritenuta: ritenuta,
+      data_fattura: formGaranzia.data_fattura || null,
+      stato: 'In sospeso', note: formGaranzia.note
+    })
+    setModalGaranzia(false)
+    setFormGaranzia({ progetto_id: '', progetto_nome: '', fattura_riferimento: '', importo_fattura: '', percentuale: '5', data_fattura: '', note: '' })
+    loadRitenute()
+  }
+
+  async function salvaAcconto() {
+    const imp = parseFloat(formAcconto.importo_fattura) || 0
+    const perc = parseFloat(formAcconto.percentuale) || 4
+    const ritenuta = Math.round(imp * perc / 100 * 100) / 100
+    const anno = formAcconto.data_fattura ? new Date(formAcconto.data_fattura).getFullYear() : new Date().getFullYear()
+    await supabase.from('ritenute_acconto').insert({
+      cliente_nome: formAcconto.cliente_nome,
+      fattura_numero: formAcconto.fattura_numero,
+      importo_fattura: imp, percentuale: perc, importo_ritenuta: ritenuta,
+      data_fattura: formAcconto.data_fattura || null,
+      anno_fiscale: anno, note: formAcconto.note
+    })
+    setModalAcconto(false)
+    setFormAcconto({ cliente_nome: '', fattura_numero: '', importo_fattura: '', percentuale: '4', data_fattura: '', note: '' })
+    loadRitenute()
+  }
+
+  async function registraSvincolo() {
+    if (!modalSvincolo) return
+    const imp = parseFloat(formSvincolo.importo_svincolato) || modalSvincolo.importo_ritenuta
+    await supabase.from('ritenute_garanzia').update({
+      stato: 'Svincolata',
+      data_svincolo: formSvincolo.data_svincolo || null,
+      importo_svincolato: imp
+    }).eq('id', modalSvincolo.id)
+    setModalSvincolo(null)
+    setFormSvincolo({ data_svincolo: '', importo_svincolato: '' })
+    loadRitenute()
+  }
+
+  async function eliminaRitenuta(tabella: string, id: string) {
+    if (!confirm('Eliminare questa ritenuta?')) return
+    await supabase.from(tabella).delete().eq('id', id)
+    loadRitenute()
+  }
+
+  const totGaranziaInSospeso = ritenutaGaranzia.filter(r => r.stato === 'In sospeso').reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
+  const totGaranziaVincolata = ritenutaGaranzia.filter(r => r.stato !== 'Svincolata').reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
+  const annoCorrente = new Date().getFullYear()
+  const totAccontoAnno = ritenutaAcconto.filter(r => r.anno_fiscale === annoCorrente).reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
+  const totAccontoTotale = ritenutaAcconto.reduce((s, r) => s + (r.importo_ritenuta || 0), 0)
+
+  const fornitoriUnici = useMemo(() => {
+    return Array.from(new Set(pagamenti.map(p => p.fornitore_nome))).sort((a, b) => a.localeCompare(b))
+  }, [pagamenti])
+
+  function apriModalStampa() {
+    setFornitoriSelezionati(new Set(fornitoriUnici))
+    setSoloScadutoStampa(false)
+    setStampaScadenzaDA('')
+    setStampaScadenzaA('')
+    setModalStampa(true)
+  }
+
+  function toggleFornitoreStampa(nome: string) {
+    setFornitoriSelezionati(prev => {
+      const next = new Set(prev)
+      if (next.has(nome)) next.delete(nome)
+      else next.add(nome)
+      return next
+    })
+  }
+
+  const reportStampaPerFornitore = useMemo(() => {
+    let righe = pagamenti.filter(p => fornitoriSelezionati.has(p.fornitore_nome))
+    if (soloScadutoStampa) righe = righe.filter(r => r.gg !== null && r.gg < 0)
+    if (stampaScadenzaDA) righe = righe.filter(r => r.scadenza && r.scadenza >= stampaScadenzaDA)
+    if (stampaScadenzaA) righe = righe.filter(r => r.scadenza && r.scadenza <= stampaScadenzaA)
+    const gruppi: Record<string, RigaPagamento[]> = {}
+    righe.forEach(r => {
+      if (!gruppi[r.fornitore_nome]) gruppi[r.fornitore_nome] = []
+      gruppi[r.fornitore_nome].push(r)
+    })
+    return Object.entries(gruppi)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([fornitore, rate]) => ({
+        fornitore,
+        rate: [...rate].sort((a, b) => {
+          const ga = a.gg ?? 999999, gb = b.gg ?? 999999
+          return ga - gb
+        }),
+        totale: rate.reduce((s, r) => s + r.importo, 0),
+        scaduto: rate.filter(r => r.gg !== null && r.gg < 0).reduce((s, r) => s + r.importo, 0),
+      }))
+  }, [pagamenti, fornitoriSelezionati, soloScadutoStampa, stampaScadenzaDA, stampaScadenzaA])
+
+  const totaleReportStampa = reportStampaPerFornitore.reduce((s, g) => s + g.totale, 0)
+  const scadutoReportStampa = reportStampaPerFornitore.reduce((s, g) => s + g.scaduto, 0)
+
+  function confermaStampa() {
+    setModalStampa(false)
+    setTimeout(() => window.print(), 100)
+  }
+
+  const pagamentiFiltrati = useMemo(() => {
+    let r = pagamenti
+    if (cercaFornitore) r = r.filter(x => x.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase()))
+    if (soloScadutePagare) r = r.filter(x => x.gg !== null && x.gg < 0)
+    if (scadenzaDA) r = r.filter(x => x.scadenza && x.scadenza >= scadenzaDA)
+    if (scadenzaA) r = r.filter(x => x.scadenza && x.scadenza <= scadenzaA)
+    const sorted = [...r]
+    if (ordinamentoPagare === 'scadenza') {
+      sorted.sort((a, b) => {
+        const sa = a.scadenza || '9999-99-99', sb = b.scadenza || '9999-99-99'
+        if (sa !== sb) return sa.localeCompare(sb)
+        return (a.fornitore_nome || '').localeCompare(b.fornitore_nome || '')
+      })
+    } else {
+      sorted.sort((a, b) => {
+        const fa = a.fornitore_nome || '', fb = b.fornitore_nome || ''
+        if (fa !== fb) return fa.localeCompare(fb)
+        return (a.scadenza || '9999-99-99').localeCompare(b.scadenza || '9999-99-99')
+      })
+    }
+    return sorted
+  }, [pagamenti, cercaFornitore, soloScadutePagare, ordinamentoPagare, scadenzaDA, scadenzaA])
+
+  const totalePagare = pagamentiFiltrati.reduce((s, r) => s + r.importo, 0)
+  const scadutoPagare = pagamentiFiltrati.filter(r => r.gg !== null && r.gg < 0).reduce((s, r) => s + r.importo, 0)
+  const scadutoOltre30Pagare = pagamentiFiltrati.filter(r => r.gg !== null && r.gg < -30).reduce((s, r) => s + r.importo, 0)
+  const totaleNcFornitori = ncFornitori.filter(nc => !cercaFornitore || nc.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase())).reduce((s, nc) => s + (nc.imponibile || 0), 0)
+  const totalePagareNetto = Math.max(0, totalePagare - totaleNcFornitori)
+
+  function badgeGiorni(gg: number | null) {
+    if (gg === null) return <span className="text-xs text-gray-400">—</span>
+    if (gg < -30) return <span className="badge badge-red">Scaduto da {Math.abs(gg)} gg 🔴</span>
+    if (gg < 0) return <span className="badge badge-red">Scaduto da {Math.abs(gg)} gg</span>
+    if (gg === 0) return <span className="badge badge-amber">Scade oggi</span>
+    if (gg <= 7) return <span className="badge badge-amber">Tra {gg} gg</span>
+    return <span className="badge badge-blue">Tra {gg} gg</span>
+  }
+
+  const rateIncassareGrezze = useMemo(() => {
+    const righe: RigaIncasso[] = []
+    fattureClienti.forEach(f => {
+      ;[1,2,3].forEach(n => {
+        const impTotale = f[`rata${n}_importo`], scad = f[`rata${n}_scadenza`]
+        if (impTotale > 0) {
+          const pagato = pagamentiClienti.filter(p => p.fattura_id === f.id && p.rata === n).reduce((s, p) => s + (p.importo || 0), 0)
+          const residuo = Math.round((impTotale - pagato) * 100) / 100
+          if (residuo > 0.01) {
+            const gg = giorniAllaScadenza(scad)
+            righe.push({ fattura_id: f.id, numero: f.numero, data_fattura: f.data,
+              cliente_nome: f.cliente_nome, progetto_nome: f.progetto_nome,
+              rata: n, importo: residuo, scadenza: scad, gg,
+              scaduta: gg !== null && gg < 0, mese_key: meseKey(scad), mese_label: meseLabel(scad) })
+          }
+        }
+      })
+    })
+    return righe
+  }, [fattureClienti, pagamentiClienti])
+
+  const rateIncassareFiltrate = useMemo(() => {
+    let r = rateIncassareGrezze
+    if (filtroCliente) r = r.filter(x => x.cliente_nome?.toLowerCase().includes(filtroCliente.toLowerCase()))
+    if (soloScaduteIncassare) r = r.filter(x => x.scaduta)
+    return r
+  }, [rateIncassareGrezze, filtroCliente, soloScaduteIncassare])
+
+  const perCliente = useMemo(() => {
+    const mappa: Record<string, { cliente: string, totale: number, scaduto: number, mesi: Record<string, { label: string, rate: RigaIncasso[], totale: number }> }> = {}
+    rateIncassareFiltrate.forEach(r => {
+      if (!mappa[r.cliente_nome]) mappa[r.cliente_nome] = { cliente: r.cliente_nome, totale: 0, scaduto: 0, mesi: {} }
+      const c = mappa[r.cliente_nome]
+      c.totale += r.importo
+      if (r.scaduta) c.scaduto += r.importo
+      if (!c.mesi[r.mese_key]) c.mesi[r.mese_key] = { label: r.mese_label, rate: [], totale: 0 }
+      c.mesi[r.mese_key].rate.push(r)
+      c.mesi[r.mese_key].totale += r.importo
+    })
+    return Object.values(mappa).sort((a, b) => a.cliente.localeCompare(b.cliente))
+  }, [rateIncassareFiltrate])
+
+  const totaleIncassare = rateIncassareFiltrate.reduce((s, r) => s + r.importo, 0)
+  const scadutoIncassare = rateIncassareFiltrate.filter(r => r.scaduta).reduce((s, r) => s + r.importo, 0)
+  const scadutoOltre30Incassare = rateIncassareFiltrate.filter(r => r.gg !== null && r.gg < -30).reduce((s, r) => s + r.importo, 0)
+  const totaleNcClienti = ncClienti.filter(nc => !filtroCliente || nc.cliente_nome?.toLowerCase().includes(filtroCliente.toLowerCase())).reduce((s, nc) => s + (nc.imponibile || 0), 0)
+  const totaleIncassareNetto = Math.max(0, totaleIncassare - totaleNcClienti)
 
   return (
     <div className="flex min-h-screen">
       <Sidebar />
-      <main className="flex-1 flex flex-col overflow-hidden" style={{ height: '100vh' }}>
-
-        {aggiornamentoDisponibile && (
-          <div className="bg-amber-50 border-b border-amber-300 px-4 py-2 flex items-center justify-between gap-3 flex-shrink-0 z-10">
-            <p className="text-xs text-amber-800 font-medium">⚠️ Il programma è stato modificato da un altro utente.</p>
-            <button onClick={load} className="text-xs bg-amber-600 text-white px-3 py-1 rounded-lg font-medium">Ricarica</button>
-          </div>
-        )}
-
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
-          <div><h1 className="text-lg font-semibold">📋 Programma giornaliero</h1></div>
-          <div className="flex gap-2 items-center flex-wrap">
-            <input type="date" className="input text-sm py-1 flex-1 md:flex-none" value={dataProgr} onChange={e => setDataProgr(e.target.value)} />
-            <button className="btn btn-sm" onClick={nuovoProgramma}>🆕 Nuovo</button>
-            <button className="btn btn-sm btn-primary" onClick={salva} disabled={salvando}>{salvando ? '...' : '💾 Salva'}</button>
-            <button className={`btn btn-sm font-semibold ${presenzeApprovate[societaAttiva] ? 'bg-green-600 text-white border-green-600' : 'bg-amber-500 text-white border-amber-500'}`} onClick={apriModalApprova}>
-              {presenzeApprovate[societaAttiva] ? '✓ Presenze ok' : '✅ Approva presenze'}
-            </button>
-            <button className="btn btn-sm hidden md:inline-flex" onClick={() => window.print()}>🖨️</button>
-          </div>
+      <main className="flex-1 p-6 overflow-auto">
+        <div className="flex items-center justify-between mb-4 print:hidden">
+          <h1 className="text-xl font-semibold">Scadenzario</h1>
+          {tab === 'da_incassare' && (
+            <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Stampa / PDF</button>
+          )}
+          {tab === 'da_pagare' && (
+            <button className="btn btn-primary" onClick={apriModalStampa}>🖨️ Stampa scadenze</button>
+          )}
         </div>
 
-        <div className="flex gap-2 px-4 py-2 bg-gray-50 border-b border-gray-200 flex-shrink-0">
-          {(['BC General Service', 'Filosofia'] as Societa[]).map(soc => {
-            const na = giorniNonApprovati[soc].length
-            return (
-              <button key={soc} onClick={() => setSocietaAttiva(soc)}
-                className={`relative flex-1 py-2 rounded-lg border-2 text-sm font-bold transition-all ${soc === 'BC General Service' ? (societaAttiva === soc ? 'bg-blue-600 text-white border-blue-600 shadow' : 'bg-blue-50 text-blue-700 border-blue-300') : (societaAttiva === soc ? 'bg-orange-500 text-white border-orange-500 shadow' : 'bg-orange-50 text-orange-700 border-orange-300')}`}>
-                {soc === 'BC General Service' ? '🏗' : '🏢'} {soc} {presenzeApprovate[soc] ? '✓' : ''}
-                {na > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center shadow-sm">
-                    {na > 9 ? '9+' : na}
-                  </span>
-                )}
-              </button>
-            )
-          })}
+        <div className="flex gap-2 mb-4 print:hidden">
+          <button onClick={() => setTab('da_pagare')} className={`btn ${tab === 'da_pagare' ? 'btn-primary' : ''}`}>📄 Da Pagare</button>
+          <button onClick={() => setTab('da_incassare')} className={`btn ${tab === 'da_incassare' ? 'btn-primary' : ''}`}>🧾 Da Incassare</button>
+          <button onClick={() => setTab('ritenute')} className={`btn ${tab === 'ritenute' ? 'btn-primary' : ''}`}>🔒 Ritenute</button>
         </div>
 
-        {/* Banner giorni arretrati non approvati */}
-        {giorniNonApprovati[societaAttiva].length > 0 && (
-          <div className="bg-red-50 border-b border-red-200 px-4 py-2 flex items-center gap-3 flex-shrink-0">
-            <span className="text-red-600 font-bold text-xs">⚠️ {giorniNonApprovati[societaAttiva].length} {giorniNonApprovati[societaAttiva].length === 1 ? 'giorno' : 'giorni'} non approvati ({societaAttiva}):</span>
-            <div className="flex gap-1 flex-wrap">
-              {giorniNonApprovati[societaAttiva].slice(0, 8).map(d => (
-                <button key={d}
-                  className="text-xs bg-red-100 text-red-700 border border-red-300 rounded px-1.5 py-0.5 hover:bg-red-200 font-medium"
-                  onClick={() => setDataProgr(d)}>
-                  {new Date(d + 'T12:00:00').toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' })}
-                </button>
-              ))}
-              {giorniNonApprovati[societaAttiva].length > 8 && (
-                <span className="text-xs text-red-500">…+{giorniNonApprovati[societaAttiva].length - 8}</span>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div className="flex md:hidden border-b border-gray-200 flex-shrink-0 bg-white">
-          {(['pool','cantieri','anteprima'] as const).map(t => (
-            <button key={t} onClick={() => setTabMobile(t)} className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${tabMobile === t ? 'text-blue-700 border-b-2 border-blue-600 bg-blue-50' : 'text-gray-500'}`}>
-              {t === 'pool' ? '👥 Persone/Mezzi' : t === 'cantieri' ? '🏗 Cantieri' : '📱 Messaggio'}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex flex-1 overflow-hidden">
-          <div className={`w-full md:w-52 flex-shrink-0 border-r border-gray-200 bg-gray-50 flex-col overflow-hidden ${tabMobile === 'pool' ? 'flex' : 'hidden md:flex'}`}>
-            <div className="flex border-b border-gray-200 flex-shrink-0">
-              {(['liberi','tutti'] as const).map(v => (
-                <button key={v} onClick={() => setVistaPool(v)} className={`flex-1 py-2 text-xs font-medium transition-colors ${vistaPool === v ? 'bg-white text-blue-700 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>
-                  {v === 'liberi' ? 'Liberi' : 'Tutti'}
-                </button>
-              ))}
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {loading ? <p className="text-xs text-gray-400 text-center py-4">Caricamento...</p> : (
-                <>
-                  {aziendeOrdinate.map(az => (
-                    <div key={az}>
-                      <div className="px-3 py-1.5 bg-gray-800 sticky top-0 z-10"><p className="text-xs font-medium text-white truncate">{az}</p></div>
-                      {dipPerAzienda[az].map((d: any) => {
-                        const usato = dipUsati.has(d.id)
-                        const dove = vistaPool === 'tutti' && usato ? dovePiazzato(d.id) : ''
-                        const altraSoc = dovePiazzatoAltraSocieta(d.id)
-                        return (
-                          <div key={d.id} className={`px-3 py-2 border-b border-gray-100 transition-colors ${usato ? 'opacity-40' : 'cursor-grab hover:bg-blue-50'} ${altraSoc ? 'bg-yellow-50' : ''}`}>
-                            <div className="flex items-center gap-2">
-                              {d.foto_url ? <img src={d.foto_url} className="w-7 h-7 rounded-full object-cover flex-shrink-0" /> : <div className="w-7 h-7 rounded-full bg-gray-600 text-white text-xs flex items-center justify-center flex-shrink-0 font-medium">{(d.nome?.charAt(0)||'')+(d.cognome?.charAt(0)||'')}</div>}
-                              <div className="min-w-0">
-                                <p className="text-xs font-semibold text-gray-800 truncate">{d.nome_programma || d.nome}</p>
-                                {d.nome_programma && <p className="text-xs text-gray-400 truncate">{d.cognome} {d.nome}</p>}
-                                {dove && <p className="text-xs text-blue-600 truncate">📍 {dove}</p>}
-                                {!usato && altraSoc && <p className="text-xs text-amber-700 font-medium truncate">⚠️ Già in {altraSoc.societa === 'Filosofia' ? 'Filosofia' : 'BC'}: {altraSoc.cantiere}</p>}
-                              </div>
-                              {!usato && !altraSoc && <span className="ml-auto text-gray-300 text-xs flex-shrink-0">⠿</span>}
-                              {!usato && altraSoc && <span className="ml-auto text-amber-500 text-xs flex-shrink-0">⚠️</span>}
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  ))}
-                  <div className={`px-3 py-1.5 sticky top-0 z-10 mt-1 ${societaAttiva === 'Filosofia' ? 'bg-orange-700' : 'bg-blue-800'}`}>
-                    <p className="text-xs font-bold text-white">🚐 MEZZI {societaAttiva === 'Filosofia' ? 'FILOSOFIA' : 'BC GENERAL'}</p>
-                  </div>
-                  {mezziSocieta.length === 0 && <p className="text-xs text-gray-400 text-center py-3 px-2">Nessun mezzo per {societaAttiva}.</p>}
-                  {mezziSocieta.map(m => {
-                    const usato = mezziUsati.has(m.id)
-                    const dove = vistaPool === 'tutti' && usato ? dovePiazzatoMezzo(m.id) : ''
-                    if (vistaPool === 'liberi' && usato) return null
-                    const isInSelezione = mezzoInSelezione?.id === m.id
-                    return (
-                      <div key={m.id}>
-                        <div
-                          className={`px-3 py-2 border-b border-gray-100 transition-colors ${usato ? 'opacity-40' : 'cursor-pointer hover:bg-blue-50'} ${isInSelezione ? 'bg-blue-100 border-blue-300' : ''}`}
-                          onClick={() => { if (!usato) setMezzoInSelezione(isInSelezione ? null : { id: m.id, nome: m.nome }) }}>
-                          <div className="flex items-center justify-between">
-                            <p className={`text-xs font-semibold truncate ${societaAttiva === 'Filosofia' ? 'text-orange-800' : 'text-blue-800'}`}>
-                              🚐 {m.nome}
-                              {!usato && <span className="ml-1 text-gray-400 font-normal">{isInSelezione ? '▲ scegli cantiere' : '→'}</span>}
-                            </p>
-                            {m.posti && <span className="text-xs text-gray-400 flex-shrink-0">👥{m.posti}p</span>}
-                          </div>
-                          {dove && <p className="text-xs text-blue-500 truncate">📍 {dove}</p>}
-                        </div>
-                        {/* Mini-picker cantiere quando il mezzo è selezionato */}
-                        {isInSelezione && cantieri.length > 0 && (
-                          <div className="bg-blue-50 border-b border-blue-200 px-2 py-1.5">
-                            <p className="text-xs text-blue-600 font-medium mb-1">Aggiungi a:</p>
-                            {cantieri.map(c => (
-                              <button key={c.id}
-                                className="w-full text-left text-xs px-2 py-1 rounded hover:bg-blue-200 text-blue-900 truncate block mb-0.5"
-                                onClick={e => { e.stopPropagation(); aggiungiMezzo(c.id, m); setMezzoInSelezione(null) }}>
-                                📍 {c.nome || 'Cantiere senza nome'}
-                              </button>
-                            ))}
-                            <button className="text-xs text-gray-400 mt-1" onClick={e => { e.stopPropagation(); setMezzoInSelezione(null) }}>Annulla</button>
-                          </div>
-                        )}
-                        {isInSelezione && cantieri.length === 0 && (
-                          <div className="bg-amber-50 border-b border-amber-200 px-3 py-1.5 text-xs text-amber-700">
-                            Aggiungi prima un cantiere
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </>
-              )}
-            </div>
-          </div>
-
-          <div className={`flex-1 overflow-y-auto p-3 space-y-3 bg-white ${tabMobile === 'cantieri' ? 'block' : 'hidden md:block'}`}>
-            <div className={`text-xs font-semibold px-3 py-1.5 rounded-lg inline-block mb-1 ${societaAttiva === 'Filosofia' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'}`}>Stai modificando: {societaAttiva}</div>
-            {cantieri.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-64 text-gray-400"><p className="text-4xl mb-3">🏗</p><p className="text-sm">Nessun cantiere per {societaAttiva}.</p></div>
-            ) : cantieri.map(c => (
-              <div key={c.id} className="border border-gray-200 rounded-xl overflow-hidden">
-                <div className={`px-3 py-2 flex items-center gap-2 ${societaAttiva === 'Filosofia' ? 'bg-orange-800' : 'bg-gray-800'}`}>
-                  <input className="flex-1 bg-transparent text-white text-sm font-semibold placeholder-gray-300 outline-none" placeholder="Nome cantiere..." value={c.nome} onChange={e => aggiornaCantiere(c.id, 'nome', e.target.value)} list={`cantieri-list-${c.id}`} />
-                  <datalist id={`cantieri-list-${c.id}`}>
-                    {cantieriAperti.map(nome => <option key={nome} value={nome} />)}
-                  </datalist>
-                  {/* Frecce riordino */}
-                  <button onClick={e => { e.stopPropagation(); spostaCantiere(c.id, 'su') }}
-                    className="text-gray-300 hover:text-white text-sm px-0.5" title="Sposta su">↑</button>
-                  <button onClick={e => { e.stopPropagation(); spostaCantiere(c.id, 'giu') }}
-                    className="text-gray-300 hover:text-white text-sm px-0.5" title="Sposta giù">↓</button>
-                  <button onClick={() => rimuoviCantiere(c.id)} className="text-gray-300 hover:text-red-300 text-lg">×</button>
-                </div>
-                <div className="px-3 py-1.5 bg-gray-50 border-b border-gray-100">
-                  <input className="w-full text-xs bg-transparent outline-none text-gray-600 placeholder-gray-400" placeholder="Note cantiere..." value={c.note} onChange={e => aggiornaCantiere(c.id, 'note', e.target.value)} />
-                </div>
-                <div className="p-3 space-y-2">
-                  {c.lavorazioni.map(lav => (
-                    <div key={lav.id} className="bg-gray-50 rounded-lg p-2">
-                      <div className="flex items-center gap-2 mb-2">
-                        <input className="flex-1 input text-xs py-1" placeholder="Lavorazione..." value={lav.nome} onChange={e => aggiornaLavorazione(c.id, lav.id, e.target.value)} />
-                        {c.lavorazioni.length > 1 && <button onClick={() => rimuoviLavorazione(c.id, lav.id)} className="text-gray-300 hover:text-red-500 text-sm">×</button>}
-                      </div>
-                      <div className="flex flex-wrap gap-1 mb-2 min-h-6">
-                        {lav.persone.map(p => (
-                          <div key={p.id} className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${p.capocantiere ? 'bg-amber-50 border-amber-400 text-amber-800' : 'bg-white border-gray-300 text-gray-700'}`}>
-                            {p.capocantiere && <span className="font-bold text-amber-600">"</span>}
-                            <span className="font-medium">{p.nomeBreve}</span>
-                            <button onClick={() => toggleCapo(c.id, lav.id, p.id)} className="text-gray-300 hover:text-amber-500 ml-0.5">{p.capocantiere ? '★' : '☆'}</button>
-                            <button onClick={() => rimuoviPersona(c.id, lav.id, p.id)} className="text-gray-300 hover:text-red-500 ml-0.5">×</button>
-                          </div>
-                        ))}
-                        {lav.persone.length === 0 && <p className="text-xs text-gray-300 italic">Seleziona persone dalla lista</p>}
-                      </div>
-                      <select className="input text-xs py-1 w-full" value="" onChange={e => { if (!e.target.value) return; const dip = dipendenti.find(d => d.id === e.target.value); if (dip) aggiungiPersona(c.id, lav.id, dip); e.target.value = '' }}>
-                        <option value="">+ Aggiungi persona...</option>
-                        {aziendeOrdinate.map(az => (
-                          <optgroup key={az} label={az}>
-                            {dipendenti.filter(d => d.azienda === az && !dipUsati.has(d.id)).map(d => {
-                              const altraSoc = dovePiazzatoAltraSocieta(d.id)
-                              return <option key={d.id} value={d.id}>{nomeBreve(d)}{d.nome_programma ? ` (${d.cognome} ${d.nome})` : ''}{altraSoc ? ` ⚠️ già in ${altraSoc.societa}` : ''}</option>
-                            })}
-                          </optgroup>
-                        ))}
-                      </select>
-                    </div>
-                  ))}
-                  <button onClick={() => aggiungiLavorazione(c.id)} className="btn btn-sm text-xs w-full">+ Lavorazione</button>
-                  <div className="border-t border-gray-100 pt-2">
-                    <div className="flex flex-wrap gap-1 mb-2">
-                      {c.mezzi.map(m => { const mc = mezziSocieta.find(x => x.id === m.id); return (
-                        <div key={m.id} className="flex items-center gap-1 text-xs bg-blue-50 border border-blue-200 text-blue-800 px-2 py-0.5 rounded-full">
-                          <span>🚐 {mc ? labelMezzoUI(mc) : m.nome}</span>
-                          <button onClick={() => rimuoviMezzo(c.id, m.id)} className="text-blue-300 hover:text-red-500 ml-0.5">×</button>
-                        </div>
-                      )})}
-                    </div>
-                    <select className="input text-xs py-1 w-full" value="" onChange={e => { if (!e.target.value) return; const m = mezziSocieta.find(x => x.id === e.target.value); if (m) aggiungiMezzo(c.id, m); e.target.value = '' }}>
-                      <option value="">🚐 Aggiungi mezzo...</option>
-                      {mezziSocieta.filter(m => !mezziUsati.has(m.id)).map(m => <option key={m.id} value={m.id}>{labelMezzoUI(m)}</option>)}
-                    </select>
-                  </div>
-                </div>
+        {tab === 'da_pagare' && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4 print:hidden">
+              <div className="bg-red-50 rounded-xl p-3 border border-red-100">
+                <p className="text-xs text-red-600 mb-1">⚠️ Scaduto</p>
+                <p className="text-lg font-bold text-red-800">{euro(scadutoPagare)}</p>
               </div>
-            ))}
-            <button onClick={aggiungiCantiere} className="btn btn-primary w-full">+ Cantiere {societaAttiva}</button>
-            {cantieri.length > 0 && <button onClick={() => setTabMobile('anteprima')} className="btn w-full md:hidden text-green-700 border-green-300 bg-green-50">📱 Vedi anteprima messaggio</button>}
-          </div>
-
-          <div className={`w-full md:w-72 flex-shrink-0 border-l border-gray-200 flex-col overflow-hidden ${tabMobile === 'anteprima' ? 'flex' : 'hidden md:flex'}`}>
-            <div className={`flex items-center justify-between px-3 py-2 flex-shrink-0 ${societaAttiva === 'Filosofia' ? 'bg-orange-600' : 'bg-[#128C7E]'}`}>
-              <span className="text-white text-xs font-semibold">📱 {societaAttiva}</span>
-              <button onClick={copiaMessaggio} className={`text-xs px-2 py-1 rounded font-medium transition-colors ${copiato ? 'bg-green-400 text-white' : 'bg-white/20 text-white hover:bg-white/30'}`}>{copiato ? '✓ Copiato!' : '📋 Copia'}</button>
-            </div>
-            <div className="flex-1 bg-[#ECE5DD] overflow-y-auto p-2">
-              <div className="bg-white rounded-lg p-2 shadow-sm">
-                <pre className="text-xs whitespace-pre-wrap font-sans text-gray-800 leading-relaxed">{cantieri.length === 0 ? `Aggiungi cantieri per ${societaAttiva}...` : messaggio}</pre>
-                <p className="text-right text-gray-400 text-xs mt-1">{new Date(dataProgr).toLocaleDateString('it-IT')} ✓✓</p>
+              <div className="bg-red-100 rounded-xl p-3 border border-red-300">
+                <p className="text-xs text-red-700 mb-1">🔴 Scaduto da oltre 30 gg</p>
+                <p className="text-lg font-bold text-red-900">{euro(scadutoOltre30Pagare)}</p>
+              </div>
+              <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
+                <p className="text-xs text-amber-600 mb-1">📄 Totale da pagare</p>
+                <p className="text-lg font-bold text-amber-800">{euro(totalePagareNetto)}</p>
+                {totaleNcFornitori > 0 && <p className="text-xs text-purple-600 mt-0.5">NC: - {euro(totaleNcFornitori)}</p>}
               </div>
             </div>
-          </div>
-        </div>
-      </main>
-
-      {modalApprova && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white z-10">
-              <div>
-                <h2 className="text-base font-semibold">✅ Approva presenze {societaAttiva} — {new Date(dataProgr).toLocaleDateString('it-IT')}</h2>
-                <p className="text-xs text-gray-500 mt-0.5">Solo {societaAttiva}. L'altra società non viene toccata.</p>
-              </div>
-              <button onClick={() => setModalApprova(false)} className="text-gray-400 text-xl">×</button>
-            </div>
-            <div className="p-5 space-y-5">
-              <div>
-                <h3 className="font-medium text-sm mb-2">👷 Presenze ({Object.keys(statiPresenza).length} assegnati)</h3>
-                <div className="space-y-1 max-h-72 overflow-y-auto border border-gray-100 rounded-lg p-2">
-                  {Object.entries(statiPresenza).map(([dipId, s]) => {
-                    const dip = dipendenti.find(d => d.id === dipId)
-                    if (!dip) return null
-                    return (
-                      <div key={dipId} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50">
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium truncate">{dip.cognome} {dip.nome}</p>
-                          {s.cantiere && <p className="text-xs text-blue-600 truncate">📍 {s.cantiere}</p>}
-                        </div>
-                        <div className="flex gap-1 flex-shrink-0">
-                          {(['presente','parziale','assente'] as const).map(opt => (
-                            <button key={opt} onClick={() => cambiaStato(dipId, opt)}
-                              className={`text-xs px-2 py-1 rounded-lg border font-medium transition-colors ${s.stato === opt ? (opt === 'presente' ? 'bg-green-600 text-white border-green-600' : opt === 'parziale' ? 'bg-amber-500 text-white border-amber-500' : 'bg-red-500 text-white border-red-500') : 'bg-white text-gray-400 border-gray-200'}`}>
-                              {opt === 'presente' ? '✓ Pres.' : opt === 'parziale' ? '½ Mezza' : '✕ Ass.'}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })}
-                  {Object.keys(statiPresenza).length === 0 && <p className="text-sm text-gray-400 text-center py-4">Nessun dipendente assegnato ai cantieri di {societaAttiva} oggi.</p>}
+            <div className="card mb-4 print:hidden">
+              <div className="flex gap-3 items-end flex-wrap">
+                <div className="flex-1 min-w-48">
+                  <label className="label">Cerca fornitore</label>
+                  <input className="input" placeholder="Nome fornitore..." value={cercaFornitore} onChange={e => setCercaFornitore(e.target.value)} />
                 </div>
-              </div>
-              {/* Sezione Tecnici */}
-              {Object.keys(statiPresenzaTecnici).length > 0 && (
                 <div>
-                  <h3 className="font-medium text-sm mb-2">🖥️ Tecnici — conferma presenza</h3>
-                  <div className="space-y-1 border border-purple-100 rounded-lg p-2 bg-purple-50">
-                    {Object.entries(statiPresenzaTecnici).map(([dipId, s]) => {
-                      const dip = dipendenti.find(d => d.id === dipId)
-                      if (!dip) return null
-                      return (
-                        <div key={dipId} className="flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg hover:bg-purple-100">
-                          <p className="text-sm font-medium truncate">{dip.cognome} {dip.nome}</p>
-                          <div className="flex gap-1 flex-shrink-0">
-                            {(['presente','parziale','assente'] as const).map(opt => (
-                              <button key={opt}
-                                onClick={() => {
-                                  const ore = opt === 'presente' ? 1 : opt === 'parziale' ? 0.5 : 0
-                                  setStatiPresenzaTecnici(prev => ({ ...prev, [dipId]: { stato: opt, ore } }))
-                                }}
-                                className={`text-xs px-2 py-1 rounded-lg border font-medium transition-colors ${s.stato === opt
-                                  ? (opt === 'presente' ? 'bg-green-600 text-white border-green-600' : opt === 'parziale' ? 'bg-amber-500 text-white border-amber-500' : 'bg-red-500 text-white border-red-500')
-                                  : 'bg-white text-gray-400 border-gray-200'}`}>
-                                {opt === 'presente' ? '✓ Pres.' : opt === 'parziale' ? '½ Mezza' : '✕ Ass.'}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )
-                    })}
+                  <label className="label">Scade dal</label>
+                  <input className="input" type="date" value={scadenzaDA} onChange={e => setScadenzaDA(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Scade al</label>
+                  <input className="input" type="date" value={scadenzaA} onChange={e => setScadenzaA(e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Ordina per</label>
+                  <div className="flex gap-1">
+                    <button className={`btn btn-sm ${ordinamentoPagare === 'scadenza' ? 'btn-primary' : ''}`} onClick={() => setOrdinamentoPagare('scadenza')}>Scadenza</button>
+                    <button className={`btn btn-sm ${ordinamentoPagare === 'fornitore' ? 'btn-primary' : ''}`} onClick={() => setOrdinamentoPagare('fornitore')}>Fornitore</button>
                   </div>
                 </div>
-              )}
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer pb-2">
+                  <input type="checkbox" checked={soloScadutePagare} onChange={e => setSoloScadutePagare(e.target.checked)} className="rounded" />
+                  Solo scadute
+                </label>
+                {(cercaFornitore || soloScadutePagare || scadenzaDA || scadenzaA) && <button className="btn btn-sm pb-2" onClick={() => { setCercaFornitore(''); setSoloScadutePagare(false); setScadenzaDA(''); setScadenzaA('') }}>× Reset</button>}
+              </div>
+              {/* Scorciatoie rapide: oggi → fine mese, oggi → 3 del mese prossimo, ecc. */}
+              <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100 flex-wrap">
+                <span className="text-xs text-gray-400">Scorciatoie:</span>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                  const oggi = new Date()
+                  const fine = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 0)
+                  setScadenzaDA(oggi.toISOString().split('T')[0]); setScadenzaA(fine.toISOString().split('T')[0])
+                }}>Entro fine mese</button>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                  const oggi = new Date()
+                  const target = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 3)
+                  setScadenzaDA(oggi.toISOString().split('T')[0]); setScadenzaA(target.toISOString().split('T')[0])
+                }}>Entro il 3 del mese prossimo</button>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                  const oggi = new Date()
+                  const target = new Date(oggi.getTime() + 7 * 86400000)
+                  setScadenzaDA(oggi.toISOString().split('T')[0]); setScadenzaA(target.toISOString().split('T')[0])
+                }}>Prossimi 7 giorni</button>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                  const oggi = new Date()
+                  const target = new Date(oggi.getTime() + 15 * 86400000)
+                  setScadenzaDA(oggi.toISOString().split('T')[0]); setScadenzaA(target.toISOString().split('T')[0])
+                }}>Prossimi 15 giorni</button>
+              </div>
+            </div>
+            <div className="card overflow-x-auto print:hidden">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm text-gray-500">{pagamentiFiltrati.length} rate da pagare</span>
+              </div>
+              {loading ? <div className="text-center text-gray-400 py-8">Caricamento...</div> : pagamentiFiltrati.length === 0 ? (
+                <div className="text-center text-gray-400 py-8">Nessuna fattura da pagare.</div>
+              ) : (
+                <>
+                  {/* Tabella — solo desktop */}
+                  <table className="table-base hidden md:table">
+                    <thead><tr><th>Fornitore</th><th>Cantiere</th><th>N° Fattura</th><th>Data emissione</th><th>Rata</th><th>Importo</th><th>Scadenza</th><th></th></tr></thead>
+                    <tbody>
+                      {pagamentiFiltrati.map(r => (
+                        <tr key={`${r.id}-${r.rata}`} className={r.gg !== null && r.gg < 0 ? 'bg-red-50' : ''}>
+                          <td className="font-medium text-sm">{r.fornitore_nome}</td>
+                          <td className="text-xs text-gray-500">{r.cantiere || '—'}</td>
+                          <td className="text-xs">{r.numero}</td>
+                          <td className="text-xs text-gray-500">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                          <td className="text-xs text-center">{r.rata}</td>
+                          <td className="font-medium text-sm">{euro(r.importo)}</td>
+                          <td className="text-xs">{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
+                          <td>{badgeGiorni(r.gg)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
 
-              <div>
-                <h3 className="font-medium text-sm mb-2">🚐 Abbinamento mezzi (obbligatorio)</h3>                {mezziDaAbbinare().length === 0 ? <p className="text-sm text-gray-400">Nessun mezzo assegnato oggi.</p> : (
-                  <div className="space-y-2">
-                    {mezziDaAbbinare().map(m => (
-                      <div key={m.mezzoId} className="flex items-center gap-2 bg-gray-50 rounded-lg p-2">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium">🚐 {m.nomeMezzo}</p>
-                          <p className="text-xs text-gray-500 truncate">📍 {m.cantiere}</p>
+                  {/* Card — solo mobile */}
+                  <div className="md:hidden space-y-2">
+                    {pagamentiFiltrati.map(r => (
+                      <div key={`${r.id}-${r.rata}`} className={`rounded-lg border p-3 ${r.gg !== null && r.gg < 0 ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'}`}>
+                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                          <p className="font-semibold text-sm">{r.fornitore_nome}</p>
+                          <p className="font-bold text-sm text-gray-800 flex-shrink-0">{euro(r.importo)}</p>
                         </div>
-                        <select className={`input text-xs py-1 w-48 ${!conducenti[m.mezzoId] ? 'border-amber-400' : 'border-green-400'}`} value={conducenti[m.mezzoId] || ''} onChange={e => setConducenti(prev => ({ ...prev, [m.mezzoId]: e.target.value }))}>
-                          <option value="">— scegli conducente —</option>
-                          {m.personeDisponibili.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                        </select>
+                        <p className="text-xs text-gray-500 mb-1">{r.cantiere || '—'}</p>
+                        <div className="flex items-center justify-between text-xs text-gray-500">
+                          <span>N° {r.numero} · Rata {r.rata}</span>
+                          <span>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</span>
+                        </div>
+                        <div className="mt-2">{badgeGiorni(r.gg)}</div>
                       </div>
                     ))}
                   </div>
-                )}
+                </>
+              )}
+            </div>
+
+            <div id="report-pagare" className="hidden print:block">
+              <div className="report-header flex items-start justify-between mb-6 pb-4" style={{ borderBottom: '3px solid #1e3a8a' }}>
+                <div className="flex items-center gap-4">
+                  <img src="/logo.png" alt="BC General Service" style={{ height: 55, objectFit: 'contain' }} />
+                  <div>
+                    <p style={{ fontSize: 15, fontWeight: 800, color: '#1e3a8a', letterSpacing: 1 }}>BC GENERAL SERVICE</p>
+                    <p style={{ fontSize: 10, color: '#6b7280' }}>Società Consortile a Responsabilità Limitata</p>
+                    <p style={{ fontSize: 10, color: '#6b7280' }}>Via Duca d'Este 7 — 41036 Medolla (MO)</p>
+                    <p style={{ fontSize: 10, color: '#6b7280' }}>P.IVA 03943310361</p>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <p style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>SCADENZE FORNITORI</p>
+                  <p style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>Data: <strong>{new Date().toLocaleDateString('it-IT')}</strong></p>
+                  {soloScadutoStampa && <p style={{ fontSize: 11, color: '#dc2626', fontWeight: 600 }}>Solo rate scadute</p>}
+                  {(stampaScadenzaDA || stampaScadenzaA) && (
+                    <p style={{ fontSize: 11, color: '#1e40af', fontWeight: 600 }}>
+                      Scadenza: {stampaScadenzaDA ? new Date(stampaScadenzaDA).toLocaleDateString('it-IT') : '...'} → {stampaScadenzaA ? new Date(stampaScadenzaA).toLocaleDateString('it-IT') : '...'}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {reportStampaPerFornitore.length === 0 ? (
+                <p style={{ textAlign: 'center', color: '#9ca3af', padding: 40 }}>Nessuna scadenza da mostrare con i filtri selezionati.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                  {reportStampaPerFornitore.map(g => (
+                    <div key={g.fornitore} style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', pageBreakInside: 'avoid' }}>
+                      <div style={{ background: '#1e3a8a', color: 'white', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <p style={{ fontWeight: 700, fontSize: 14 }}>{g.fornitore}</p>
+                        <div style={{ textAlign: 'right' }}>
+                          <p style={{ fontSize: 16, fontWeight: 800, color: '#fbbf24' }}>€ {euroShort(g.totale)}</p>
+                          {g.scaduto > 0 && <p style={{ fontSize: 11, color: '#fca5a5' }}>🔴 Scaduto: € {euroShort(g.scaduto)}</p>}
+                        </div>
+                      </div>
+                      <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+                        <thead>
+                          <tr style={{ background: '#f8faff' }}>
+                            {['N° Fattura','Data fattura','Cantiere','Rata','Scadenza','Gg','Importo'].map(h => (
+                              <th key={h} style={{ padding: '5px 16px', textAlign: h === 'Rata' || h === 'Gg' ? 'center' : h === 'Scadenza' || h === 'Importo' ? 'right' : 'left', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {g.rate.map((r, idx) => {
+                            const scaduta = r.gg !== null && r.gg < 0
+                            return (
+                              <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#fafafa' }}>
+                                <td style={{ padding: '5px 16px', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: '#1e40af' }}>{r.numero}</td>
+                                <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9' }}>{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                                <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9', color: '#6b7280' }}>{r.cantiere || '—'}</td>
+                                <td style={{ padding: '5px 16px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' }}>{r.rata}</td>
+                                <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: scaduta ? '#dc2626' : '#374151', fontWeight: scaduta ? 600 : 400 }}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
+                                <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: scaduta ? '#dc2626' : '#6b7280' }}>{r.gg !== null ? (r.gg < 0 ? `-${Math.abs(r.gg)}` : `+${r.gg}`) : '—'}</td>
+                                <td style={{ padding: '5px 16px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: scaduta ? '#dc2626' : '#1e3a8a' }}>€ {euroShort(r.importo)}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                      <div style={{ background: '#f8faff', padding: '8px 16px', display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #1e40af' }}>
+                        <span style={{ fontWeight: 600, fontSize: 12 }}>Totale {g.fornitore}</span>
+                        <span style={{ fontWeight: 800, fontSize: 14, color: '#1e3a8a' }}>€ {euroShort(g.totale)}</span>
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{ border: '3px solid #1e3a8a', borderRadius: 8, padding: '16px 20px', background: '#eff6ff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <p style={{ fontWeight: 700, fontSize: 15, color: '#1e3a8a' }}>TOTALE GENERALE</p>
+                      <p style={{ fontSize: 12, color: '#6b7280' }}>{reportStampaPerFornitore.length} fornitori</p>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <p style={{ fontSize: 24, fontWeight: 900, color: '#1e3a8a' }}>€ {euroShort(totaleReportStampa)}</p>
+                      {scadutoReportStampa > 0 && <p style={{ fontSize: 13, color: '#dc2626', fontWeight: 600 }}>🔴 Scaduto: € {euroShort(scadutoReportStampa)}</p>}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {tab === 'da_incassare' && (
+          <>
+            <div className="card mb-4 print:hidden">
+              <div className="flex gap-3 items-end flex-wrap">
+                <div className="flex-1 min-w-52">
+                  <label className="label">Filtra per cliente</label>
+                  <input className="input" placeholder="Nome cliente..." value={filtroCliente} onChange={e => setFiltroCliente(e.target.value)} />
+                </div>
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer pb-2">
+                  <input type="checkbox" checked={soloScaduteIncassare} onChange={e => setSoloScaduteIncassare(e.target.checked)} className="rounded" />
+                  Solo scadute
+                </label>
+                {(filtroCliente || soloScaduteIncassare) && <button className="btn btn-sm pb-2" onClick={() => { setFiltroCliente(''); setSoloScaduteIncassare(false) }}>× Reset</button>}
               </div>
             </div>
-            <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2 sticky bottom-0 bg-white">
-              <button className="btn" onClick={() => setModalApprova(false)}>Annulla</button>
-              <button className="btn btn-primary" onClick={confermaApprovazione} disabled={salvandoApprovazione}>{salvandoApprovazione ? 'Salvataggio...' : '✅ Conferma approvazione'}</button>
+            {loadingIncassare ? <div className="card text-center py-12 text-gray-400">Caricamento...</div> : (
+              <div id="report-incassare">
+                {filtroCliente && (
+                  <div className="report-header flex items-start justify-between mb-6 pb-4" style={{ borderBottom: '3px solid #1e3a8a' }}>
+                    <div className="flex items-center gap-4">
+                      <img src="/logo.png" alt="BC General Service" style={{ height: 55, objectFit: 'contain' }} />
+                      <div>
+                        <p style={{ fontSize: 15, fontWeight: 800, color: '#1e3a8a', letterSpacing: 1 }}>BC GENERAL SERVICE</p>
+                        <p style={{ fontSize: 10, color: '#6b7280' }}>Società Consortile a Responsabilità Limitata</p>
+                        <p style={{ fontSize: 10, color: '#6b7280' }}>Via Duca d'Este 7 — 41036 Medolla (MO)</p>
+                        <p style={{ fontSize: 10, color: '#6b7280' }}>P.IVA 03943310361</p>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <p style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>ESTRATTO CONTO</p>
+                      <p style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>Data: <strong>{new Date().toLocaleDateString('it-IT')}</strong></p>
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4 print:grid-cols-3">
+                  <div className="bg-red-50 rounded-xl p-3 border border-red-100">
+                    <p className="text-xs text-red-600 mb-1">⚠️ Scaduto</p>
+                    <p className="text-lg font-bold text-red-800">{euro(scadutoIncassare)}</p>
+                    <p className="text-xs text-red-500 mt-0.5">{rateIncassareFiltrate.filter(r => r.scaduta).length} rate scadute</p>
+                  </div>
+                  <div className="bg-red-100 rounded-xl p-3 border border-red-300">
+                    <p className="text-xs text-red-700 mb-1">🔴 Scaduto da oltre 30 gg</p>
+                    <p className="text-lg font-bold text-red-900">{euro(scadutoOltre30Incassare)}</p>
+                  </div>
+                  <div className="bg-blue-50 rounded-xl p-3 border border-blue-100">
+                    <p className="text-xs text-blue-600 mb-1">🧾 Totale da incassare</p>
+                    <p className="text-lg font-bold text-blue-800">{euro(totaleIncassareNetto)}</p>
+                    {totaleNcClienti > 0 && <p className="text-xs text-purple-600 mt-0.5">NC: - {euro(totaleNcClienti)}</p>}
+                    <p className="text-xs text-blue-500 mt-0.5">{perCliente.length} clienti</p>
+                  </div>
+                </div>
+                {perCliente.length === 0 ? (
+                  <div className="card text-center py-12 text-gray-400">Nessuna rata da incassare.</div>
+                ) : (
+                  <div className="space-y-6">
+                    {perCliente.map(c => (
+                      <div key={c.cliente} style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', pageBreakInside: 'avoid' }}>
+                        <div style={{ background: '#1e3a8a', color: 'white', padding: '10px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div>
+                            <p style={{ fontWeight: 700, fontSize: 14 }}>{c.cliente}</p>
+                            <p style={{ fontSize: 11, color: '#93c5fd' }}>{Object.keys(c.mesi).length} scadenze · {rateIncassareFiltrate.filter(r => r.cliente_nome === c.cliente).length} rate</p>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <p style={{ fontSize: 18, fontWeight: 800, color: '#fbbf24' }}>€ {euroShort(c.totale)}</p>
+                            {c.scaduto > 0 && <p style={{ fontSize: 11, color: '#fca5a5' }}>🔴 Scaduto: € {euroShort(c.scaduto)}</p>}
+                          </div>
+                        </div>
+                        {(Object.entries(c.mesi) as [string, { label: string, rate: RigaIncasso[], totale: number }][])
+                          .sort(([a], [b]) => a.localeCompare(b))
+                          .map(([meseK, mese]) => {
+                            const isPassato = meseK < new Date().toISOString().substring(0, 7)
+                            const isMeseCorrente = meseK === new Date().toISOString().substring(0, 7)
+                            return (
+                              <div key={meseK}>
+                                <div style={{ background: meseK === '9999-99' ? '#f3f4f6' : isPassato ? '#fef2f2' : isMeseCorrente ? '#fffbeb' : '#f0fdf4', padding: '6px 16px', display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e2e8f0' }}>
+                                  <p style={{ fontWeight: 600, fontSize: 12, color: isPassato ? '#dc2626' : isMeseCorrente ? '#d97706' : '#065f46' }}>
+                                    {isPassato ? '🔴 ' : isMeseCorrente ? '🟡 ' : '🟢 '}
+                                    {mese.label.charAt(0).toUpperCase() + mese.label.slice(1)}
+                                    {isPassato && ' — SCADUTO'}{isMeseCorrente && ' — Mese corrente'}
+                                  </p>
+                                  <p style={{ fontWeight: 700, fontSize: 13, color: isPassato ? '#dc2626' : '#374151' }}>€ {euroShort(mese.totale)}</p>
+                                </div>
+                                <div className="overflow-x-auto hidden md:block">
+                                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11, minWidth: 600 }}>
+                                    <thead>
+                                      <tr style={{ background: '#f8faff' }}>
+                                        {['N° Fattura','Data fattura','Cantiere','Rata','Scadenza','Gg','Importo'].map(h => (
+                                          <th key={h} style={{ padding: '5px 16px', textAlign: h === 'Rata' || h === 'Gg' ? 'center' : h === 'Scadenza' || h === 'Importo' ? 'right' : 'left', color: '#6b7280', fontWeight: 500, borderBottom: '1px solid #f1f5f9' }}>{h}</th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {mese.rate.map((r, idx) => (
+                                        <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#fafafa' }}>
+                                          <td style={{ padding: '5px 16px', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: '#1e40af' }}>{r.numero}</td>
+                                          <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9' }}>{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                                          <td style={{ padding: '5px 16px', borderBottom: '1px solid #f1f5f9', color: '#6b7280' }}>{r.progetto_nome || '—'}</td>
+                                          <td style={{ padding: '5px 16px', textAlign: 'center', borderBottom: '1px solid #f1f5f9' }}>{r.rata}</td>
+                                          <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#374151', fontWeight: r.scaduta ? 600 : 400 }}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
+                                          <td style={{ padding: '5px 16px', textAlign: 'right', borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#6b7280' }}>{r.gg !== null ? (r.gg < 0 ? `-${Math.abs(r.gg)}` : `+${r.gg}`) : '—'}</td>
+                                          <td style={{ padding: '5px 16px', textAlign: 'right', fontWeight: 600, borderBottom: '1px solid #f1f5f9', color: r.scaduta ? '#dc2626' : '#1e3a8a' }}>€ {euroShort(r.importo)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                                {/* Card compatte — solo mobile */}
+                                <div className="md:hidden divide-y divide-gray-100">
+                                  {mese.rate.map((r, idx) => (
+                                    <div key={idx} className="px-3 py-2" style={{ background: r.scaduta ? '#fef2f2' : 'white' }}>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-xs font-semibold text-blue-800">{r.numero}</span>
+                                        <span className={`text-xs font-bold ${r.scaduta ? 'text-red-600' : 'text-blue-900'}`}>€ {euroShort(r.importo)}</span>
+                                      </div>
+                                      <div className="flex items-center justify-between text-xs text-gray-500 mt-0.5">
+                                        <span>{r.progetto_nome || '—'} · Rata {r.rata}</span>
+                                        <span className={r.scaduta ? 'text-red-600 font-medium' : ''}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        <div style={{ background: '#f8faff', padding: '8px 16px', display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #1e40af' }}>
+                          <span style={{ fontWeight: 600, fontSize: 12 }}>Totale {c.cliente}</span>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontWeight: 800, fontSize: 14, color: '#1e3a8a' }}>€ {euroShort(c.totale)}</span>
+                            {c.scaduto > 0 && c.scaduto < c.totale && <span style={{ fontSize: 11, color: '#dc2626', marginLeft: 12 }}>di cui scaduto: € {euroShort(c.scaduto)}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{ border: '3px solid #1e3a8a', borderRadius: 8, padding: '16px 20px', background: '#eff6ff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <p style={{ fontWeight: 700, fontSize: 15, color: '#1e3a8a' }}>TOTALE GENERALE</p>
+                        <p style={{ fontSize: 12, color: '#6b7280' }}>{perCliente.length} clienti · {rateIncassareFiltrate.length} rate aperte</p>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <p style={{ fontSize: 24, fontWeight: 900, color: '#1e3a8a' }}>€ {euroShort(totaleIncassare)}</p>
+                        {scadutoIncassare > 0 && <p style={{ fontSize: 13, color: '#dc2626', fontWeight: 600 }}>🔴 Scaduto: € {euroShort(scadutoIncassare)}</p>}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {tab === 'ritenute' && (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+              <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
+                <p className="text-xs text-amber-600 mb-1">🔒 Garanzia in sospeso</p>
+                <p className="text-lg font-bold text-amber-800">{euro(totGaranziaInSospeso)}</p>
+                <p className="text-xs text-amber-500 mt-0.5">{ritenutaGaranzia.filter(r => r.stato === 'In sospeso').length} ritenute</p>
+              </div>
+              <div className="bg-green-50 rounded-xl p-3 border border-green-100">
+                <p className="text-xs text-green-600 mb-1">✓ Garanzia svincolata</p>
+                <p className="text-lg font-bold text-green-800">{euro(ritenutaGaranzia.filter(r => r.stato === 'Svincolata').reduce((s, r) => s + (r.importo_svincolato || 0), 0))}</p>
+                <p className="text-xs text-green-500 mt-0.5">{ritenutaGaranzia.filter(r => r.stato === 'Svincolata').length} svincolate</p>
+              </div>
+              <div className="bg-blue-50 rounded-xl p-3 border border-blue-100">
+                <p className="text-xs text-blue-600 mb-1">📋 Acconto {annoCorrente}</p>
+                <p className="text-lg font-bold text-blue-800">{euro(totAccontoAnno)}</p>
+                <p className="text-xs text-blue-500 mt-0.5">Credito fiscale anno corrente</p>
+              </div>
+              <div className="bg-purple-50 rounded-xl p-3 border border-purple-100">
+                <p className="text-xs text-purple-600 mb-1">📋 Acconto totale</p>
+                <p className="text-lg font-bold text-purple-800">{euro(totAccontoTotale)}</p>
+                <p className="text-xs text-purple-500 mt-0.5">{ritenutaAcconto.length} registrazioni</p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mb-4">
+              <button onClick={() => setSubTab('garanzia')} className={`btn ${subTab === 'garanzia' ? 'btn-primary' : ''}`}>🔒 Ritenute a Garanzia</button>
+              <button onClick={() => setSubTab('acconto')} className={`btn ${subTab === 'acconto' ? 'btn-primary' : ''}`}>📋 Ritenute d'Acconto (Condomini)</button>
+            </div>
+
+            {subTab === 'garanzia' && (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm text-gray-600">Ritenute trattenute dai clienti sui SAL/fatture — svincolate a fine lavori con nuova fattura</p>
+                  <button className="btn btn-primary btn-sm" onClick={() => setModalGaranzia(true)}>+ Registra ritenuta</button>
+                </div>
+                {loadingRitenute ? <div className="card text-center py-8 text-gray-400">Caricamento...</div> : (
+                  <div className="card overflow-x-auto">
+                    <table className="table-base">
+                      <thead><tr><th>Cantiere</th><th>Rif. Fattura</th><th>Data</th><th>Importo fattura</th><th>%</th><th>Ritenuta</th><th>Stato</th><th>Svincolo</th><th></th></tr></thead>
+                      <tbody>
+                        {ritenutaGaranzia.length === 0 ? (
+                          <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessuna ritenuta a garanzia registrata.</td></tr>
+                        ) : ritenutaGaranzia.map(r => (
+                          <tr key={r.id} className={r.stato === 'Svincolata' ? 'opacity-60' : ''}>
+                            <td className="text-sm font-medium">{r.progetto_nome || '—'}</td>
+                            <td className="text-xs text-gray-600">{r.fattura_riferimento || '—'}</td>
+                            <td className="text-xs">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                            <td className="text-sm">{euro(r.importo_fattura)}</td>
+                            <td className="text-xs text-center">{r.percentuale}%</td>
+                            <td className="font-semibold text-sm text-amber-700">{euro(r.importo_ritenuta)}</td>
+                            <td>
+                              {r.stato === 'Svincolata'
+                                ? <span className="badge badge-green">✓ Svincolata</span>
+                                : <span className="badge badge-amber">In sospeso</span>}
+                            </td>
+                            <td className="text-xs text-gray-500">
+                              {r.stato === 'Svincolata' && r.data_svincolo
+                                ? new Date(r.data_svincolo).toLocaleDateString('it-IT')
+                                : r.stato === 'In sospeso'
+                                  ? <button className="btn btn-sm text-green-600 border-green-200 hover:bg-green-50"
+                                      onClick={() => { setModalSvincolo(r); setFormSvincolo({ data_svincolo: '', importo_svincolato: String(r.importo_ritenuta) }) }}>
+                                      ✓ Svincola
+                                    </button>
+                                  : '—'}
+                            </td>
+                            <td>
+                              <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={() => eliminaRitenuta('ritenute_garanzia', r.id)}>✕</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {subTab === 'acconto' && (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm text-gray-600">Ritenute d'acconto trattenute da condomini/PA — credito fiscale da recuperare in dichiarazione dei redditi</p>
+                  <button className="btn btn-primary btn-sm" onClick={() => setModalAcconto(true)}>+ Registra ritenuta</button>
+                </div>
+                {loadingRitenute ? <div className="card text-center py-8 text-gray-400">Caricamento...</div> : (
+                  <div className="card overflow-x-auto">
+                    <table className="table-base">
+                      <thead><tr><th>Cliente</th><th>N° Fattura</th><th>Data</th><th>Anno fiscale</th><th>Importo fattura</th><th>%</th><th>Ritenuta (credito)</th><th>Note</th><th></th></tr></thead>
+                      <tbody>
+                        {ritenutaAcconto.length === 0 ? (
+                          <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessuna ritenuta d'acconto registrata.</td></tr>
+                        ) : ritenutaAcconto.map(r => (
+                          <tr key={r.id}>
+                            <td className="text-sm font-medium">{r.cliente_nome}</td>
+                            <td className="text-xs">{r.fattura_numero || '—'}</td>
+                            <td className="text-xs">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                            <td className="text-xs text-center font-medium">{r.anno_fiscale}</td>
+                            <td className="text-sm">{euro(r.importo_fattura)}</td>
+                            <td className="text-xs text-center">{r.percentuale}%</td>
+                            <td className="font-semibold text-sm text-blue-700">{euro(r.importo_ritenuta)}</td>
+                            <td className="text-xs text-gray-500 max-w-xs truncate">{r.note || '—'}</td>
+                            <td>
+                              <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={() => eliminaRitenuta('ritenute_acconto', r.id)}>✕</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {ritenutaAcconto.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-gray-100">
+                        <p className="text-xs text-gray-500 mb-2 font-medium">Totale credito fiscale per anno:</p>
+                        <div className="flex gap-3 flex-wrap">
+                          {Object.entries(ritenutaAcconto.reduce((acc, r) => {
+                            const a = r.anno_fiscale || 'N/A'
+                            acc[a] = (acc[a] || 0) + (r.importo_ritenuta || 0)
+                            return acc
+                          }, {} as Record<string, number>)).sort(([a], [b]) => String(b).localeCompare(String(a))).map(([anno, tot]) => (
+                            <div key={anno} className={`rounded-lg px-3 py-2 border ${Number(anno) === annoCorrente ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
+                              <p className="text-xs text-gray-500">{anno}</p>
+                              <p className={`font-bold text-sm ${Number(anno) === annoCorrente ? 'text-blue-700' : 'text-gray-700'}`}>{euro(tot as number)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </main>
+
+      {modalStampa && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">🖨️ Stampa scadenze fornitori</h2>
+              <button onClick={() => setModalStampa(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer mb-3 bg-gray-50 rounded-lg p-3">
+              <input type="checkbox" checked={soloScadutoStampa} onChange={e => setSoloScadutoStampa(e.target.checked)} className="rounded" />
+              Stampa solo le rate scadute
+            </label>
+
+            <div className="grid grid-cols-2 gap-3 mb-2">
+              <div><label className="label">Scade dal</label><input className="input" type="date" value={stampaScadenzaDA} onChange={e => setStampaScadenzaDA(e.target.value)} /></div>
+              <div><label className="label">Scade al</label><input className="input" type="date" value={stampaScadenzaA} onChange={e => setStampaScadenzaA(e.target.value)} /></div>
+            </div>
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
+              <span className="text-xs text-gray-400">Scorciatoie:</span>
+              <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                const oggi = new Date()
+                const fine = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 0)
+                setStampaScadenzaDA(oggi.toISOString().split('T')[0]); setStampaScadenzaA(fine.toISOString().split('T')[0])
+              }}>Entro fine mese</button>
+              <button className="text-xs text-blue-600 hover:underline" onClick={() => {
+                const oggi = new Date()
+                const target = new Date(oggi.getFullYear(), oggi.getMonth() + 1, 3)
+                setStampaScadenzaDA(oggi.toISOString().split('T')[0]); setStampaScadenzaA(target.toISOString().split('T')[0])
+              }}>Entro il 3 del prossimo mese</button>
+              <button className="text-xs text-blue-600 hover:underline" onClick={() => { setStampaScadenzaDA(''); setStampaScadenzaA('') }}>× Azzera date</button>
+            </div>
+
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-medium text-gray-700">Fornitori da includere ({fornitoriSelezionati.size}/{fornitoriUnici.length})</p>
+              <div className="flex gap-2">
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => setFornitoriSelezionati(new Set(fornitoriUnici))}>Tutti</button>
+                <button className="text-xs text-blue-600 hover:underline" onClick={() => setFornitoriSelezionati(new Set())}>Nessuno</button>
+              </div>
+            </div>
+
+            <div className="border border-gray-200 rounded-lg max-h-72 overflow-y-auto">
+              {fornitoriUnici.map(nome => (
+                <label key={nome} className="flex items-center gap-2 px-3 py-2 border-b border-gray-100 last:border-b-0 cursor-pointer hover:bg-gray-50 text-sm">
+                  <input type="checkbox" checked={fornitoriSelezionati.has(nome)} onChange={() => toggleFornitoreStampa(nome)} className="rounded" />
+                  {nome}
+                </label>
+              ))}
+            </div>
+
+            <div className="bg-blue-50 rounded-lg p-3 mt-4 border border-blue-200">
+              <p className="text-xs text-blue-600">Anteprima totale</p>
+              <p className="text-lg font-bold text-blue-800">{euro(totaleReportStampa)}</p>
+              <p className="text-xs text-blue-500 mt-0.5">{reportStampaPerFornitore.length} fornitori nel report</p>
+            </div>
+
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalStampa(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={confermaStampa} disabled={fornitoriSelezionati.size === 0}>🖨️ Stampa</button>
             </div>
           </div>
         </div>
       )}
 
-      <style jsx global>{`
+      {modalGaranzia && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">🔒 Registra ritenuta a garanzia</h2>
+              <button onClick={() => setModalGaranzia(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="label">Cantiere</label>
+                <select className="input" value={formGaranzia.progetto_id} onChange={e => setFormGaranzia({...formGaranzia, progetto_id: e.target.value})}>
+                  <option value="">-- seleziona --</option>
+                  {progetti.map(p => <option key={p.id} value={p.id}>{p.codice} — {p.nome}</option>)}
+                </select>
+              </div>
+              <div><label className="label">N° / Rif. Fattura</label><input className="input" placeholder="es. FT/2026/042" value={formGaranzia.fattura_riferimento} onChange={e => setFormGaranzia({...formGaranzia, fattura_riferimento: e.target.value})} /></div>
+              <div><label className="label">Data fattura</label><input className="input" type="date" value={formGaranzia.data_fattura} onChange={e => setFormGaranzia({...formGaranzia, data_fattura: e.target.value})} /></div>
+              <div><label className="label">Importo fattura (€)</label><input className="input" type="number" step="0.01" value={formGaranzia.importo_fattura} onChange={e => setFormGaranzia({...formGaranzia, importo_fattura: e.target.value})} /></div>
+              <div><label className="label">% Ritenuta</label><input className="input" type="number" step="0.01" value={formGaranzia.percentuale} onChange={e => setFormGaranzia({...formGaranzia, percentuale: e.target.value})} /></div>
+              {formGaranzia.importo_fattura && formGaranzia.percentuale && (
+                <div className="col-span-2 bg-amber-50 rounded-lg p-3 border border-amber-200">
+                  <p className="text-xs text-amber-600">Ritenuta calcolata</p>
+                  <p className="text-lg font-bold text-amber-800">{euro(parseFloat(formGaranzia.importo_fattura) * parseFloat(formGaranzia.percentuale) / 100)}</p>
+                  <p className="text-xs text-amber-600 mt-0.5">Il cliente pagherà: {euro(parseFloat(formGaranzia.importo_fattura) * (1 - parseFloat(formGaranzia.percentuale) / 100))}</p>
+                </div>
+              )}
+              <div className="col-span-2"><label className="label">Note</label><input className="input" value={formGaranzia.note} onChange={e => setFormGaranzia({...formGaranzia, note: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalGaranzia(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaGaranzia}>Salva ritenuta</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalAcconto && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-lg">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">📋 Registra ritenuta d'acconto</h2>
+              <button onClick={() => setModalAcconto(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <label className="label">Cliente (condominio/PA)</label>
+                <input className="input" list="clienti-list" placeholder="Nome cliente..." value={formAcconto.cliente_nome} onChange={e => setFormAcconto({...formAcconto, cliente_nome: e.target.value})} />
+                <datalist id="clienti-list">{clienti.map(c => <option key={c.id} value={c.ragione_sociale} />)}</datalist>
+              </div>
+              <div><label className="label">N° Fattura</label><input className="input" placeholder="es. FT/2026/042" value={formAcconto.fattura_numero} onChange={e => setFormAcconto({...formAcconto, fattura_numero: e.target.value})} /></div>
+              <div><label className="label">Data fattura</label><input className="input" type="date" value={formAcconto.data_fattura} onChange={e => setFormAcconto({...formAcconto, data_fattura: e.target.value})} /></div>
+              <div><label className="label">Importo fattura (€)</label><input className="input" type="number" step="0.01" value={formAcconto.importo_fattura} onChange={e => setFormAcconto({...formAcconto, importo_fattura: e.target.value})} /></div>
+              <div><label className="label">% Ritenuta</label><input className="input" type="number" step="0.01" value={formAcconto.percentuale} onChange={e => setFormAcconto({...formAcconto, percentuale: e.target.value})} /></div>
+              {formAcconto.importo_fattura && formAcconto.percentuale && (
+                <div className="col-span-2 bg-blue-50 rounded-lg p-3 border border-blue-200">
+                  <p className="text-xs text-blue-600">Ritenuta trattenuta (credito fiscale)</p>
+                  <p className="text-lg font-bold text-blue-800">{euro(parseFloat(formAcconto.importo_fattura) * parseFloat(formAcconto.percentuale) / 100)}</p>
+                  <p className="text-xs text-blue-600 mt-0.5">Il condominio pagherà: {euro(parseFloat(formAcconto.importo_fattura) * (1 - parseFloat(formAcconto.percentuale) / 100))}</p>
+                </div>
+              )}
+              <div className="col-span-2"><label className="label">Note</label><input className="input" value={formAcconto.note} onChange={e => setFormAcconto({...formAcconto, note: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalAcconto(false)}>Annulla</button>
+              <button className="btn btn-primary" onClick={salvaAcconto}>Salva ritenuta</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalSvincolo && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">✓ Registra svincolo ritenuta</h2>
+              <button onClick={() => setModalSvincolo(null)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="bg-amber-50 rounded-lg p-3 mb-4 border border-amber-200">
+              <p className="text-xs text-amber-600">Ritenuta da svincolare</p>
+              <p className="font-bold text-amber-800">{modalSvincolo.progetto_nome} — {euro(modalSvincolo.importo_ritenuta)}</p>
+              <p className="text-xs text-amber-600 mt-0.5">Rif: {modalSvincolo.fattura_riferimento || '—'}</p>
+            </div>
+            <div className="space-y-3">
+              <div><label className="label">Data svincolo (nuova fattura)</label><input className="input" type="date" value={formSvincolo.data_svincolo} onChange={e => setFormSvincolo({...formSvincolo, data_svincolo: e.target.value})} /></div>
+              <div><label className="label">Importo svincolato (€)</label><input className="input" type="number" step="0.01" value={formSvincolo.importo_svincolato} onChange={e => setFormSvincolo({...formSvincolo, importo_svincolato: e.target.value})} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={() => setModalSvincolo(null)}>Annulla</button>
+              <button className="btn btn-success" onClick={registraSvincolo}>Conferma svincolo</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
         @media print {
-          aside, .w-52, .w-72 { display: none !important; }
-          .flex-1.flex.flex-col { display: block !important; }
-          .flex.flex-1.overflow-hidden > .flex-1 { display: none !important; }
-          .flex.flex-1.overflow-hidden > .w-72 { width: 100% !important; border: none !important; display: block !important; }
-          .bg-\\[\\#128C7E\\], .bg-orange-600 { background: white !important; }
-          .bg-\\[\\#ECE5DD\\] { background: white !important; padding: 0 !important; }
-          button { display: none !important; }
-          pre { font-size: 11pt !important; line-height: 1.5 !important; }
+          @page { size: A4; margin: 12mm; }
+          body * { visibility: hidden; }
+          #report-incassare, #report-incassare *, #report-pagare, #report-pagare * { visibility: visible; }
+          #report-incassare, #report-pagare { position: static !important; width: 100% !important; height: auto !important; max-height: none !important; overflow: visible !important; padding: 0 !important; font-size: 11px; }
+          main { overflow: visible !important; height: auto !important; max-height: none !important; width: 100% !important; flex: none !important; padding: 0 !important; margin: 0 !important; }
+          .flex.min-h-screen { display: block !important; }
+          .print\\:hidden { display: none !important; }
+          .hidden.print\\:block { display: block !important; }
         }
       `}</style>
     </div>
