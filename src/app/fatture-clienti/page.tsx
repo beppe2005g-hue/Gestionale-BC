@@ -36,11 +36,34 @@ export default function FattureClienti() {
   const [modalRitenuta, setModalRitenuta] = useState<{ fattura: any; rata: number; importoResiduo: number } | null>(null)
   const [formRitenuta, setFormRitenuta] = useState({ percentuale: '4', importo: '', data: new Date().toISOString().split('T')[0] })
 
+  const [aliquote, setAliquote] = useState<{id:string;percentuale:number;descrizione:string}[]>([])
+  const [modalAliquote, setModalAliquote] = useState(false)
+  const [formAliq, setFormAliq] = useState({ percentuale: '', descrizione: '' })
+  const [salvandoAliq, setSalvandoAliq] = useState(false)
+
   const [form, setForm] = useState({
     data: '', numero: '', cliente_id: '', progetto_id: '', descrizione: '',
     imponibile: '', iva_percentuale: '0', tipo: 'Fattura', fattura_collegata_id: '',
     r1i: '', r1s: '', r2i: '', r2s: '', r3i: '', r3s: '', note: ''
   })
+
+  async function salvaAliquota() {
+    const perc = parseFloat(formAliq.percentuale.replace(',','.'))
+    if (isNaN(perc) || !formAliq.descrizione.trim()) { alert('Inserisci percentuale e descrizione'); return }
+    setSalvandoAliq(true)
+    await supabase.from('aliquote_iva').insert({ percentuale: perc, descrizione: formAliq.descrizione.trim() })
+    setFormAliq({ percentuale: '', descrizione: '' })
+    const { data } = await supabase.from('aliquote_iva').select('id,percentuale,descrizione').order('percentuale')
+    setAliquote((data || []) as any[])
+    setSalvandoAliq(false)
+  }
+
+  async function eliminaAliquota(id: string) {
+    if (!confirm('Eliminare questa aliquota?')) return
+    await supabase.from('aliquote_iva').delete().eq('id', id)
+    const { data } = await supabase.from('aliquote_iva').select('id,percentuale,descrizione').order('percentuale')
+    setAliquote((data || []) as any[])
+  }
 
   function showToast(msg: string, type: 'ok' | 'err') {
     setToast({ msg, type })
@@ -54,13 +77,15 @@ export default function FattureClienti() {
   }, [])
 
   async function load() {
-    const [{ data: f }, { data: c }, { data: p }, { data: pag }] = await Promise.all([
+    const [{ data: f }, { data: c }, { data: p }, { data: pag }, { data: aliq }] = await Promise.all([
       supabase.from('fatture_clienti').select('*'),
       supabase.from('clienti').select('id,ragione_sociale').eq('attivo', true),
       supabase.from('progetti').select('id,codice,nome'),
       supabase.from('pagamenti_clienti').select('*').order('data_pagamento', { ascending: false }),
+      supabase.from('aliquote_iva').select('id,percentuale,descrizione').order('percentuale'),
     ])
     setFatture(f || [])
+    setAliquote((aliq || []) as any[])
     setClienti(c || [])
     setProgetti(p || [])
     setPagamenti(pag || [])
@@ -488,9 +513,16 @@ export default function FattureClienti() {
               <div><label className="label">Imponibile (€) *</label>
                 <input className="input" type="number" step="0.01" value={form.imponibile} onChange={e => setForm({...form, imponibile: e.target.value})} />
               </div>
-              <div><label className="label">IVA %</label>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="label mb-0">IVA %</label>
+                  <button type="button" onClick={() => setModalAliquote(true)} className="text-xs text-blue-600 hover:underline">+ Gestisci aliquote</button>
+                </div>
                 <select className="input" value={form.iva_percentuale} onChange={e => setForm({...form, iva_percentuale: e.target.value})}>
-                  <option value="0">0% (RC)</option><option value="22">22%</option><option value="10">10%</option>
+                  {aliquote.length > 0
+                    ? aliquote.map(a => <option key={a.id} value={String(a.percentuale)}>{a.percentuale}% — {a.descrizione}</option>)
+                    : (<><option value="0">0% (RC)</option><option value="22">22%</option><option value="10">10%</option></>)
+                  }
                 </select>
               </div>
               {form.imponibile && (
@@ -534,7 +566,10 @@ export default function FattureClienti() {
               <div><label className="label">Imponibile (€)</label><input className="input" type="number" step="0.01" value={modalModifica.imponibile || ''} onChange={e => setModalModifica({...modalModifica, imponibile: e.target.value})} /></div>
               <div><label className="label">IVA %</label>
                 <select className="input" value={modalModifica.iva_percentuale || '0'} onChange={e => setModalModifica({...modalModifica, iva_percentuale: e.target.value})}>
-                  <option value="0">0% (RC)</option><option value="22">22%</option><option value="10">10%</option>
+                  {aliquote.length > 0
+                    ? aliquote.map(a => <option key={a.id} value={String(a.percentuale)}>{a.percentuale}% — {a.descrizione}</option>)
+                    : (<><option value="0">0% (RC)</option><option value="22">22%</option><option value="10">10%</option></>)
+                  }
                 </select>
               </div>
               {modalModifica.imponibile && (
@@ -716,6 +751,57 @@ export default function FattureClienti() {
               <button className="btn btn-primary" onClick={salvaRitenuta}>
                 💼 Registra ritenuta
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* MODAL GESTIONE ALIQUOTE IVA */}
+      {modalAliquote && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-md shadow-xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+              <div>
+                <h2 className="font-semibold">⚙️ Gestione aliquote IVA</h2>
+                <p className="text-xs text-gray-500 mt-0.5">Le aliquote sono condivise con Fatture da Emettere</p>
+              </div>
+              <button onClick={() => setModalAliquote(false)} className="text-gray-400 text-xl">×</button>
+            </div>
+            <div className="p-5">
+              {/* Lista aliquote esistenti */}
+              <div className="space-y-1.5 mb-4 max-h-48 overflow-y-auto">
+                {aliquote.map(a => (
+                  <div key={a.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+                    <div>
+                      <span className="font-semibold text-sm">{a.percentuale}%</span>
+                      <span className="text-xs text-gray-500 ml-2">{a.descrizione}</span>
+                    </div>
+                    <button onClick={() => eliminaAliquota(a.id)} className="text-gray-300 hover:text-red-500 text-sm ml-2">✕</button>
+                  </div>
+                ))}
+                {aliquote.length === 0 && <p className="text-xs text-gray-400 text-center py-3">Nessuna aliquota — aggiungine una</p>}
+              </div>
+              {/* Aggiungi nuova */}
+              <div className="border-t border-gray-100 pt-4">
+                <p className="text-xs font-semibold text-gray-500 mb-2">Aggiungi nuova aliquota</p>
+                <div className="flex gap-2">
+                  <div className="w-24">
+                    <input className="input text-center font-semibold" placeholder="es. 5" value={formAliq.percentuale}
+                      onChange={e => setFormAliq(f => ({...f, percentuale: e.target.value}))} />
+                    <p className="text-xs text-center text-gray-400 mt-0.5">%</p>
+                  </div>
+                  <div className="flex-1">
+                    <input className="input" placeholder="Descrizione (es. Aliquota ridotta beni)" value={formAliq.descrizione}
+                      onChange={e => setFormAliq(f => ({...f, descrizione: e.target.value}))}
+                      onKeyDown={e => e.key === 'Enter' && salvaAliquota()} />
+                  </div>
+                  <button className="btn btn-primary" onClick={salvaAliquota} disabled={salvandoAliq}>
+                    {salvandoAliq ? '...' : '+ Aggiungi'}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-gray-200 flex justify-end">
+              <button className="btn btn-primary" onClick={() => setModalAliquote(false)}>Chiudi</button>
             </div>
           </div>
         </div>
