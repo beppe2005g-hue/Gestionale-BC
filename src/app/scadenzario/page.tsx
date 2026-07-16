@@ -552,7 +552,7 @@ export default function Scadenzario() {
                                           onClick={() => {
                                             const perc = 4
                                             setFormRitenutaScad({ percentuale: String(perc), importo: (r.importo * perc / 100).toFixed(2), data: new Date().toISOString().split('T')[0] })
-                                            setModalRitenutaScad({ fattura_id: r.fattura_id, fattura_numero: r.numero, cliente_nome: r.cliente_nome, importo_fattura: 0, data_fattura: r.data_fattura, rata: r.rata, importoResiduo: r.importo })
+                                            setModalRitenutaScad({ fattura_id: r.fattura_id, fattura_numero: r.numero, cliente_nome: r.cliente_nome, progetto_nome: r.progetto_nome || '', importo_fattura: 0, data_fattura: r.data_fattura, rata: r.rata, importoResiduo: r.importo })
                                           }}>
                                           💼 Ritenuta
                                         </button>
