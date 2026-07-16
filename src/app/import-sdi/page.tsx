@@ -37,9 +37,27 @@ function nomeSimilare(a: string, b: string): boolean {
 
 type Stato = 'ok' | 'duplicato' | 'abbinata' | 'escluso' | 'errore'
 
+type PresetPag = 'saldo' | '30' | '60' | '30/60' | '30/60/90'
+interface Rata { importo: number; scadenza: string }
+function calcolaRate(totale: number, data: string, preset: PresetPag): Rata[] {
+  if (!data) return []
+  const d = new Date(data + 'T12:00:00')
+  const addGg = (gg: number) => { const x = new Date(d); x.setDate(x.getDate() + gg); return x.toISOString().split('T')[0] }
+  if (preset === 'saldo')     return [{ importo: totale, scadenza: addGg(0) }]
+  if (preset === '30')        return [{ importo: totale, scadenza: addGg(30) }]
+  if (preset === '60')        return [{ importo: totale, scadenza: addGg(60) }]
+  if (preset === '30/60')     return [{ importo: +(totale/2).toFixed(2), scadenza: addGg(30) }, { importo: +(totale/2).toFixed(2), scadenza: addGg(60) }]
+  if (preset === '30/60/90') {
+    const q = +(totale/3).toFixed(2)
+    const resto = +(totale - q*2).toFixed(2)
+    return [{ importo: q, scadenza: addGg(30) }, { importo: q, scadenza: addGg(60) }, { importo: resto, scadenza: addGg(90) }]
+  }
+  return [{ importo: totale, scadenza: addGg(0) }]
+}
+
 interface RigaRic {
   data: string; numero: string; fornitore: string; piva: string
-  totale: number; netto: number; data_ricezione: string; scadenza: string
+  totale: number; netto: number; data_ricezione: string; rate: Rata[]
   selezionata: boolean; stato: Stato; motivo?: string
   fattura_esistente?: { id: string; numero: string; data: string; fornitore_nome: string }
   abbinata_a?: string; abbinata_label?: string
@@ -47,7 +65,7 @@ interface RigaRic {
 
 interface RigaEm {
   data: string; numero: string; cliente: string; piva: string
-  totale: number; netto: number; scadenza: string
+  totale: number; netto: number; rate: Rata[]
   selezionata: boolean; stato: Stato; motivo?: string
   fattura_esistente?: { id: string; numero: string; data: string; cliente_nome: string }
   abbinata_a?: string; abbinata_label?: string
@@ -65,7 +83,7 @@ export default function ImportSDI() {
   const [importandoRic, setImportandoRic] = useState(false)
   const [risultatoRic, setRisultatoRic] = useState<{importate: number, errori: number} | null>(null)
   const [progettoDefaultRic, setProgettoDefaultRic] = useState('')
-  const [scadenzaDefaultRic, setScadenzaDefaultRic] = useState('')
+  const [presetRic, setPresetRic] = useState<PresetPag>('30')
 
   // Emesse
   const [righeEm, setRigheEm] = useState<RigaEm[]>([])
@@ -73,7 +91,7 @@ export default function ImportSDI() {
   const [importandoEm, setImportandoEm] = useState(false)
   const [risultatoEm, setRisultatoEm] = useState<{importate: number, errori: number} | null>(null)
   const [progettoDefaultEm, setProgettoDefaultEm] = useState('')
-  const [scadenzaDefaultEm, setScadenzaDefaultEm] = useState('')
+  const [presetEm, setPresetEm] = useState<PresetPag>('30')
 
   // Modal abbinamento manuale
   const [modalAbbina, setModalAbbina] = useState<{ rigaIdx: number; tipo: 'ric' | 'em' } | null>(null)
@@ -223,7 +241,7 @@ export default function ImportSDI() {
         }
       }
 
-      parsed.push({ data: dataStr, numero, fornitore, piva, totale, netto, data_ricezione: dataRicezione, scadenza: scadenzaDefaultRic || '', selezionata: stato === 'ok', stato, motivo, fattura_esistente })
+      parsed.push({ data: dataStr, numero, fornitore, piva, totale, netto, data_ricezione: dataRicezione, rate: calcolaRate(totale, dataStr, presetRic), selezionata: stato === 'ok', stato, motivo, fattura_esistente })
     }
     setRigheRic(parsed); setLoadingRic(false)
   }
@@ -276,7 +294,7 @@ export default function ImportSDI() {
         fattura_esistente = { id: dup.id, numero: dup.numero, data: dup.data, cliente_nome: dup.cliente_nome }
       }
 
-      parsed.push({ data: dataStr, numero, cliente, piva, totale, netto, scadenza: scadenzaDefaultEm || '', selezionata: stato === 'ok', stato, motivo, fattura_esistente })
+      parsed.push({ data: dataStr, numero, cliente, piva, totale, netto, rate: calcolaRate(totale, dataStr, presetEm), selezionata: stato === 'ok', stato, motivo, fattura_esistente })
     }
     setRigheEm(parsed); setLoadingEm(false)
   }
@@ -285,9 +303,7 @@ export default function ImportSDI() {
   async function eseguiImportRicevute() {
     const daImportare = righeRic.filter(r => r.selezionata && r.stato === 'ok')
     if (daImportare.length === 0) { alert('Nessuna fattura selezionata.'); return }
-    const senzaScadenza = daImportare.filter(r => !r.scadenza).length
-    if (senzaScadenza > 0 && !confirm(`${senzaScadenza} fatture senza scadenza. Importare comunque?`)) return
-    if (senzaScadenza === 0 && !confirm(`Importare ${daImportare.length} fatture?`)) return
+    if (!confirm(`Importare ${daImportare.length} fatture con modalità ${presetRic}?`)) return
     setImportandoRic(true)
     let importate = 0, errori = 0
     for (const r of daImportare) {
@@ -301,12 +317,17 @@ export default function ImportSDI() {
         const imponibile = r.netto > 0 ? r.netto : r.totale
         const ivaPerc = r.totale > 0 && r.netto > 0 && r.totale !== r.netto ? Math.round((r.totale / r.netto - 1) * 100) : 22
         const prj = progettoDefaultRic ? progetti.find(p => p.id === progettoDefaultRic) : null
+        const rateFields: Record<string,any> = {}
+        r.rate.forEach((rt, i) => {
+          rateFields[`rata${i+1}_importo`] = rt.importo
+          rateFields[`rata${i+1}_scadenza`] = rt.scadenza || null
+          rateFields[`rata${i+1}_stato`] = 'Da Pagare'
+        })
         const { error } = await supabase.from('fatture_fornitori').insert({
           data: r.data || new Date().toISOString().split('T')[0],
           numero: r.numero, fornitore_id: fornitoreId || null, fornitore_nome: r.fornitore,
           progetto_id: progettoDefaultRic || null, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
-          imponibile, iva_percentuale: ivaPerc, rata1_importo: r.totale,
-          rata1_scadenza: r.scadenza || null, rata1_stato: 'Da Pagare',
+          imponibile, iva_percentuale: ivaPerc, ...rateFields,
           note: `SDI - Ricezione: ${r.data_ricezione}`
         })
         if (error) errori++; else importate++
@@ -321,9 +342,7 @@ export default function ImportSDI() {
   async function eseguiImportEmesse() {
     const daImportare = righeEm.filter(r => r.selezionata && r.stato === 'ok')
     if (daImportare.length === 0) { alert('Nessuna fattura selezionata.'); return }
-    const senzaScadenza = daImportare.filter(r => !r.scadenza).length
-    if (senzaScadenza > 0 && !confirm(`${senzaScadenza} fatture senza scadenza di incasso. Importare comunque?`)) return
-    if (senzaScadenza === 0 && !confirm(`Importare ${daImportare.length} fatture clienti?`)) return
+    if (!confirm(`Importare ${daImportare.length} fatture clienti con modalità ${presetEm}?`)) return
     setImportandoEm(true)
     let importate = 0, errori = 0
     for (const r of daImportare) {
@@ -337,12 +356,17 @@ export default function ImportSDI() {
         const imponibile = r.netto > 0 ? r.netto : r.totale
         const ivaPerc = r.totale > 0 && r.netto > 0 && r.totale !== r.netto ? Math.round((r.totale / r.netto - 1) * 100) : 0
         const prj = progettoDefaultEm ? progetti.find(p => p.id === progettoDefaultEm) : null
+        const rateFieldsEm: Record<string,any> = {}
+        r.rate.forEach((rt, i) => {
+          rateFieldsEm[`rata${i+1}_importo`] = rt.importo
+          rateFieldsEm[`rata${i+1}_scadenza`] = rt.scadenza || null
+          rateFieldsEm[`rata${i+1}_stato`] = 'Da Incassare'
+        })
         const { error } = await supabase.from('fatture_clienti').insert({
           data: r.data || new Date().toISOString().split('T')[0],
           numero: r.numero, cliente_id: clienteId || null, cliente_nome: r.cliente,
           progetto_id: progettoDefaultEm || null, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
-          imponibile, iva_percentuale: ivaPerc,
-          rata1_importo: r.totale, rata1_scadenza: r.scadenza || null, rata1_stato: 'Da Incassare',
+          imponibile, iva_percentuale: ivaPerc, ...rateFieldsEm,
           note: 'SDI - Import fatture emesse'
         })
         if (error) errori++; else importate++
@@ -358,20 +382,47 @@ export default function ImportSDI() {
   const nEscRic = righeRic.filter(r => r.stato === 'escluso').length
   const nAbbRic = righeRic.filter(r => r.stato === 'abbinata').length
   const nSelRic = righeRic.filter(r => r.selezionata && r.stato === 'ok').length
-  const nSenzaScadenzaRic = righeRic.filter(r => r.stato === 'ok' && r.selezionata && !r.scadenza).length
+  const nSenzaScadenzaRic = righeRic.filter(r => r.stato === 'ok' && r.selezionata && (!r.rate || r.rate.length === 0)).length
 
   const nOkEm = righeEm.filter(r => r.stato === 'ok').length
   const nDupEm = righeEm.filter(r => r.stato === 'duplicato').length
   const nAbbEm = righeEm.filter(r => r.stato === 'abbinata').length
   const nSelEm = righeEm.filter(r => r.selezionata && r.stato === 'ok').length
-  const nSenzaScadenzaEm = righeEm.filter(r => r.stato === 'ok' && r.selezionata && !r.scadenza).length
+  const nSenzaScadenzaEm = righeEm.filter(r => r.stato === 'ok' && r.selezionata && (!r.rate || r.rate.length === 0)).length
 
   return (
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 p-6 overflow-auto">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4">
           <h1 className="text-xl font-semibold">Import fatture da SDI</h1>
+        </div>
+
+        {/* ── BANNER PROCEDURA ── */}
+        <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50 overflow-hidden">
+          <div className="px-4 py-2 bg-blue-700 text-white flex items-center gap-2">
+            <span className="font-bold text-sm uppercase tracking-wide">📋 Procedura Import SDI — istruzioni operative</span>
+          </div>
+          <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-5 gap-2 text-xs">
+            {[
+              { n:'1', t:'Aprire Qui Fattura', d:'Vai su Fatture Ricevute (o Emesse)', icon:'🌐' },
+              { n:'2', t:'Scaricare l\'Excel', d:'Clicca sull\'icona Excel in alto a sinistra', icon:'📥' },
+              { n:'3', t:'Caricare sul Gestionale', d:'Usa il pulsante "Carica file" in questa pagina', icon:'📤' },
+              { n:'4', t:'Inserire le scadenze', d:'Seleziona le condizioni di pagamento (30/60/90 gg)', icon:'📅' },
+              { n:'5', t:'Stampare le fatture', d:'Torna su Qui Fattura e stampa le nuove fatture', icon:'🖨️' },
+            ].map(s => (
+              <div key={s.n} className="flex items-start gap-2 bg-white rounded-lg px-3 py-2 border border-blue-100">
+                <span className="flex-shrink-0 w-5 h-5 bg-blue-700 text-white rounded-full flex items-center justify-center text-xs font-bold">{s.n}</span>
+                <div>
+                  <p className="font-semibold text-blue-900">{s.icon} {s.t}</p>
+                  <p className="text-blue-600 mt-0.5">{s.d}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="px-4 py-2 bg-amber-50 border-t border-amber-200 text-xs text-amber-800">
+            <span className="font-bold">N.B.</span> Il gestionale scarta automaticamente le fatture già registrate — puoi ricaricare lo stesso file senza rischi di duplicati.
+          </div>
         </div>
 
         <div className="flex gap-2 mb-4">
@@ -431,18 +482,22 @@ export default function ImportSDI() {
                     </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                  <span className="text-xs text-amber-800 font-medium flex-shrink-0">📅 Scadenza per tutte:</span>
-                  <input type="date" className="input w-auto text-sm" value={scadenzaDefaultRic} onChange={e => setScadenzaDefaultRic(e.target.value)} />
-                  <button className="btn btn-sm" onClick={() => {
-                    if (!scadenzaDefaultRic) { alert('Imposta prima una data'); return }
-                    setRigheRic(prev => prev.map(r => r.stato === 'ok' ? { ...r, scadenza: scadenzaDefaultRic } : r))
-                  }}>Applica a tutte</button>
+                <div className="flex items-center gap-2 mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex-wrap">
+                  <span className="text-xs text-blue-800 font-semibold flex-shrink-0">💳 Condizioni pagamento:</span>
+                  {(['saldo','30','60','30/60','30/60/90'] as PresetPag[]).map(p => (
+                    <button key={p} onClick={() => {
+                      setPresetRic(p)
+                      setRigheRic(prev => prev.map(r => r.stato === 'ok' ? { ...r, rate: calcolaRate(r.totale, r.data, p) } : r))
+                    }} className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${presetRic === p ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-100'}`}>
+                      {p === 'saldo' ? 'Saldo immediato' : `${p} gg`}
+                    </button>
+                  ))}
+                  <span className="text-xs text-blue-500 ml-1">— Si applica a tutte le righe da importare</span>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="table-base">
                     <thead>
-                      <tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Fornitore</th><th>Totale</th><th>Netto</th><th>Scadenza</th><th>Stato</th><th></th></tr>
+                      <tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Fornitore</th><th>Totale</th><th>Netto</th><th>Rate / Scadenze</th><th>Stato</th><th></th></tr>
                     </thead>
                     <tbody>
                       {righeRic.map((r, i) => (
@@ -458,10 +513,22 @@ export default function ImportSDI() {
                           <td className="text-xs">{r.fornitore}</td>
                           <td className="text-sm font-medium">{euro(r.totale)}</td>
                           <td className="text-sm">{euro(r.netto)}</td>
-                          <td>
-                            {r.stato === 'ok'
-                              ? <input type="date" className="input text-xs py-0.5 w-36" value={r.scadenza} onChange={e => setRigheRic(prev => prev.map((x, j) => j === i ? { ...x, scadenza: e.target.value } : x))} />
-                              : <span className="text-xs text-gray-400">—</span>}
+                          <td className="min-w-52">
+                            {r.stato === 'ok' ? (
+                              <div className="space-y-1">
+                                {(r.rate || []).map((rt, ri) => (
+                                  <div key={ri} className="flex items-center gap-1">
+                                    <span className="text-xs text-gray-400 w-14 flex-shrink-0">Rata {ri+1}:</span>
+                                    <input type="date" className="input text-xs py-0.5 w-32"
+                                      value={rt.scadenza}
+                                      onChange={e => setRigheRic(prev => prev.map((x, j) => j !== i ? x : {
+                                        ...x, rate: x.rate.map((rr, rj) => rj === ri ? { ...rr, scadenza: e.target.value } : rr)
+                                      }))} />
+                                    <span className="text-xs font-semibold text-gray-600 ml-1">{euro(rt.importo)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : <span className="text-xs text-gray-400">—</span>}
                           </td>
                           <td className="min-w-32">
                             {r.stato === 'ok' && <span className="badge badge-green">Da importare</span>}
@@ -546,17 +613,21 @@ export default function ImportSDI() {
                     </button>
                   </div>
                 </div>
-                <div className="flex items-center gap-3 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                  <span className="text-xs text-amber-800 font-medium flex-shrink-0">📅 Scadenza incasso per tutte:</span>
-                  <input type="date" className="input w-auto text-sm" value={scadenzaDefaultEm} onChange={e => setScadenzaDefaultEm(e.target.value)} />
-                  <button className="btn btn-sm" onClick={() => {
-                    if (!scadenzaDefaultEm) { alert('Imposta prima una data'); return }
-                    setRigheEm(prev => prev.map(r => r.stato === 'ok' ? { ...r, scadenza: scadenzaDefaultEm } : r))
-                  }}>Applica a tutte</button>
+                <div className="flex items-center gap-2 mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex-wrap">
+                  <span className="text-xs text-blue-800 font-semibold flex-shrink-0">💳 Condizioni incasso:</span>
+                  {(['saldo','30','60','30/60','30/60/90'] as PresetPag[]).map(p => (
+                    <button key={p} onClick={() => {
+                      setPresetEm(p)
+                      setRigheEm(prev => prev.map(r => r.stato === 'ok' ? { ...r, rate: calcolaRate(r.totale, r.data, p) } : r))
+                    }} className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${presetEm === p ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-100'}`}>
+                      {p === 'saldo' ? 'Saldo immediato' : `${p} gg`}
+                    </button>
+                  ))}
+                  <span className="text-xs text-blue-500 ml-1">— Si applica a tutte le righe da importare</span>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="table-base">
-                    <thead><tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Cliente</th><th>Totale</th><th>Netto</th><th>Scadenza incasso</th><th>Stato</th><th></th></tr></thead>
+                    <thead><tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Cliente</th><th>Totale</th><th>Netto</th><th>Rate / Scadenze</th><th>Stato</th><th></th></tr></thead>
                     <tbody>
                       {righeEm.map((r, i) => (
                         <tr key={i} className={
@@ -570,10 +641,22 @@ export default function ImportSDI() {
                           <td className="text-xs">{r.cliente || <span className="text-gray-400">—</span>}</td>
                           <td className="text-sm font-medium">{euro(r.totale)}</td>
                           <td className="text-sm">{euro(r.netto)}</td>
-                          <td>
-                            {r.stato === 'ok'
-                              ? <input type="date" className="input text-xs py-0.5 w-36" value={r.scadenza} onChange={e => setRigheEm(prev => prev.map((x, j) => j === i ? { ...x, scadenza: e.target.value } : x))} />
-                              : <span className="text-xs text-gray-400">—</span>}
+                          <td className="min-w-52">
+                            {r.stato === 'ok' ? (
+                              <div className="space-y-1">
+                                {(r.rate || []).map((rt, ri) => (
+                                  <div key={ri} className="flex items-center gap-1">
+                                    <span className="text-xs text-gray-400 w-14 flex-shrink-0">Rata {ri+1}:</span>
+                                    <input type="date" className="input text-xs py-0.5 w-32"
+                                      value={rt.scadenza}
+                                      onChange={e => setRigheEm(prev => prev.map((x, j) => j !== i ? x : {
+                                        ...x, rate: x.rate.map((rr, rj) => rj === ri ? { ...rr, scadenza: e.target.value } : rr)
+                                      }))} />
+                                    <span className="text-xs font-semibold text-gray-600 ml-1">{euro(rt.importo)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : <span className="text-xs text-gray-400">—</span>}
                           </td>
                           <td>
                             {r.stato === 'ok' && <span className="badge badge-green">Da importare</span>}
