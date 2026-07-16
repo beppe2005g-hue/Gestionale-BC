@@ -72,7 +72,7 @@ export default function Scadenzario() {
   // ── RITENUTA D'ACCONTO DA SCADENZARIO ─────────────────────────────────────
   const [modalRitenutaScad, setModalRitenutaScad] = useState<{
     fattura_id: string; fattura_numero: string; cliente_nome: string
-    importo_fattura: number; data_fattura: string | null
+    progetto_nome: string; importo_fattura: number; data_fattura: string | null
     rata: number; importoResiduo: number
   } | null>(null)
   const [formRitenutaScad, setFormRitenutaScad] = useState({ percentuale: '4', importo: '', data: new Date().toISOString().split('T')[0] })
@@ -142,6 +142,7 @@ export default function Scadenzario() {
     }
     await supabase.from('ritenute_acconto').insert({
       cliente_nome: modalRitenutaScad.cliente_nome,
+      progetto_nome: modalRitenutaScad.progetto_nome || null,
       fattura_numero: modalRitenutaScad.fattura_numero,
       importo_fattura: imponibile,
       percentuale: parseFloat(formRitenutaScad.percentuale) || 4,
@@ -566,7 +567,7 @@ export default function Scadenzario() {
                                     <div><span className="text-xs font-semibold text-blue-800">{r.numero}</span><span className="text-xs text-gray-500 ml-2">{r.progetto_nome || '—'} · Rata {r.rata}</span></div>
                                     <div className="flex items-center gap-2">
                                       <span className={`text-xs font-bold ${r.scaduta ? 'text-red-600' : 'text-blue-900'}`}>€ {euroShort(r.importo)}</span>
-                                      <button className="text-xs px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-700" onClick={() => { setFormRitenutaScad({ percentuale: '4', importo: (r.importo * 0.04).toFixed(2), data: new Date().toISOString().split('T')[0] }); setModalRitenutaScad({ fattura_id: r.fattura_id, fattura_numero: r.numero, cliente_nome: r.cliente_nome, importo_fattura: 0, data_fattura: r.data_fattura, rata: r.rata, importoResiduo: r.importo }) }}>💼</button>
+                                      <button className="text-xs px-1.5 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-700" onClick={() => { setFormRitenutaScad({ percentuale: '4', importo: (r.importo * 0.04).toFixed(2), data: new Date().toISOString().split('T')[0] }); setModalRitenutaScad({ fattura_id: r.fattura_id, fattura_numero: r.numero, cliente_nome: r.cliente_nome, progetto_nome: r.progetto_nome || '', importo_fattura: 0, data_fattura: r.data_fattura, rata: r.rata, importoResiduo: r.importo }) }}>💼</button>
                                     </div>
                                   </div>
                                 ))}
@@ -603,61 +604,181 @@ export default function Scadenzario() {
             {subTab === 'garanzia' && (
               <>
                 <div className="flex items-center justify-between mb-3"><p className="text-sm text-gray-600">Ritenute trattenute dai clienti sui SAL/fatture — svincolate a fine lavori</p><button className="btn btn-primary btn-sm" onClick={() => setModalGaranzia(true)}>+ Registra ritenuta</button></div>
-                {loadingRitenute ? <div className="card text-center py-8 text-gray-400">Caricamento...</div> : (
-                  <div className="card overflow-x-auto">
-                    <table className="table-base">
-                      <thead><tr><th>Cantiere</th><th>Rif. Fattura</th><th>Data</th><th>Importo fattura</th><th>%</th><th>Ritenuta</th><th>Stato</th><th>Svincolo</th><th></th></tr></thead>
-                      <tbody>
-                        {ritenutaGaranzia.length === 0 ? <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessuna ritenuta a garanzia registrata.</td></tr> : ritenutaGaranzia.map(r => (
-                          <tr key={r.id} className={r.stato === 'Svincolata' ? 'opacity-60' : ''}>
-                            <td className="text-sm font-medium">{r.progetto_nome || '—'}</td><td className="text-xs text-gray-600">{r.fattura_riferimento || '—'}</td>
-                            <td className="text-xs">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
-                            <td className="text-sm">{euro(r.importo_fattura)}</td><td className="text-xs text-center">{r.percentuale}%</td>
-                            <td className="font-semibold text-sm text-amber-700">{euro(r.importo_ritenuta)}</td>
-                            <td>{r.stato === 'Svincolata' ? <span className="badge badge-green">✓ Svincolata</span> : <span className="badge badge-amber">In sospeso</span>}</td>
-                            <td className="text-xs text-gray-500">{r.stato === 'Svincolata' && r.data_svincolo ? new Date(r.data_svincolo).toLocaleDateString('it-IT') : r.stato === 'In sospeso' ? <button className="btn btn-sm text-green-600 border-green-200 hover:bg-green-50" onClick={() => { setModalSvincolo(r); setFormSvincolo({ data_svincolo: '', importo_svincolato: String(r.importo_ritenuta) }) }}>✓ Svincola</button> : '—'}</td>
-                            <td><button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaRitenuta('ritenute_garanzia', r.id)}>✕</button></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                {loadingRitenute ? <div className="card text-center py-8 text-gray-400">Caricamento...</div> : ritenutaGaranzia.length === 0 ? (
+                  <div className="card text-center py-8 text-gray-400">Nessuna ritenuta a garanzia registrata.</div>
+                ) : (() => {
+                  // Raggruppa per cantiere (progetto_nome)
+                  const perCantiere: Record<string, { ritenute: any[], totale: number, svincolato: number }> = {}
+                  for (const r of ritenutaGaranzia) {
+                    const cant = r.progetto_nome || 'Cantiere non specificato'
+                    if (!perCantiere[cant]) perCantiere[cant] = { ritenute: [], totale: 0, svincolato: 0 }
+                    perCantiere[cant].ritenute.push(r)
+                    perCantiere[cant].totale += (r.importo_ritenuta || 0)
+                    if (r.stato === 'Svincolata') perCantiere[cant].svincolato += (r.importo_svincolato || 0)
+                  }
+                  return (
+                    <div className="space-y-4">
+                      {Object.entries(perCantiere).sort(([a],[b]) => a.localeCompare(b)).map(([cantiere, dati]) => {
+                        const inSospeso = dati.ritenute.filter(r => r.stato === 'In sospeso').reduce((s,r) => s + (r.importo_ritenuta||0), 0)
+                        return (
+                          <div key={cantiere} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                            {/* Header cantiere */}
+                            <div className="flex items-center justify-between px-4 py-2.5 bg-gray-800 text-white">
+                              <div>
+                                <p className="font-semibold text-sm">📍 {cantiere}</p>
+                                <p className="text-xs text-gray-400">{dati.ritenute.length} ritenute</p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm font-bold">{euro(dati.totale)}</p>
+                                {inSospeso > 0 && <p className="text-xs text-amber-300">In sospeso: {euro(inSospeso)}</p>}
+                                {dati.svincolato > 0 && <p className="text-xs text-green-300">Svincolato: {euro(dati.svincolato)}</p>}
+                              </div>
+                            </div>
+                            {/* Righe ritenute */}
+                            <table className="w-full text-sm">
+                              <thead><tr className="bg-gray-50 border-b border-gray-100">
+                                <th className="text-left px-4 py-1.5 text-xs font-medium text-gray-500">Rif. Fattura</th>
+                                <th className="text-left px-4 py-1.5 text-xs font-medium text-gray-500">Data</th>
+                                <th className="text-right px-4 py-1.5 text-xs font-medium text-gray-500">Imp. fattura</th>
+                                <th className="text-center px-4 py-1.5 text-xs font-medium text-gray-500">%</th>
+                                <th className="text-right px-4 py-1.5 text-xs font-medium text-gray-500">Ritenuta</th>
+                                <th className="text-left px-4 py-1.5 text-xs font-medium text-gray-500">Stato</th>
+                                <th className="text-left px-4 py-1.5 text-xs font-medium text-gray-500">Svincolo</th>
+                                <th className="px-2 py-1.5"></th>
+                              </tr></thead>
+                              <tbody className="divide-y divide-gray-50">
+                                {dati.ritenute.map(r => (
+                                  <tr key={r.id} className={r.stato === 'Svincolata' ? 'opacity-60' : 'hover:bg-gray-50'}>
+                                    <td className="px-4 py-2 text-xs font-medium text-blue-700">{r.fattura_riferimento || '—'}</td>
+                                    <td className="px-4 py-2 text-xs">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                                    <td className="px-4 py-2 text-xs text-right">{euro(r.importo_fattura)}</td>
+                                    <td className="px-4 py-2 text-xs text-center">{r.percentuale}%</td>
+                                    <td className="px-4 py-2 text-xs text-right font-bold text-amber-700">{euro(r.importo_ritenuta)}</td>
+                                    <td className="px-4 py-2">
+                                      {r.stato === 'Svincolata' ? <span className="badge badge-green">✓ Svincolata</span> : <span className="badge badge-amber">In sospeso</span>}
+                                    </td>
+                                    <td className="px-4 py-2 text-xs text-gray-500">
+                                      {r.stato === 'Svincolata' && r.data_svincolo ? new Date(r.data_svincolo).toLocaleDateString('it-IT')
+                                        : r.stato === 'In sospeso' ? <button className="btn btn-sm text-green-600 border-green-200 hover:bg-green-50 text-xs" onClick={() => { setModalSvincolo(r); setFormSvincolo({ data_svincolo: '', importo_svincolato: String(r.importo_ritenuta) }) }}>✓ Svincola</button>
+                                        : '—'}
+                                    </td>
+                                    <td className="px-2 py-2"><button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50 text-xs" onClick={() => eliminaRitenuta('ritenute_garanzia', r.id)}>✕</button></td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            {/* Totale cantiere */}
+                            <div className="flex justify-between items-center px-4 py-2 bg-gray-50 border-t border-gray-200">
+                              <span className="text-xs font-semibold text-gray-500">Totale {cantiere}</span>
+                              <div className="flex gap-4 text-xs">
+                                {inSospeso > 0 && <span className="text-amber-700 font-semibold">In sospeso: {euro(inSospeso)}</span>}
+                                {dati.svincolato > 0 && <span className="text-green-700 font-semibold">Svincolato: {euro(dati.svincolato)}</span>}
+                                <span className="font-bold text-gray-700">Tot: {euro(dati.totale)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
+              </>
+            )}
               </>
             )}
             {subTab === 'acconto' && (
               <>
                 <div className="flex items-center justify-between mb-3"><p className="text-sm text-gray-600">Ritenute d'acconto trattenute da condomini/PA — credito fiscale da recuperare</p><button className="btn btn-primary btn-sm" onClick={() => setModalAcconto(true)}>+ Registra ritenuta</button></div>
-                {loadingRitenute ? <div className="card text-center py-8 text-gray-400">Caricamento...</div> : (
-                  <div className="card overflow-x-auto">
-                    <table className="table-base">
-                      <thead><tr><th>Cliente</th><th>N° Fattura</th><th>Data</th><th>Anno fiscale</th><th>Importo fattura</th><th>%</th><th>Ritenuta (credito)</th><th>Note</th><th></th></tr></thead>
-                      <tbody>
-                        {ritenutaAcconto.length === 0 ? <tr><td colSpan={9} className="text-center text-gray-400 py-8">Nessuna ritenuta d'acconto registrata.</td></tr> : ritenutaAcconto.map(r => (
-                          <tr key={r.id}>
-                            <td className="text-sm font-medium">{r.cliente_nome}</td><td className="text-xs">{r.fattura_numero || '—'}</td>
-                            <td className="text-xs">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
-                            <td className="text-xs text-center font-medium">{r.anno_fiscale}</td><td className="text-sm">{euro(r.importo_fattura)}</td>
-                            <td className="text-xs text-center">{r.percentuale}%</td><td className="font-semibold text-sm text-blue-700">{euro(r.importo_ritenuta)}</td>
-                            <td className="text-xs text-gray-500 max-w-xs truncate">{r.note || '—'}</td>
-                            <td><button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => eliminaRitenuta('ritenute_acconto', r.id)}>✕</button></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {ritenutaAcconto.length > 0 && (
-                      <div className="mt-4 pt-3 border-t border-gray-100">
-                        <p className="text-xs text-gray-500 mb-2 font-medium">Totale credito fiscale per anno:</p>
-                        <div className="flex gap-3 flex-wrap">
-                          {Object.entries(ritenutaAcconto.reduce((acc, r) => { const a = r.anno_fiscale || 'N/A'; acc[a] = (acc[a] || 0) + (r.importo_ritenuta || 0); return acc }, {} as Record<string, number>)).sort(([a], [b]) => String(b).localeCompare(String(a))).map(([anno, tot]) => (
-                            <div key={anno} className={`rounded-lg px-3 py-2 border ${Number(anno) === annoCorrente ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
-                              <p className="text-xs text-gray-500">{anno}</p>
-                              <p className={`font-bold text-sm ${Number(anno) === annoCorrente ? 'text-blue-700' : 'text-gray-700'}`}>{euro(tot as number)}</p>
+                {loadingRitenute ? <div className="card text-center py-8 text-gray-400">Caricamento...</div> : ritenutaAcconto.length === 0 ? (
+                  <div className="card text-center py-8 text-gray-400">Nessuna ritenuta d'acconto registrata.</div>
+                ) : (() => {
+                  // Raggruppa per cliente → cantiere
+                  const perCliente: Record<string, { ritenute: any[], totale: number, perCantiere: Record<string, { ritenute: any[], totale: number }> }> = {}
+                  for (const r of ritenutaAcconto) {
+                    const cl = r.cliente_nome || 'Cliente sconosciuto'
+                    const cant = r.progetto_nome || '—'
+                    if (!perCliente[cl]) perCliente[cl] = { ritenute: [], totale: 0, perCantiere: {} }
+                    perCliente[cl].totale += (r.importo_ritenuta || 0)
+                    if (!perCliente[cl].perCantiere[cant]) perCliente[cl].perCantiere[cant] = { ritenute: [], totale: 0 }
+                    perCliente[cl].perCantiere[cant].ritenute.push(r)
+                    perCliente[cl].perCantiere[cant].totale += (r.importo_ritenuta || 0)
+                  }
+                  return (
+                    <div className="space-y-4">
+                      {Object.entries(perCliente).sort(([a],[b]) => a.localeCompare(b)).map(([cliente, datiCliente]) => (
+                        <div key={cliente} className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                          {/* Header cliente */}
+                          <div className="flex items-center justify-between px-4 py-2.5 bg-gray-800 text-white">
+                            <p className="font-semibold text-sm">{cliente}</p>
+                            <div className="text-right">
+                              <p className="text-sm font-bold text-blue-300">{euro(datiCliente.totale)}</p>
+                              <p className="text-xs text-gray-400">{datiCliente.ritenute.length} ritenute</p>
+                            </div>
+                          </div>
+                          {/* Per ogni cantiere */}
+                          {Object.entries(datiCliente.perCantiere).sort(([a],[b]) => a.localeCompare(b)).map(([cantiere, datiCant]) => (
+                            <div key={cantiere}>
+                              {/* Intestazione cantiere */}
+                              <div className="flex items-center justify-between px-4 py-1.5 bg-blue-50 border-b border-blue-100">
+                                <p className="text-xs font-semibold text-blue-800">📍 {cantiere}</p>
+                                <p className="text-xs font-bold text-blue-700">{euro(datiCant.totale)}</p>
+                              </div>
+                              {/* Righe ritenute */}
+                              <table className="w-full text-sm">
+                                <thead><tr className="bg-gray-50 border-b border-gray-100">
+                                  <th className="text-left px-4 py-1.5 text-xs font-medium text-gray-500">N° Fattura</th>
+                                  <th className="text-left px-4 py-1.5 text-xs font-medium text-gray-500">Data</th>
+                                  <th className="text-left px-4 py-1.5 text-xs font-medium text-gray-500">Anno</th>
+                                  <th className="text-right px-4 py-1.5 text-xs font-medium text-gray-500">Imp. fattura</th>
+                                  <th className="text-center px-4 py-1.5 text-xs font-medium text-gray-500">%</th>
+                                  <th className="text-right px-4 py-1.5 text-xs font-medium text-gray-500">Ritenuta</th>
+                                  <th className="text-left px-4 py-1.5 text-xs font-medium text-gray-500">Note</th>
+                                  <th className="px-2 py-1.5"></th>
+                                </tr></thead>
+                                <tbody className="divide-y divide-gray-50">
+                                  {datiCant.ritenute.map(r => (
+                                    <tr key={r.id} className="hover:bg-gray-50">
+                                      <td className="px-4 py-2 text-xs font-medium text-blue-700">{r.fattura_numero || '—'}</td>
+                                      <td className="px-4 py-2 text-xs">{r.data_fattura ? new Date(r.data_fattura).toLocaleDateString('it-IT') : '—'}</td>
+                                      <td className="px-4 py-2 text-xs font-medium text-center">{r.anno_fiscale}</td>
+                                      <td className="px-4 py-2 text-xs text-right">{euro(r.importo_fattura)}</td>
+                                      <td className="px-4 py-2 text-xs text-center">{r.percentuale}%</td>
+                                      <td className="px-4 py-2 text-xs text-right font-bold text-blue-700">{euro(r.importo_ritenuta)}</td>
+                                      <td className="px-4 py-2 text-xs text-gray-400 max-w-xs truncate">{r.note || '—'}</td>
+                                      <td className="px-2 py-2"><button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50 text-xs" onClick={() => eliminaRitenuta('ritenute_acconto', r.id)}>✕</button></td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
                             </div>
                           ))}
+                          {/* Totale cliente */}
+                          <div className="flex justify-between items-center px-4 py-2 bg-gray-50 border-t border-gray-200">
+                            <span className="text-xs font-semibold text-gray-500">Totale credito fiscale — {cliente}</span>
+                            <span className="text-sm font-bold text-blue-700">{euro(datiCliente.totale)}</span>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      ))}
+
+                      {/* Totale per anno */}
+                      {ritenutaAcconto.length > 0 && (
+                        <div className="mt-2 pt-3 border-t border-gray-200">
+                          <p className="text-xs text-gray-500 mb-2 font-medium">Totale credito fiscale per anno:</p>
+                          <div className="flex gap-3 flex-wrap">
+                            {Object.entries(ritenutaAcconto.reduce((acc, r) => { const a = r.anno_fiscale || 'N/A'; acc[a] = (acc[a] || 0) + (r.importo_ritenuta || 0); return acc }, {} as Record<string, number>)).sort(([a],[b]) => String(b).localeCompare(String(a))).map(([anno, tot]) => (
+                              <div key={anno} className={`rounded-lg px-3 py-2 border ${Number(anno) === annoCorrente ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-200'}`}>
+                                <p className="text-xs text-gray-500">{anno}</p>
+                                <p className={`font-bold text-sm ${Number(anno) === annoCorrente ? 'text-blue-700' : 'text-gray-700'}`}>{euro(tot as number)}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
+              </>
+            )}
                   </div>
                 )}
               </>
