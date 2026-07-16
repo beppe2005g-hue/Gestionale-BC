@@ -228,6 +228,102 @@ export default function Scadenzario() {
   const scadutoReportStampa = reportStampaPerFornitore.reduce((s, g) => s + g.scaduto, 0)
   function confermaStampa() { setModalStampa(false); setTimeout(() => window.print(), 100) }
 
+  function stampaIncassare() {
+    const dataOggi = new Date().toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' })
+    const meseOggi = new Date().toISOString().substring(0, 7)
+    const ef = (n: number) => '€ ' + (n||0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+    let righeHtml = ''
+    for (const c of perCliente) {
+      const mesiOrdinati = Object.entries(c.mesi).sort(([a],[b]) => a.localeCompare(b)) as [string, { label: string, rate: RigaIncasso[], totale: number }][]
+      let righeCliente = ''
+      for (const [meseK, mese] of mesiOrdinati) {
+        const isPassato = meseK < meseOggi
+        const isMeseCorrente = meseK === meseOggi
+        const haScadute = mese.rate.some(r => r.scaduta)
+        const isRed = isPassato || (isMeseCorrente && haScadute)
+        const isAmber = isMeseCorrente && !isRed
+        const colMese = isRed ? '#dc2626' : isAmber ? '#d97706' : '#065f46'
+        const bgMese  = isRed ? '#fee2e2'  : isAmber ? '#fef9c3' : '#f0fdf4'
+        const label = mese.label.charAt(0).toUpperCase() + mese.label.slice(1) + (isRed ? ' — SCADUTO' : isAmber ? ' — mese corrente' : '')
+        let righeRate = ''
+        for (const r of mese.rate) {
+          const colImp = r.scaduta ? '#dc2626' : '#1e3a8a'
+          const scadStr = r.scadenza ? new Date(r.scadenza + 'T12:00:00').toLocaleDateString('it-IT') : '—'
+          const ggStr = r.gg !== null ? (r.gg <= 0 ? `${r.gg} gg` : `+${r.gg} gg`) : '—'
+          righeRate += `<tr>
+            <td style="padding:4px 12px;font-weight:600;color:#1e40af;font-size:11px;">${r.numero}</td>
+            <td style="padding:4px 12px;font-size:11px;color:#374151;">${r.data_fattura ? new Date(r.data_fattura+'T12:00:00').toLocaleDateString('it-IT') : '—'}</td>
+            <td style="padding:4px 12px;font-size:11px;color:#6b7280;">${r.progetto_nome||'—'}</td>
+            <td style="padding:4px 12px;text-align:center;font-size:11px;">${r.rata}</td>
+            <td style="padding:4px 12px;text-align:right;font-size:11px;color:${colImp};font-weight:${r.scaduta?'700':'400'};">${scadStr}</td>
+            <td style="padding:4px 12px;text-align:right;font-size:11px;color:${colImp};">${ggStr}</td>
+            <td style="padding:4px 12px;text-align:right;font-weight:700;font-size:11px;color:${colImp};">${ef(r.importo)}</td>
+          </tr>`
+        }
+        righeCliente += `
+          <tr><td colspan="7" style="padding:5px 12px;background:${bgMese};border-top:1px solid #e2e8f0;">
+            <span style="font-weight:700;font-size:12px;color:${colMese};">${label}</span>
+            <span style="float:right;font-weight:700;font-size:13px;color:${colMese};">${ef(mese.totale)}</span>
+          </td></tr>
+          ${righeRate}
+        `
+      }
+      const bgCliente = c.scaduto > 0 ? '#fef08a' : '#fef9c3'
+      righeHtml += `
+        <tr><td colspan="7" style="padding:8px 12px;background:${bgCliente};border-top:3px solid #ca8a04;">
+          <span style="font-weight:800;font-size:13px;color:#713f12;">${c.cliente}</span>
+          ${c.scaduto > 0 ? `<span style="margin-left:12px;font-size:11px;color:#dc2626;font-weight:700;">⚠ Scaduto: ${ef(c.scaduto)}</span>` : ''}
+          <span style="float:right;font-weight:800;font-size:14px;color:#713f12;">${ef(c.totale)}</span>
+        </td></tr>
+        ${righeCliente}
+        <tr><td colspan="7" style="padding:4px 12px;background:#f9fafb;border-top:1px solid #d1d5db;text-align:right;font-size:11px;color:#6b7280;">
+          Totale ${c.cliente}: <strong style="color:#111827;margin-left:8px;">${ef(c.totale)}</strong>
+        </td></tr>
+      `
+    }
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+      <title>Fatture da Incassare — ${dataOggi}</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 10mm; font-size: 11px; color: #111827; }
+        h1 { font-size: 16px; font-weight: 800; color: #1e3a8a; margin-bottom: 2px; }
+        .sub { font-size: 11px; color: #6b7280; margin-bottom: 12px; }
+        table { border-collapse: collapse; width: 100%; }
+        th { padding: 5px 12px; background: #1f2937; color: white; text-align: left; font-size: 11px; }
+        th.r { text-align: right; }
+        td { border-bottom: 1px solid #f1f5f9; }
+        .totale { background:#1e3a8a;color:white;padding:10px 16px;display:flex;justify-content:space-between;margin-top:16px;border-radius:6px; }
+        @media print { @page { size: A4; margin: 10mm; } }
+      </style>
+    </head><body>
+      <h1>📋 Pagamenti da ricevere per cliente</h1>
+      <p class="sub">Stampato il ${dataOggi} · ${perCliente.length} clienti · ${rateIncassareFiltrate.length} rate aperte</p>
+      <table>
+        <thead><tr>
+          <th>N° Fattura</th><th>Data</th><th>Cantiere / Progetto</th>
+          <th style="text-align:center">Rata</th><th class="r">Scadenza</th>
+          <th class="r">Gg</th><th class="r">Importo</th>
+        </tr></thead>
+        <tbody>${righeHtml}</tbody>
+      </table>
+      <div class="totale">
+        <div>
+          <div style="font-weight:700;font-size:13px;letter-spacing:.5px;">TOTALE DA INCASSARE</div>
+          <div style="font-size:10px;opacity:.8;">${perCliente.length} clienti · ${rateIncassareFiltrate.length} rate</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:20px;font-weight:800;">${ef(totaleIncassare)}</div>
+          ${scadutoIncassare > 0 ? `<div style="color:#fca5a5;font-size:11px;font-weight:700;">⚠ Scaduto: ${ef(scadutoIncassare)}</div>` : ''}
+        </div>
+      </div>
+      <script>window.onload=()=>{ window.print(); }</script>
+    </body></html>`
+
+    const w = window.open('', '_blank', 'width=900,height=700')
+    if (w) { w.document.write(html); w.document.close() }
+  }
+
   const pagamentiFiltrati = useMemo(() => {
     let r = pagamenti
     if (cercaFornitore) r = r.filter(x => x.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase()))
@@ -306,7 +402,7 @@ export default function Scadenzario() {
       <main className="flex-1 p-6 overflow-auto">
         <div className="flex items-center justify-between mb-4 print:hidden">
           <h1 className="text-xl font-semibold">Scadenzario</h1>
-          {tab === 'da_incassare' && <button className="btn btn-primary" onClick={() => window.print()}>🖨️ Stampa / PDF</button>}
+          {tab === 'da_incassare' && <button className="btn btn-primary" onClick={stampaIncassare}>🖨️ Stampa / PDF</button>}
           {tab === 'da_pagare' && <button className="btn btn-primary" onClick={apriModalStampa}>🖨️ Stampa scadenze</button>}
         </div>
         <div className="flex gap-2 mb-4 print:hidden">
@@ -412,41 +508,29 @@ export default function Scadenzario() {
                 {perCliente.length === 0 ? <div className="card text-center py-12 text-gray-400">Nessuna rata da incassare.</div> : (
                   <div className="space-y-6">
                     {perCliente.map(c => (
-                      <div key={c.cliente} style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden', pageBreakInside: 'avoid' }}>
-                        {/* ── RIGA CLIENTE — sfondo GIALLO ── */}
-                        <div style={{ background: '#fef08a', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #ca8a04' }}>
-                          <div>
-                            <p style={{ fontWeight: 700, fontSize: 13, color: '#713f12', letterSpacing: 0.3 }}>{c.cliente}</p>
-                            <p style={{ fontSize: 10, color: '#92400e', marginTop: 1 }}>{Object.keys(c.mesi).length} scadenze · {rateIncassareFiltrate.filter(r => r.cliente_nome === c.cliente).length} rate</p>
-                          </div>
-                          <div style={{ textAlign: 'right' }}>
-                            <p style={{ fontSize: 15, fontWeight: 800, color: '#713f12' }}>€ {euroShort(c.totale)}</p>
-                            {c.scaduto > 0 && <p style={{ fontSize: 11, color: '#dc2626', fontWeight: 600, marginTop: 1 }}>⚠️ Scaduto: € {euroShort(c.scaduto)}</p>}
-                          </div>
+                      <div key={c.cliente} style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', pageBreakInside: 'avoid' }}>
+                        {/* Header cliente — grigio scuro su schermo */}
+                        <div style={{ background: '#1f2937', color: 'white', padding: '8px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div><p style={{ fontWeight: 600, fontSize: 13, letterSpacing: 0.3 }}>{c.cliente}</p><p style={{ fontSize: 10, color: '#9ca3af', marginTop: 1 }}>{Object.keys(c.mesi).length} scadenze · {rateIncassareFiltrate.filter(r => r.cliente_nome === c.cliente).length} rate</p></div>
+                          <div style={{ textAlign: 'right' }}><p style={{ fontSize: 15, fontWeight: 700 }}>€ {euroShort(c.totale)}</p>{c.scaduto > 0 && <p style={{ fontSize: 10, color: '#fca5a5', marginTop: 1 }}>Scaduto: € {euroShort(c.scaduto)}</p>}</div>
                         </div>
                         {(Object.entries(c.mesi) as [string, { label: string, rate: RigaIncasso[], totale: number }][]).sort(([a], [b]) => a.localeCompare(b)).map(([meseK, mese]) => {
                           const meseOggi = new Date().toISOString().substring(0, 7)
                           const isPassato = meseK < meseOggi
                           const isMeseCorrente = meseK === meseOggi
                           const haSacduteNelMese = mese.rate.some(r => r.scaduta)
-                          // Rosso: mese passato OPPURE mese corrente con almeno una rata scaduta
                           const isRed = isPassato || (isMeseCorrente && haSacduteNelMese)
                           const isAmber = isMeseCorrente && !isRed
                           return (
                             <div key={meseK}>
-                              {/* ── INTESTAZIONE MESE ── */}
-                              <div style={{
-                                background: isRed ? '#fee2e2' : isAmber ? '#fffbeb' : '#f0fdf4',
-                                padding: '5px 16px', display: 'flex', justifyContent: 'space-between',
-                                borderTop: '1px solid #e2e8f0'
-                              }}>
-                                <p style={{ fontWeight: 700, fontSize: 12, color: isRed ? '#b91c1c' : isAmber ? '#b45309' : '#065f46' }}>
+                              <div style={{ background: isRed ? '#fef2f2' : isAmber ? '#fffbeb' : '#f0fdf4', padding: '6px 16px', display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e2e8f0' }}>
+                                <p style={{ fontWeight: 600, fontSize: 12, color: isRed ? '#dc2626' : isAmber ? '#d97706' : '#065f46' }}>
                                   {mese.label.charAt(0).toUpperCase() + mese.label.slice(1)}
                                   {isPassato && ' — SCADUTO'}
                                   {isMeseCorrente && isRed && ' — SCADUTO'}
                                   {isAmber && ' — Mese corrente'}
                                 </p>
-                                <p style={{ fontWeight: 700, fontSize: 13, color: isRed ? '#b91c1c' : '#374151' }}>€ {euroShort(mese.totale)}</p>
+                                <p style={{ fontWeight: 700, fontSize: 13, color: isRed ? '#dc2626' : '#374151' }}>€ {euroShort(mese.totale)}</p>
                               </div>
                               <div className="overflow-x-auto hidden md:block">
                                 <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11, minWidth: 600 }}>
@@ -490,26 +574,12 @@ export default function Scadenzario() {
                             </div>
                           )
                         })}
-                        <div style={{ background: c.scaduto > 0 ? '#fef2f2' : '#f9fafb', padding: '7px 14px', display: 'flex', justifyContent: 'space-between', borderTop: '2px solid ' + (c.scaduto > 0 ? '#fca5a5' : '#e5e7eb') }}>
-                          <span style={{ fontWeight: 600, fontSize: 11, color: c.scaduto > 0 ? '#991b1b' : '#6b7280' }}>Totale {c.cliente}</span>
-                          <div style={{ textAlign: 'right' }}>
-                            <span style={{ fontWeight: 700, fontSize: 13, color: '#111827' }}>€ {euroShort(c.totale)}</span>
-                            {c.scaduto > 0 && <span style={{ fontSize: 11, color: '#dc2626', fontWeight: 600, marginLeft: 12 }}>di cui scaduto: € {euroShort(c.scaduto)}</span>}
-                          </div>
-                        </div>
+                        <div style={{ background: '#f9fafb', padding: '6px 14px', display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e5e7eb' }}><span style={{ fontWeight: 500, fontSize: 11, color: '#6b7280' }}>Totale {c.cliente}</span><div style={{ textAlign: 'right' }}><span style={{ fontWeight: 700, fontSize: 13, color: '#111827' }}>€ {euroShort(c.totale)}</span>{c.scaduto > 0 && c.scaduto < c.totale && <span style={{ fontSize: 11, color: '#dc2626', marginLeft: 10 }}>scaduto: € {euroShort(c.scaduto)}</span>}</div></div>
                       </div>
                     ))}
-                    {/* Totale generale */}
-                    <div style={{ border: '2px solid #1e3a8a', borderRadius: 6, padding: '14px 18px', background: '#eff6ff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <p style={{ fontWeight: 700, fontSize: 13, color: '#1e3a8a', textTransform: 'uppercase', letterSpacing: 0.5 }}>Totale da incassare</p>
-                        <p style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{perCliente.length} clienti · {rateIncassareFiltrate.length} rate aperte</p>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <p style={{ fontSize: 24, fontWeight: 800, color: '#1e3a8a' }}>€ {euroShort(totaleIncassare)}</p>
-                        {scadutoIncassare > 0 && <p style={{ fontSize: 13, color: '#dc2626', fontWeight: 700, marginTop: 2 }}>⚠️ Scaduto: € {euroShort(scadutoIncassare)}</p>}
-                        {totaleNcClienti > 0 && <p style={{ fontSize: 11, color: '#7c3aed', marginTop: 2 }}>Note di credito: − € {euroShort(totaleNcClienti)}</p>}
-                      </div>
+                    <div style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '14px 18px', background: '#f9fafb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div><p style={{ fontWeight: 600, fontSize: 13, color: '#374151', textTransform: 'uppercase', letterSpacing: 0.5 }}>Totale generale</p><p style={{ fontSize: 11, color: '#9ca3af' }}>{perCliente.length} clienti · {rateIncassareFiltrate.length} rate aperte</p></div>
+                      <div style={{ textAlign: 'right' }}><p style={{ fontSize: 22, fontWeight: 800, color: '#111827' }}>€ {euroShort(totaleIncassare)}</p>{scadutoIncassare > 0 && <p style={{ fontSize: 11, color: '#dc2626', marginTop: 2 }}>Scaduto: € {euroShort(scadutoIncassare)}</p>}</div>
                     </div>
                   </div>
                 )}
