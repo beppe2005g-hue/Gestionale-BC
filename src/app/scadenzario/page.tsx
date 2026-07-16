@@ -684,8 +684,6 @@ export default function Scadenzario() {
                 })()}
               </>
             )}
-              </>
-            )}
             {subTab === 'acconto' && (
               <>
                 <div className="flex items-center justify-between mb-3"><p className="text-sm text-gray-600">Ritenute d'acconto trattenute da condomini/PA — credito fiscale da recuperare</p><button className="btn btn-primary btn-sm" onClick={() => setModalAcconto(true)}>+ Registra ritenuta</button></div>
@@ -777,10 +775,6 @@ export default function Scadenzario() {
                     </div>
                   )
                 })()}
-              </>
-            )}
-                  </div>
-                )}
               </>
             )}
           </>
