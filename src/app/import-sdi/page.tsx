@@ -124,24 +124,47 @@ export default function ImportSDI() {
   // ── Apri modal abbinamento manuale ──
   async function apriAbbina(rigaIdx: number, tipo: 'ric' | 'em') {
     setModalAbbina({ rigaIdx, tipo })
-    setCercaAbbina('')
+    // Pre-popola la ricerca con il nome del fornitore/cliente dalla riga SDI
+    const nomePre = tipo === 'ric'
+      ? (righeRic[rigaIdx]?.fornitore || '')
+      : (righeEm[rigaIdx]?.cliente || '')
+    setCercaAbbina(nomePre)
+
     if (tipo === 'ric') {
+      // Carica solo fatture fornitori con almeno una rata ancora Da Pagare
       const { data } = await supabase.from('fatture_fornitori')
-        .select('id,numero,data,fornitore_nome,imponibile')
-        .order('data', { ascending: false }).limit(200)
-      setFattureEsistenti(data || [])
+        .select('id,numero,data,fornitore_nome,imponibile,rata1_importo,rata1_stato,rata2_importo,rata2_stato,rata3_importo,rata3_stato')
+        .or('rata1_stato.eq.Da Pagare,rata2_stato.eq.Da Pagare,rata3_stato.eq.Da Pagare')
+        .order('data', { ascending: false }).limit(500)
+      // Calcola residuo per ogni fattura
+      const conResiduo = (data || []).map(f => {
+        let residuo = 0
+        if (f.rata1_stato === 'Da Pagare') residuo += (f.rata1_importo || 0)
+        if (f.rata2_stato === 'Da Pagare') residuo += (f.rata2_importo || 0)
+        if (f.rata3_stato === 'Da Pagare') residuo += (f.rata3_importo || 0)
+        return { ...f, residuo }
+      })
+      setFattureEsistenti(conResiduo)
     } else {
       const { data } = await supabase.from('fatture_clienti')
-        .select('id,numero,data,cliente_nome,imponibile')
-        .order('data', { ascending: false }).limit(200)
-      setFattureEsistenti(data || [])
+        .select('id,numero,data,cliente_nome,imponibile,rata1_importo,rata1_stato,rata2_importo,rata2_stato,rata3_importo,rata3_stato')
+        .or('rata1_stato.eq.Da Incassare,rata2_stato.eq.Da Incassare,rata3_stato.eq.Da Incassare')
+        .order('data', { ascending: false }).limit(500)
+      const conResiduo = (data || []).map(f => {
+        let residuo = 0
+        if (f.rata1_stato === 'Da Incassare') residuo += (f.rata1_importo || 0)
+        if (f.rata2_stato === 'Da Incassare') residuo += (f.rata2_importo || 0)
+        if (f.rata3_stato === 'Da Incassare') residuo += (f.rata3_importo || 0)
+        return { ...f, residuo }
+      })
+      setFattureEsistenti(conResiduo)
     }
   }
 
   function confermaAbbina(fattura: any) {
     if (!modalAbbina) return
     const { rigaIdx, tipo } = modalAbbina
-    const label = `${fattura.numero} — ${fattura.fornitore_nome || fattura.cliente_nome} — ${new Date(fattura.data).toLocaleDateString('it-IT')}`
+    const label = `${fattura.numero} — ${fattura.fornitore_nome || fattura.cliente_nome} — ${new Date(fattura.data).toLocaleDateString('it-IT')} (residuo: ${euro(fattura.residuo || fattura.imponibile)})`
     if (tipo === 'ric') {
       setRigheRic(prev => prev.map((r, i) => i === rigaIdx
         ? { ...r, stato: 'abbinata', selezionata: false, abbinata_a: fattura.id, abbinata_label: label, motivo: 'Abbinata manualmente a fattura esistente' }
@@ -732,7 +755,7 @@ export default function ImportSDI() {
           <div className="bg-white rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
             <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
               <div>
-                <h2 className="text-base font-semibold">🔗 Abbina a fattura esistente</h2>
+                <h2 className="text-base font-semibold">🔗 Abbina a fattura esistente — solo aperte</h2>
                 <p className="text-xs text-gray-500 mt-0.5">
                   Riga SDI: <strong>
                     {modalAbbina.tipo === 'ric'
@@ -743,33 +766,48 @@ export default function ImportSDI() {
               </div>
               <button onClick={() => setModalAbbina(null)} className="text-gray-400 text-xl">×</button>
             </div>
-            <div className="px-5 py-3 border-b border-gray-100 flex-shrink-0">
-              <input className="input" placeholder="🔍 Cerca per numero o nome..." value={cercaAbbina} onChange={e => setCercaAbbina(e.target.value)} autoFocus />
+            <div className="px-5 py-3 border-b border-gray-100 flex-shrink-0 space-y-1">
+              <input className="input" placeholder="🔍 Cerca per numero fattura o nome fornitore..."
+                value={cercaAbbina} onChange={e => setCercaAbbina(e.target.value)} autoFocus />
+              <p className="text-xs text-gray-400">
+                {fattureFiltrate.length} fatture aperte trovate — clicca una riga per abbinarla
+              </p>
             </div>
             <div className="overflow-y-auto flex-1 p-3">
               {fattureFiltrate.length === 0 ? (
-                <p className="text-sm text-gray-400 text-center py-8">Nessuna fattura trovata.</p>
+                <div className="text-center py-10 text-gray-400">
+                  <p className="text-2xl mb-2">🔍</p>
+                  <p className="text-sm">Nessuna fattura aperta trovata per "{cercaAbbina}"</p>
+                  <p className="text-xs mt-1">Prova a cancellare la ricerca per vedere tutte le fatture aperte</p>
+                </div>
               ) : (
-                <div className="space-y-1">
-                  {fattureFiltrate.slice(0, 50).map(f => (
-                    <div key={f.id}
-                      className="flex items-center justify-between px-3 py-2 rounded-lg border border-gray-200 hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-colors"
-                      onClick={() => confermaAbbina(f)}>
-                      <div>
-                        <p className="text-sm font-medium">{f.numero}</p>
-                        <p className="text-xs text-gray-500">{f.fornitore_nome || f.cliente_nome} — {new Date(f.data).toLocaleDateString('it-IT')}</p>
+                <div className="space-y-1.5">
+                  {fattureFiltrate.slice(0, 100).map(f => (
+                    <button key={f.id} onClick={() => confermaAbbina(f)}
+                      className="w-full text-left flex items-center justify-between px-4 py-3 rounded-lg border border-gray-200 hover:border-blue-400 hover:bg-blue-50 cursor-pointer transition-colors">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-blue-700">N° {f.numero}</span>
+                          <span className="text-xs text-gray-400">{new Date(f.data).toLocaleDateString('it-IT')}</span>
+                        </div>
+                        <p className="text-sm text-gray-700 mt-0.5 truncate">{f.fornitore_nome || f.cliente_nome}</p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold text-gray-700">{euro(f.imponibile)}</p>
-                        <p className="text-xs text-blue-600">Clicca per abbinare →</p>
+                      <div className="text-right flex-shrink-0 ml-4">
+                        <p className="text-sm font-bold text-amber-700">{euro(f.residuo || f.imponibile)}</p>
+                        <p className="text-xs text-gray-400">residuo aperto</p>
                       </div>
-                    </div>
+                    </button>
                   ))}
-                  {fattureFiltrate.length > 50 && <p className="text-xs text-gray-400 text-center pt-2">Affina la ricerca per vedere altri risultati.</p>}
+                  {fattureFiltrate.length > 100 && (
+                    <p className="text-xs text-gray-400 text-center pt-2">
+                      Mostrate 100 di {fattureFiltrate.length} — affina la ricerca
+                    </p>
+                  )}
                 </div>
               )}
             </div>
-            <div className="px-5 py-3 border-t border-gray-100 flex justify-end flex-shrink-0">
+            <div className="px-5 py-3 border-t border-gray-100 flex justify-between items-center flex-shrink-0">
+              <p className="text-xs text-gray-400">Solo fatture con rate ancora da pagare/incassare</p>
               <button className="btn" onClick={() => setModalAbbina(null)}>Annulla</button>
             </div>
           </div>
