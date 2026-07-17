@@ -321,7 +321,7 @@ export default function ImportSDI() {
         fattura_esistente = { id: dup.id, numero: dup.numero, data: dup.data, cliente_nome: dup.cliente_nome }
       }
 
-      parsed.push({ data: dataStr, numero, cliente, piva, totale, netto, rate: calcolaRate(totale, dataStr, presetEm), selezionata: stato === 'ok', stato, motivo, fattura_esistente })
+      parsed.push({ data: dataStr, numero, cliente, piva, totale, netto, rate: calcolaRate(totale, dataStr, presetEm), categoria_fattura: '', selezionata: stato === 'ok', stato, motivo, fattura_esistente })
     }
     setRigheEm(parsed); setLoadingEm(false)
   }
