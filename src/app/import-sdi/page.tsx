@@ -58,6 +58,7 @@ function calcolaRate(totale: number, data: string, preset: PresetPag): Rata[] {
 interface RigaRic {
   data: string; numero: string; fornitore: string; piva: string
   totale: number; netto: number; data_ricezione: string; rate: Rata[]
+  categoria_fattura: string
   selezionata: boolean; stato: Stato; motivo?: string
   fattura_esistente?: { id: string; numero: string; data: string; fornitore_nome: string }
   abbinata_a?: string; abbinata_label?: string
@@ -66,6 +67,7 @@ interface RigaRic {
 interface RigaEm {
   data: string; numero: string; cliente: string; piva: string
   totale: number; netto: number; rate: Rata[]
+  categoria_fattura: string
   selezionata: boolean; stato: Stato; motivo?: string
   fattura_esistente?: { id: string; numero: string; data: string; cliente_nome: string }
   abbinata_a?: string; abbinata_label?: string
@@ -264,7 +266,13 @@ export default function ImportSDI() {
         }
       }
 
-      parsed.push({ data: dataStr, numero, fornitore, piva, totale, netto, data_ricezione: dataRicezione, rate: calcolaRate(totale, dataStr, presetRic), selezionata: stato === 'ok', stato, motivo, fattura_esistente })
+      // Legge categoria default del fornitore se già in anagrafica
+        let categoriaDefault = ''
+        if (fornitoreId) {
+          const fornMatch = fornitoriRic.find((f: any) => f.id === fornitoreId)
+          categoriaDefault = fornMatch?.categoria_fattura_default || ''
+        }
+        parsed.push({ data: dataStr, numero, fornitore, piva, totale, netto, data_ricezione: dataRicezione, rate: calcolaRate(totale, dataStr, presetRic), categoria_fattura: categoriaDefault, selezionata: stato === 'ok', stato, motivo, fattura_esistente })
     }
     setRigheRic(parsed); setLoadingRic(false)
   }
@@ -351,8 +359,12 @@ export default function ImportSDI() {
           numero: r.numero, fornitore_id: fornitoreId || null, fornitore_nome: r.fornitore,
           progetto_id: progettoDefaultRic || null, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
           imponibile, iva_percentuale: ivaPerc, ...rateFields,
+          categoria_fattura: r.categoria_fattura || null,
           note: `SDI - Ricezione: ${r.data_ricezione}`
         })
+        // Salva categoria come default fornitore per il prossimo import
+        if (r.categoria_fattura && fornitoreId)
+          await supabase.from('fornitori').update({ categoria_fattura_default: r.categoria_fattura }).eq('id', fornitoreId)
         if (error) errori++; else importate++
       } catch { errori++ }
     }
@@ -520,7 +532,7 @@ export default function ImportSDI() {
                 <div className="overflow-x-auto">
                   <table className="table-base">
                     <thead>
-                      <tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Fornitore</th><th>Totale</th><th>Netto</th><th>Rate / Scadenze</th><th>Stato</th><th></th></tr>
+                      <tr><th style={{width:36}}></th><th>Data</th><th>N° Fattura</th><th>Fornitore</th><th>Totale</th><th>Netto</th><th>Rate / Scadenze</th><th>Categoria</th><th>Stato</th><th></th></tr>
                     </thead>
                     <tbody>
                       {righeRic.map((r, i) => (
@@ -552,6 +564,19 @@ export default function ImportSDI() {
                                 ))}
                               </div>
                             ) : <span className="text-xs text-gray-400">—</span>}
+                          </td>
+                          <td>
+                            {r.stato === 'ok' ? (
+                              <select className="input text-xs py-0.5 w-32"
+                                value={r.categoria_fattura || ''}
+                                onChange={e => setRigheRic(prev => prev.map((x,j) => j !== i ? x : {...x, categoria_fattura: e.target.value}))}>
+                                <option value="">—</option>
+                                <option value="Materiali">Materiali</option>
+                                <option value="Utenze">Utenze</option>
+                                <option value="Subappaltatori">Subappaltatori</option>
+                                <option value="Servizi">Servizi</option>
+                              </select>
+                            ) : <span className="text-gray-300 text-xs">—</span>}
                           </td>
                           <td className="min-w-32">
                             {r.stato === 'ok' && <span className="badge badge-green">Da importare</span>}
