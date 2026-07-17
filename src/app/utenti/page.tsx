@@ -19,6 +19,7 @@ const SEZIONI = [
   { key: 'perm_da_ricevere',             label: 'Da Ricevere',            icon: '⏳', section: 'Ciclo Passivo' },
   { key: 'perm_fatture_fornitori',       label: 'Fatt. Fornitori',        icon: '📄', section: 'Ciclo Passivo' },
   { key: 'perm_import_sdi',             label: 'Import SDI',             icon: '📥', section: 'Ciclo Passivo' },
+  { key: 'perm_rifiuti',                label: 'Rifiuti',                icon: '♻️', section: 'Ciclo Passivo' },
   { key: 'perm_prezzario',              label: 'Prezzario',              icon: '💹', section: 'Ciclo Passivo' },
   { key: 'perm_fatture_clienti',         label: 'Fatt. Clienti',          icon: '🧾', section: 'Ciclo Attivo' },
   { key: 'perm_fatture_da_emettere',    label: 'Fatture da Emettere',    icon: '🔔', section: 'Ciclo Attivo' },
@@ -38,7 +39,7 @@ const TUTTI_I_PERMESSI_FALSE: Record<string, boolean> = {
   perm_costi_cantiere: false, perm_programmi: false, perm_presenze: false,
   perm_cantieri: false, perm_cassa_edile: false,
   perm_ddt: false, perm_import_ddt: false, perm_da_ricevere: false,
-  perm_fatture_fornitori: false, perm_import_sdi: false, perm_prezzario: false,
+  perm_fatture_fornitori: false, perm_import_sdi: false, perm_rifiuti: false, perm_prezzario: false,
   perm_fatture_clienti: false, perm_fatture_da_emettere: false,
   perm_scadenze_aziendali: false, perm_scadenzario: false, perm_cashflow: false, perm_budget: false,
   perm_anagrafiche: false, perm_dipendenti: false, perm_mezzi: false,
@@ -60,7 +61,8 @@ const PRESETS: Record<string, Record<string, boolean>> = {
     perm_dashboard: true, perm_progetti: true, perm_archivia_progetti: true,
     perm_costi_cantiere: true, perm_programmi: true, perm_presenze: true,
     perm_cantieri: true, perm_cassa_edile: true,
-    perm_ddt: true, perm_import_ddt: true, perm_da_ricevere: true, perm_prezzario: true,
+    perm_ddt: true, perm_import_ddt: true, perm_da_ricevere: true,
+    perm_rifiuti: true, perm_prezzario: true,
     perm_fatture_da_emettere: true, perm_scadenze_aziendali: true, perm_scadenzario: true, perm_budget: true,
     perm_anagrafiche: true, perm_dipendenti: true, perm_mezzi: true,
   },
@@ -70,13 +72,12 @@ const PRESETS: Record<string, Record<string, boolean>> = {
     perm_costi_cantiere: true, perm_programmi: true, perm_presenze: true,
     perm_cantieri: true, perm_cassa_edile: true,
     perm_ddt: true, perm_import_ddt: true, perm_da_ricevere: true,
-    perm_fatture_fornitori: true, perm_import_sdi: true, perm_prezzario: true,
+    perm_fatture_fornitori: true, perm_import_sdi: true, perm_rifiuti: true, perm_prezzario: true,
     perm_fatture_clienti: true, perm_fatture_da_emettere: true,
     perm_scadenze_aziendali: true, perm_scadenzario: true, perm_cashflow: true, perm_budget: true,
     perm_anagrafiche: true, perm_dipendenti: true, perm_mezzi: true, perm_utenti: true,
   },
 }
-
 const TABELLA_LABEL: Record<string, string> = {
   fatture_fornitori: '📄 Fatt. Ricevute', fatture_clienti: '🧾 Fatt. Emesse',
   ddt: '📋 DDT', progetti: '🏗 Cantieri', costi_cantiere: '💰 Costi Cantiere',
@@ -90,12 +91,12 @@ const AZIONE_BADGE: Record<string, { label: string, cls: string }> = {
   eliminazione: { label: '✕ Eliminato', cls: 'bg-red-100 text-red-700' },
 }
 
-// Colore del badge per ogni sezione
 const SEZIONE_COLORE: Record<string, string> = {
   perm_presenze:                'bg-teal-50 border-teal-400 text-teal-800',
   perm_solo_cantieri_assegnati: 'bg-orange-50 border-orange-400 text-orange-800',
   perm_archivia_progetti:       'bg-amber-50 border-amber-400 text-amber-800',
   perm_programmi:               'bg-purple-50 border-purple-400 text-purple-800',
+  perm_rifiuti:                 'bg-green-50 border-green-400 text-green-800',
 }
 const COLORE_DEFAULT_ACTIVE = 'bg-green-50 border-green-400 text-green-800'
 const COLORE_INACTIVE       = 'bg-gray-50 border-gray-200 text-gray-400'
@@ -207,7 +208,6 @@ export default function Utenti() {
           </button>
         </div>
 
-        {/* ══════ TAB PERMESSI ══════ */}
         {tab === 'permessi' && (
           <>
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm text-blue-800">
@@ -227,10 +227,8 @@ export default function Utenti() {
                 {utenti.map(u => {
                   const isSelf = currentUserEmail === ADMIN_EMAIL && u.ruolo === 'admin'
                   const isSaving = saving[u.id]
-
                   return (
                     <div key={u.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${isSelf ? 'border-blue-300' : 'border-gray-200'}`}>
-                      {/* Intestazione utente */}
                       <div className={`px-5 py-4 flex items-center justify-between flex-wrap gap-3 ${isSelf ? 'bg-blue-50' : 'bg-gray-50'}`}>
                         <div className="flex items-center gap-3">
                           <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white ${isSelf ? 'bg-blue-600' : 'bg-gray-500'}`}>
@@ -243,25 +241,18 @@ export default function Utenti() {
                           {isSelf && <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full">HOST / ADMIN</span>}
                           {isSaving && <span className="text-xs text-gray-400 animate-pulse ml-2">Salvataggio...</span>}
                         </div>
-
-                        {/* Preset — solo admin su altri utenti */}
                         {isAdmin && !isSelf && (
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-xs text-gray-400">Preset:</span>
                             {(['nessuno', 'geometra', 'capo_geometra', 'admin'] as const).map(p => (
                               <button key={p} onClick={() => applicaPreset(u.id, p)}
                                 className="text-xs px-2 py-1 rounded border border-gray-300 bg-white hover:bg-gray-100 text-gray-700 transition">
-                                {p === 'nessuno' ? '🚫 Nessuno'
-                                  : p === 'geometra' ? '📐 Geometra'
-                                  : p === 'capo_geometra' ? '🏗️ Capo Geom.'
-                                  : '🔑 Admin'}
+                                {p === 'nessuno' ? '🚫 Nessuno' : p === 'geometra' ? '📐 Geometra' : p === 'capo_geometra' ? '🏗️ Capo Geom.' : '🔑 Admin'}
                               </button>
                             ))}
                           </div>
                         )}
                       </div>
-
-                      {/* Griglia permessi */}
                       <div className="p-5">
                         {isSelf ? (
                           <p className="text-sm text-blue-700 font-medium">✓ Accesso completo a tutto — account host</p>
@@ -275,17 +266,13 @@ export default function Utenti() {
                                   <div className="flex flex-wrap gap-1.5">
                                     {voci.map(s => {
                                       const active = !!u[s.key]
-                                      const coloreCls = active
-                                        ? (SEZIONE_COLORE[s.key] || COLORE_DEFAULT_ACTIVE)
-                                        : COLORE_INACTIVE
+                                      const coloreCls = active ? (SEZIONE_COLORE[s.key] || COLORE_DEFAULT_ACTIVE) : COLORE_INACTIVE
                                       return (
                                         <button key={s.key}
                                           onClick={() => togglePermesso(u.id, s.key, active)}
                                           disabled={!isAdmin}
                                           title={active ? 'Clicca per revocare' : 'Clicca per concedere'}
-                                          className={`text-xs px-3 py-1.5 rounded-lg border transition-all duration-150 font-medium
-                                            ${coloreCls}
-                                            ${isAdmin ? 'cursor-pointer hover:shadow-sm hover:opacity-90' : 'cursor-default'}`}>
+                                          className={`text-xs px-3 py-1.5 rounded-lg border transition-all duration-150 font-medium ${coloreCls} ${isAdmin ? 'cursor-pointer hover:shadow-sm hover:opacity-90' : 'cursor-default'}`}>
                                           <span className="mr-1">{active ? '✓' : '×'}</span>
                                           {s.icon && <span className="mr-1">{s.icon}</span>}
                                           {s.label}
@@ -307,7 +294,6 @@ export default function Utenti() {
           </>
         )}
 
-        {/* ══════ TAB LOG ══════ */}
         {tab === 'log' && (
           <>
             <div className="card mb-4">
@@ -346,7 +332,6 @@ export default function Utenti() {
                 <p className="text-xs text-gray-500 mt-2">{logsFiltrati.length} eventi su {logs.length}</p>
               )}
             </div>
-
             {loadingLog ? (
               <div className="text-center py-12 text-gray-400">Caricamento log...</div>
             ) : logsFiltrati.length === 0 ? (
