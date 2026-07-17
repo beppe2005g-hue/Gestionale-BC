@@ -60,7 +60,7 @@ export default function FattureFornitori() {
     data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '',
     imponibile: '', iva_percentuale: '22', tipo: 'Fattura', fattura_collegata_id: '',
     r1i: '', r1s: '', r2i: '', r2s: '', r3i: '', r3s: '',
-    modalita_pagamento: 'Bonifico', note: ''
+    modalita_pagamento: 'Bonifico', note: '', categoria_fattura: ''
   })
 
   function showToast(msg: string, type: 'ok' | 'err') {
@@ -161,6 +161,27 @@ export default function FattureFornitori() {
   }
 
   const [modalAutorizza, setModalAutorizza] = useState<any>(null)
+  const [modalDettaglioFattura, setModalDettaglioFattura] = useState<any>(null)
+  const [ddtAbbinati, setDdtAbbinati] = useState<any[]>([])
+  const [loadingDdt, setLoadingDdt] = useState(false)
+
+  async function apriDettaglioFattura(f: any) {
+    setModalDettaglioFattura(f)
+    setLoadingDdt(true)
+    const { data: ddt } = await supabase.from('ddt')
+      .select('id,numero,data,progetto_nome,importo,stato,descrizione')
+      .eq('fattura_abbinata', f.numero)
+      .order('data', { ascending: true })
+    setDdtAbbinati(ddt || [])
+    setLoadingDdt(false)
+  }
+
+  async function generaAutoriz(f: any) {
+    // Salva la data di generazione nel DB
+    await supabase.from('fatture_fornitori').update({ data_autorizzazione: new Date().toISOString().split('T')[0] }).eq('id', f.id)
+    setModalAutorizza({ ...f, data_autorizzazione: new Date().toISOString().split('T')[0] })
+    load()
+  }
 
   const isNC = (f: any) => f.tipo === 'Nota di credito'
   const haFiltri = ricerca || filtroStato !== 'tutti' || filtroTipo !== 'tutti' || dataDA || dataA || importoDA || importoA
@@ -263,6 +284,7 @@ export default function FattureFornitori() {
       iva_percentuale: parseFloat(modalModifica.iva_percentuale) || 22,
       modalita_pagamento: modalModifica.modalita_pagamento || 'Bonifico',
       note: modalModifica.note || '',
+      categoria_fattura: modalModifica.categoria_fattura || null,
       rata1_importo: r1i,
       rata1_scadenza: modalModifica.rata1_scadenza || null,
       rata1_stato,
@@ -317,13 +339,18 @@ export default function FattureFornitori() {
       rata3_importo: isNotaCredito ? 0 : (parseFloat(form.r3i) || 0),
       rata3_scadenza: isNotaCredito ? null : (form.r3s || null),
       rata3_stato: isNotaCredito ? null : (form.r3i ? 'Da Pagare' : null),
-      modalita_pagamento: form.modalita_pagamento, note: form.note
+      modalita_pagamento: form.modalita_pagamento, note: form.note,
+      categoria_fattura: form.categoria_fattura || null
     }).select('id').single()
 
     if (error) {
       showToast(`Errore inserimento: ${error.message}`, 'err')
       setLoading(false)
       return
+    }
+    // Aggiorna categoria_fattura_default del fornitore per il prossimo auto-suggest
+    if (form.categoria_fattura && form.fornitore_id) {
+      await supabase.from('fornitori').update({ categoria_fattura_default: form.categoria_fattura }).eq('id', form.fornitore_id)
     }
     await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `${form.tipo} ${form.numero} — ${for_?.ragione_sociale} · € ${imp}`)
     showToast('Fattura inserita', 'ok')
@@ -418,7 +445,7 @@ export default function FattureFornitori() {
                 const nc = isNC(f)
                 const collegata = nc && f.fattura_collegata_id ? fatture.find((x: any) => x.id === f.fattura_collegata_id) : null
                 return (
-                  <tr key={f.id} className={nc ? 'bg-purple-50' : stato === 'pagata' ? 'opacity-60' : ''}>
+                  <tr key={f.id} className={`cursor-pointer hover:bg-gray-50 ${nc ? 'bg-purple-50' : stato === 'pagata' ? 'opacity-60' : ''}`} onClick={() => apriDettaglioFattura(f)}>
                     <td className="text-xs">{new Date(f.data).toLocaleDateString('it-IT')}</td>
                     <td className="font-medium text-sm">
                       {f.numero}
@@ -433,6 +460,7 @@ export default function FattureFornitori() {
                       {nc ? '- ' : ''}{euro(f.imponibile)}
                       {!nc && (f.iva_percentuale || 0) > 0 && <span className="block text-xs text-gray-400 font-normal">IVA {f.iva_percentuale}%</span>}
                       {!nc && (f.iva_percentuale || 0) === 0 && <span className="block text-xs text-gray-400 font-normal">RC</span>}
+                      {f.categoria_fattura && <span className="block mt-0.5 text-xs font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 inline-block">{f.categoria_fattura}</span>}
                     </td>
                     <td className="font-semibold text-sm">
                       {nc ? <span className="text-purple-600 text-xs">—</span> : (
@@ -466,7 +494,10 @@ export default function FattureFornitori() {
                     ))}
                     <td>
                       <div className="flex gap-1">
-                        {!nc && <button className="btn btn-sm text-amber-600 border-amber-200 hover:bg-amber-50" title="Autorizzazione pagamento" onClick={() => setModalAutorizza(f)}>📄</button>}
+                        {!nc && <button className="btn btn-sm text-amber-600 border-amber-200 hover:bg-amber-50" title="Autorizzazione pagamento"
+                          onClick={e => { e.stopPropagation(); generaAutoriz(f) }}>
+                          📄{f.data_autorizzazione && <span className="ml-0.5 text-xs text-amber-500" title={`Già generata il ${new Date(f.data_autorizzazione).toLocaleDateString('it-IT')}`}>✓</span>}
+                        </button>}
                         <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => setModalModifica({...f})}>✏️</button>
                         <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(f.id, f.numero)}>✕</button>
                       </div>
@@ -478,6 +509,96 @@ export default function FattureFornitori() {
           </table>
         </div>
       </main>
+
+      {/* MODAL DETTAGLIO FATTURA — DDT abbinati */}
+      {modalDettaglioFattura && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h2 className="font-semibold text-base">{modalDettaglioFattura.numero}
+                  {modalDettaglioFattura.categoria_fattura && (
+                    <span className="ml-2 text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold">{modalDettaglioFattura.categoria_fattura}</span>
+                  )}
+                </h2>
+                <p className="text-xs text-gray-500">{modalDettaglioFattura.fornitore_nome} · {modalDettaglioFattura.data ? new Date(modalDettaglioFattura.data).toLocaleDateString('it-IT') : ''} · {euro(modalDettaglioFattura.imponibile)}</p>
+              </div>
+              <div className="flex gap-2 items-center">
+                {!isNC(modalDettaglioFattura) && (
+                  <button className="btn btn-sm text-amber-600 border-amber-200 hover:bg-amber-50" onClick={() => generaAutoriz(modalDettaglioFattura)}>
+                    📄 Autorizzazione
+                    {modalDettaglioFattura.data_autorizzazione && <span className="ml-1 text-xs text-gray-400">(già il {new Date(modalDettaglioFattura.data_autorizzazione).toLocaleDateString('it-IT')})</span>}
+                  </button>
+                )}
+                <button className="btn btn-sm btn-primary" onClick={() => { setModalDettaglioFattura(null); setModalModifica({...modalDettaglioFattura}) }}>✏️ Modifica</button>
+                <button onClick={() => setModalDettaglioFattura(null)} className="text-gray-400 text-xl ml-1">×</button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5">
+              {/* Info fattura */}
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-5 text-sm">
+                <div><span className="text-xs text-gray-400 block">Cantiere</span>{modalDettaglioFattura.progetto_nome || '—'}</div>
+                <div><span className="text-xs text-gray-400 block">Modalità pag.</span>{modalDettaglioFattura.modalita_pagamento || '—'}</div>
+                <div><span className="text-xs text-gray-400 block">IVA</span>{modalDettaglioFattura.iva_percentuale}%</div>
+                {modalDettaglioFattura.descrizione && <div className="col-span-3"><span className="text-xs text-gray-400 block">Descrizione</span>{modalDettaglioFattura.descrizione}</div>}
+                {modalDettaglioFattura.note && <div className="col-span-3"><span className="text-xs text-gray-400 block">Note</span><span className="italic text-gray-600">{modalDettaglioFattura.note}</span></div>}
+              </div>
+
+              {/* Rate */}
+              {!isNC(modalDettaglioFattura) && (
+                <div className="mb-5">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate di pagamento</p>
+                  <div className="space-y-1.5">
+                    {[1,2,3].filter(n => (modalDettaglioFattura[`rata${n}_importo`]||0) > 0).map(n => (
+                      <div key={n} className={`flex items-center justify-between rounded-lg px-3 py-2 border ${modalDettaglioFattura[`rata${n}_stato`]==='Pagata' ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
+                        <span className="text-sm">Rata {n}</span>
+                        <span className="text-xs text-gray-500">{modalDettaglioFattura[`rata${n}_scadenza`] ? new Date(modalDettaglioFattura[`rata${n}_scadenza`]).toLocaleDateString('it-IT') : '—'}</span>
+                        <span className="font-semibold text-sm">{euro(modalDettaglioFattura[`rata${n}_importo`])}</span>
+                        <span className={`text-xs font-semibold ${modalDettaglioFattura[`rata${n}_stato`]==='Pagata' ? 'text-green-700' : 'text-amber-700'}`}>{modalDettaglioFattura[`rata${n}_stato`] || 'Da Pagare'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* DDT Abbinati */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                  DDT abbinati {loadingDdt ? '...' : `(${ddtAbbinati.length})`}
+                </p>
+                {loadingDdt ? (
+                  <p className="text-xs text-gray-400 py-3 text-center">Caricamento DDT...</p>
+                ) : ddtAbbinati.length === 0 ? (
+                  <p className="text-xs text-gray-400 py-3 text-center border border-dashed border-gray-200 rounded-lg">Nessun DDT abbinato a questa fattura</p>
+                ) : (
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="table-base">
+                      <thead><tr>
+                        <th>Data</th><th>N° DDT</th><th>Cantiere</th><th>Descrizione</th><th>Importo</th>
+                      </tr></thead>
+                      <tbody>
+                        {ddtAbbinati.map(d => (
+                          <tr key={d.id}>
+                            <td className="text-xs">{d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—'}</td>
+                            <td className="font-medium text-xs text-blue-700">{d.numero}</td>
+                            <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
+                            <td className="text-xs text-gray-500">{d.descrizione || '—'}</td>
+                            <td className="font-medium text-sm">{euro(d.importo)}</td>
+                          </tr>
+                        ))}
+                        <tr className="bg-gray-50">
+                          <td colSpan={4} className="text-xs font-semibold text-right text-gray-600">Totale DDT</td>
+                          <td className="font-bold text-sm">{euro(ddtAbbinati.reduce((s,d)=>s+(d.importo||0),0))}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL IMPORT */}
       {modalImport && (
@@ -545,7 +666,12 @@ export default function FattureFornitori() {
               <div><label className="label">Fornitore *</label>
                 <SearchableSelect
                   value={form.fornitore_id}
-                  onChange={v => setForm({...form, fornitore_id: v, fattura_collegata_id: ''})}
+                  onChange={v => {
+                    const forn = fornitori.find(f => f.id === v)
+                    setForm({...form, fornitore_id: v, fattura_collegata_id: '',
+                      categoria_fattura: forn?.categoria_fattura_default || form.categoria_fattura || ''
+                    })
+                  }}
                   options={fornitori.map(f => ({ value: f.id, label: f.ragione_sociale, sublabel: f.cf_piva }))}
                   placeholder="— seleziona fornitore —"
                 /></div>
@@ -571,6 +697,14 @@ export default function FattureFornitori() {
               <div><label className="label">IVA %</label>
                 <select className="input" value={form.iva_percentuale} onChange={e => setForm({...form, iva_percentuale: e.target.value})}>
                   <option value="22">22%</option><option value="10">10%</option><option value="0">0% (RC)</option>
+                </select></div>
+              <div><label className="label">Categoria fattura</label>
+                <select className="input" value={form.categoria_fattura} onChange={e => setForm({...form, categoria_fattura: e.target.value})}>
+                  <option value="">-- seleziona --</option>
+                  <option value="Materiali">Materiali</option>
+                  <option value="Utenze">Utenze</option>
+                  <option value="Subappaltatori">Subappaltatori</option>
+                  <option value="Servizi">Servizi</option>
                 </select></div>
               <div className="col-span-2"><label className="label">Descrizione</label><input className="input" placeholder="es. Fornitura materiali edili..." value={form.descrizione} onChange={e => setForm({...form, descrizione: e.target.value})} /></div>
               {form.imponibile && (
@@ -643,6 +777,14 @@ export default function FattureFornitori() {
               <div><label className="label">IVA %</label>
                 <select className="input" value={modalModifica.iva_percentuale || '22'} onChange={e => setModalModifica({...modalModifica, iva_percentuale: e.target.value})}>
                   <option value="22">22%</option><option value="10">10%</option><option value="0">0% (RC)</option>
+                </select></div>
+              <div><label className="label">Categoria fattura</label>
+                <select className="input" value={modalModifica.categoria_fattura || ''} onChange={e => setModalModifica({...modalModifica, categoria_fattura: e.target.value})}>
+                  <option value="">-- seleziona --</option>
+                  <option value="Materiali">Materiali</option>
+                  <option value="Utenze">Utenze</option>
+                  <option value="Subappaltatori">Subappaltatori</option>
+                  <option value="Servizi">Servizi</option>
                 </select></div>
               {/* FIX: campo descrizione aggiunto al form modifica */}
               <div className="col-span-2"><label className="label">Descrizione</label><input className="input" placeholder="es. Fornitura materiali edili..." value={modalModifica.descrizione || ''} onChange={e => setModalModifica({...modalModifica, descrizione: e.target.value})} /></div>
