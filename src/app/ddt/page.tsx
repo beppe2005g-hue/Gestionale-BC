@@ -1,975 +1,544 @@
 'use client'
-import { useEffect, useState, useMemo, useRef } from 'react'
+import React, { useEffect, useState, useMemo, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import { logActivity } from '@/lib/logActivity'
-import * as XLSX from 'xlsx'
-import SearchableSelect from '@/components/SearchableSelect'
 
 const euro = (n: number) => '€ ' + (n || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const MACRO_CATEGORIE = ['Cementi','Laterizi','Ferro e Acciaio','Legno','Isolanti','Impermeabilizzanti','Inerti e Calcestruzzo','Impianti','Attrezzatura','Noli','Trasporti','Altro']
+type Societa = 'BC General Service' | 'Filosofia'
 
-function excelDateToISO(v: any): string {
-  if (!v) return ''
-  if (typeof v === 'string' && v.match(/^\d{4}-\d{2}-\d{2}$/)) return v
-  if (typeof v === 'string' && v.includes('/')) {
-    const [d, m, y] = v.split('/')
-    return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`
-  }
-  if (typeof v === 'number') {
-    const ms = (v - 25569) * 86400 * 1000
-    return new Date(ms).toISOString().split('T')[0]
-  }
-  return String(v)
+interface Voce {
+  id?: string
+  descrizione: string; macro_categoria: string; categoria: string
+  unita_misura: string; quantita: number; prezzo_unitario: number; importo_totale: number
 }
 
-function statoFattura(f: any): 'pagata' | 'parziale' | 'da_pagare' {
-  const rate = [
-    f.rata1_stato,
-    f.rata2_importo > 0 ? f.rata2_stato : null,
-    f.rata3_importo > 0 ? f.rata3_stato : null,
-  ].filter(Boolean)
-  if (rate.every(r => r === 'Pagata')) return 'pagata'
-  if (rate.some(r => r === 'Pagata')) return 'parziale'
-  return 'da_pagare'
-}
+// ── VOCE ROW ── definita FUORI dal componente per evitare re-mount ad ogni render
+const VoceRow = React.memo(({ voce, idx, onUpdate, onDelete }: {
+  voce: Voce; idx: number
+  onUpdate: (idx: number, campo: string, valore: any) => void
+  onDelete: (idx: number) => void
+}) => {
+  const [local, setLocal] = React.useState({ ...voce })
+  React.useEffect(() => { setLocal({ ...voce }) }, [voce.id])
 
-export default function FattureFornitori() {
-  const [fatture, setFatture] = useState<any[]>([])
+  function set(campo: string, valore: any) {
+    setLocal(prev => {
+      const n = { ...prev, [campo]: valore }
+      if (campo === 'quantita' || campo === 'prezzo_unitario') {
+        const q = campo === 'quantita' ? parseFloat(valore) || 0 : parseFloat(String(prev.quantita)) || 0
+        const pu = campo === 'prezzo_unitario' ? parseFloat(valore) || 0 : parseFloat(String(prev.prezzo_unitario)) || 0
+        n.importo_totale = Math.round(q * pu * 100) / 100
+      }
+      return n
+    })
+  }
+
+  function flush(campo: string) {
+    setLocal(prev => {
+      onUpdate(idx, campo, prev[campo as keyof typeof prev])
+      if (campo === 'quantita' || campo === 'prezzo_unitario') {
+        onUpdate(idx, 'importo_totale', prev.importo_totale)
+      }
+      return prev
+    })
+  }
+
+  return (
+    <tr>
+      <td><input className="input text-xs py-1" value={local.descrizione || ''} onChange={e => set('descrizione', e.target.value)} onBlur={() => flush('descrizione')} /></td>
+      <td><select className="input text-xs py-1" value={local.macro_categoria || 'Altro'} onChange={e => { set('macro_categoria', e.target.value); onUpdate(idx, 'macro_categoria', e.target.value) }}>
+        {MACRO_CATEGORIE.map(m => <option key={m}>{m}</option>)}
+      </select></td>
+      <td><input className="input text-xs py-1 w-14" value={local.unita_misura || ''} onChange={e => set('unita_misura', e.target.value)} onBlur={() => flush('unita_misura')} /></td>
+      <td><input className="input text-xs py-1 w-20" type="number" step="0.001" value={local.quantita || ''} onChange={e => set('quantita', e.target.value)} onBlur={() => flush('quantita')} /></td>
+      <td><input className="input text-xs py-1 w-24" type="number" step="0.0001" value={local.prezzo_unitario || ''} onChange={e => set('prezzo_unitario', e.target.value)} onBlur={() => flush('prezzo_unitario')} /></td>
+      <td className="font-medium text-sm text-blue-700">{euro(local.importo_totale || 0)}</td>
+      <td><button type="button" className="text-gray-300 hover:text-red-500 text-lg px-1 font-bold" onClick={() => onDelete(idx)}>×</button></td>
+    </tr>
+  )
+})
+VoceRow.displayName = 'VoceRow'
+
+// ── FORM VOCI ── definita FUORI dal componente per evitare re-mount
+const FormVoci = React.memo(({ voci, onAdd, onUpdate, onDelete }: {
+  voci: Voce[]
+  onAdd: () => void
+  onUpdate: (idx: number, campo: string, valore: any) => void
+  onDelete: (idx: number) => void
+}) => {
+  const totale = voci.reduce((s, v) => s + (v.importo_totale || 0), 0)
+  return (
+    <div className="mt-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-medium text-gray-600">📦 Voci ({voci.length})</h3>
+        <button type="button" className="btn btn-sm btn-primary" onClick={onAdd}>+ Voce</button>
+      </div>
+      {voci.length === 0 ? (
+        <p className="text-xs text-gray-400 py-3 text-center border border-dashed rounded-lg">Nessuna voce. Clicca "+ Voce" per aggiungerne.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="table-base">
+            <thead><tr>
+              <th>Descrizione</th><th>Categoria</th><th>U.M.</th><th>Qtà</th><th>€/unit</th><th>Totale</th><th></th>
+            </tr></thead>
+            <tbody>
+              {voci.map((v, idx) => (
+                <VoceRow key={v.id || `new-${idx}`} voce={v} idx={idx} onUpdate={onUpdate} onDelete={onDelete} />
+              ))}
+            </tbody>
+          </table>
+          <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
+            <span className="font-semibold text-sm">Totale: <span className="text-blue-700">{euro(totale)}</span></span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+})
+FormVoci.displayName = 'FormVoci'
+
+// ── SOCIETA TOGGLE ── definita FUORI dal componente
+const SocietaToggle = React.memo(({ value, onChange }: { value: Societa; onChange: (s: Societa) => void }) => (
+  <div className="col-span-2 md:col-span-4">
+    <label className="label">Società *</label>
+    <div className="flex gap-2">
+      {(['BC General Service', 'Filosofia'] as Societa[]).map(s => (
+        <button key={s} type="button" onClick={() => onChange(s)}
+          className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-all ${
+            value === s
+              ? s === 'Filosofia' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-blue-600 border-blue-600 text-white'
+              : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'
+          }`}>
+          {s === 'BC General Service' ? '🏗 BC General Service' : '🏢 Filosofia'}
+        </button>
+      ))}
+    </div>
+  </div>
+))
+SocietaToggle.displayName = 'SocietaToggle'
+
+export default function DDTPage() {
+  const [ddts, setDdts] = useState<any[]>([])
   const [fornitori, setFornitori] = useState<any[]>([])
   const [progetti, setProgetti] = useState<any[]>([])
   const [modal, setModal] = useState(false)
-  const [modalModifica, setModalModifica] = useState<any>(null)
+  const [modalDettaglio, setModalDettaglio] = useState<any>(null)
+  const [vociDettaglio, setVociDettaglio] = useState<Voce[]>([])
+  const [modalModifica, setModalModifica] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
-
-  const [modalImport, setModalImport] = useState(false)
-  const [importando, setImportando] = useState(false)
-  const [esitoImport, setEsitoImport] = useState<{ inserite: number; scartate: number; errori: string[] } | null>(null)
-  const inputImportRef = useRef<HTMLInputElement>(null)
-
-  const [ricerca, setRicerca] = useState('')
+  const [societaAttiva, setSocietaAttiva] = useState<Societa>('BC General Service')
+  const [tabFatturazione, setTabFatturazione] = useState<'da_fatturare'|'fatturati'>('da_fatturare')
+  const [cercaNumero, setCercaNumero] = useState('')
+  const [cercaFornitore, setCercaFornitore] = useState('')
   const [filtroStato, setFiltroStato] = useState('tutti')
-  const [ordinamento, setOrdinamento] = useState('data_desc')
-  const [filtroTipo, setFiltroTipo] = useState('tutti')
   const [dataDA, setDataDA] = useState('')
   const [dataA, setDataA] = useState('')
-  const [importoDA, setImportoDA] = useState('')
-  const [importoA, setImportoA] = useState('')
-
   const [form, setForm] = useState({
-    data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '',
-    imponibile: '', iva_percentuale: '22', tipo: 'Fattura', fattura_collegata_id: '',
-    r1i: '', r1s: '', r2i: '', r2s: '', r3i: '', r3s: '',
-    modalita_pagamento: 'Bonifico', note: '', categoria_fattura: ''
+    data: '', numero: '', fornitore_id: '', progetto_id: '',
+    descrizione: '', mese_fattura_previsto: '', note: '',
+    societa: 'BC General Service' as Societa
   })
+  const [voci, setVoci] = useState<Voce[]>([])
 
-  function showToast(msg: string, type: 'ok' | 'err') {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), 4000)
-  }
-
-  useEffect(() => {
-    load()
-    window.addEventListener('gestionale:refresh', load)
-    return () => window.removeEventListener('gestionale:refresh', load)
-  }, [])
+  useEffect(() => { load() }, [])
 
   async function load() {
-    const [{ data: f }, { data: fo }, { data: p }] = await Promise.all([
-      supabase.from('fatture_fornitori').select('*').order('data', { ascending: false }),
-      supabase.from('fornitori').select('id,ragione_sociale,cf_piva').eq('attivo', true),
-      supabase.from('progetti').select('id,codice,nome'),
+    const [{ data: d }, { data: f }, { data: p }] = await Promise.all([
+      supabase.from('ddt').select('*').order('data', { ascending: false }),
+      supabase.from('fornitori').select('id,ragione_sociale').eq('attivo', true).order('ragione_sociale'),
+      supabase.from('progetti').select('id,codice,nome,societa').eq('stato', 'In Corso').order('nome'),
     ])
-    setFatture(f || [])
-    setFornitori(fo || [])
+    setDdts(d || [])
+    setFornitori(f || [])
     setProgetti(p || [])
   }
 
-  async function importaExcel(file: File) {
-    setImportando(true)
-    setEsitoImport(null)
-    try {
-      const buffer = await file.arrayBuffer()
-      const wb = XLSX.read(buffer, { type: 'array' })
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+  // useCallback per evitare che le funzioni cambino reference ad ogni render
+  const aggiungiVoce = useCallback(() => {
+    setVoci(prev => [...prev, { descrizione: '', macro_categoria: 'Altro', categoria: '', unita_misura: '', quantita: 0, prezzo_unitario: 0, importo_totale: 0 }])
+  }, [])
 
-      let headerRow = -1
-      for (let i = 0; i < Math.min(rows.length, 10); i++) {
-        if (String(rows[i][0]).toLowerCase().trim() === 'data') { headerRow = i; break }
-      }
-      const dataStart = headerRow >= 0 ? headerRow + 1 : 5
-
-      let inserite = 0, scartate = 0
-      const errori: string[] = []
-
-      const { data: fornitoriDB } = await supabase.from('fornitori').select('id,ragione_sociale,cf_piva').eq('attivo', true)
-      const fornitoriLista: any[] = fornitoriDB || []
-
-      for (let i = dataStart; i < rows.length; i++) {
-        const row = rows[i]
-        if (!row[0] && !row[1] && !row[3]) continue
-        const data = excelDateToISO(row[0])
-        const numero = String(row[1] || '').trim()
-        const tipoExcel = String(row[2] || '').toLowerCase().trim()
-        const fornitoreNome = String(row[3] || '').trim()
-        const piva = String(row[8] || '').trim()
-        const nettoAPagare = parseFloat(String(row[11]).replace(',', '.')) || 0
-        const isNotaCredito = tipoExcel.includes('nota') || tipoExcel.includes('credito')
-        if (!numero || !fornitoreNome) continue
-
-        const { data: dup } = await supabase.from('fatture_fornitori').select('id').eq('numero', numero).ilike('fornitore_nome', fornitoreNome)
-        if (dup && dup.length > 0) { scartate++; continue }
-
-        let fornitoreId: string | null = null
-        let fornitoreNomeDB = fornitoreNome
-        if (piva) {
-          const m = fornitoriLista.find(f => f.cf_piva && f.cf_piva.replace(/\s/g,'') === piva.replace(/\s/g,''))
-          if (m) { fornitoreId = m.id; fornitoreNomeDB = m.ragione_sociale }
-        }
-        if (!fornitoreId) {
-          const m = fornitoriLista.find(f => f.ragione_sociale.toLowerCase().trim() === fornitoreNome.toLowerCase().trim())
-          if (m) { fornitoreId = m.id; fornitoreNomeDB = m.ragione_sociale }
-        }
-        if (!fornitoreId) {
-          const { data: nf } = await supabase.from('fornitori').insert({ ragione_sociale: fornitoreNome, cf_piva: piva || null, categoria: 'Materiali', attivo: true }).select('id,ragione_sociale,cf_piva').single()
-          if (nf) { fornitoreId = nf.id; fornitoreNomeDB = nf.ragione_sociale; fornitoriLista.push(nf) }
-        }
-
-        const { error } = await supabase.from('fatture_fornitori').insert({
-          data: data || new Date().toISOString().split('T')[0],
-          numero, fornitore_id: fornitoreId, fornitore_nome: fornitoreNomeDB,
-          progetto_id: null, progetto_nome: '', descrizione: '',
-          imponibile: nettoAPagare, iva_percentuale: 22,
-          tipo: isNotaCredito ? 'Nota di credito' : 'Fattura',
-          fattura_collegata_id: null,
-          rata1_importo: isNotaCredito ? 0 : nettoAPagare,
-          rata1_scadenza: null, rata1_stato: isNotaCredito ? null : 'Da Pagare',
-          rata2_importo: 0, rata2_scadenza: null, rata2_stato: null,
-          rata3_importo: 0, rata3_scadenza: null, rata3_stato: null,
-          modalita_pagamento: 'Bonifico', note: ''
-        })
-        if (error) errori.push(`${numero} (${fornitoreNome}): ${error.message}`)
-        else inserite++
-      }
-      setEsitoImport({ inserite, scartate, errori })
-      if (inserite > 0) await load()
-    } catch (e: any) {
-      setEsitoImport({ inserite: 0, scartate: 0, errori: [`Errore lettura file: ${e.message}`] })
-    }
-    setImportando(false)
-  }
-
-  const [modalAutorizza, setModalAutorizza] = useState<any>(null)
-  const [modalDettaglioFattura, setModalDettaglioFattura] = useState<any>(null)
-  const [ddtAbbinati, setDdtAbbinati] = useState<any[]>([])
-  const [loadingDdt, setLoadingDdt] = useState(false)
-
-  async function apriDettaglioFattura(f: any) {
-    setModalDettaglioFattura(f)
-    setLoadingDdt(true)
-    const { data: ddt } = await supabase.from('ddt')
-      .select('id,numero,data,progetto_nome,importo,stato,descrizione')
-      .eq('fattura_abbinata', f.numero)
-      .order('data', { ascending: true })
-    setDdtAbbinati(ddt || [])
-    setLoadingDdt(false)
-  }
-
-  async function generaAutoriz(f: any) {
-    // Salva la data di generazione nel DB
-    await supabase.from('fatture_fornitori').update({ data_autorizzazione: new Date().toISOString().split('T')[0] }).eq('id', f.id)
-    setModalAutorizza({ ...f, data_autorizzazione: new Date().toISOString().split('T')[0] })
-    load()
-  }
-
-  const isNC = (f: any) => f.tipo === 'Nota di credito'
-  const haFiltri = ricerca || filtroStato !== 'tutti' || filtroTipo !== 'tutti' || dataDA || dataA || importoDA || importoA
-
-  function resetFiltri() {
-    setRicerca(''); setFiltroStato('tutti'); setFiltroTipo('tutti')
-    setDataDA(''); setDataA(''); setImportoDA(''); setImportoA('')
-  }
-
-  const fattureFiltrate = useMemo(() => {
-    let result = [...fatture]
-    if (ricerca.trim()) {
-      const q = ricerca.toLowerCase()
-      result = result.filter(f =>
-        f.numero?.toLowerCase().includes(q) ||
-        f.fornitore_nome?.toLowerCase().includes(q) ||
-        f.progetto_nome?.toLowerCase().includes(q)
-      )
-    }
-    if (filtroTipo === 'fattura') result = result.filter(f => !isNC(f))
-    if (filtroTipo === 'nota_credito') result = result.filter(f => isNC(f))
-    if (filtroStato !== 'tutti') result = result.filter(f => !isNC(f) && statoFattura(f) === filtroStato)
-    if (dataDA) result = result.filter(f => f.data >= dataDA)
-    if (dataA) result = result.filter(f => f.data <= dataA)
-    if (importoDA) result = result.filter(f => (f.imponibile || 0) >= parseFloat(importoDA))
-    if (importoA) result = result.filter(f => (f.imponibile || 0) <= parseFloat(importoA))
-    result.sort((a, b) => {
-      if (ordinamento === 'data_desc') return new Date(b.data).getTime() - new Date(a.data).getTime()
-      if (ordinamento === 'data_asc') return new Date(a.data).getTime() - new Date(b.data).getTime()
-      if (ordinamento === 'fornitore') return (a.fornitore_nome || '').localeCompare(b.fornitore_nome || '')
-      if (ordinamento === 'importo') return (b.imponibile || 0) - (a.imponibile || 0)
-      return 0
+  const aggiornaVoce = useCallback((idx: number, campo: string, valore: any) => {
+    setVoci(prev => {
+      const n = [...prev]
+      n[idx] = { ...n[idx], [campo]: valore }
+      return n
     })
-    return result
-  }, [fatture, ricerca, filtroStato, filtroTipo, ordinamento, dataDA, dataA, importoDA, importoA])
+  }, [])
 
-  const totFatture = fattureFiltrate.filter(f => !isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
-  const totNC = fattureFiltrate.filter(f => isNC(f)).reduce((s, f) => s + (f.imponibile || 0), 0)
-  const totNetto = totFatture - totNC
+  const eliminaVoceForm = useCallback((idx: number) => {
+    setVoci(prev => prev.filter((_, i) => i !== idx))
+  }, [])
 
-  async function pagaRata(id: string, rata: number) {
-    const { data: fatt } = await supabase.from('fatture_fornitori').select('*').eq('id', id).single()
-    if (!fatt) return
-    if (!confirm(`Confermi pagamento rata ${rata}?\n${fatt.fornitore_nome} - ${fatt.numero}`)) return
-    const oggi = new Date().toISOString().split('T')[0]
-    await supabase.from('fatture_fornitori').update({ [`rata${rata}_stato`]: 'Pagata', [`rata${rata}_data_pagamento`]: oggi }).eq('id', id)
-    const imp = (fatt as any)[`rata${rata}_importo`] || 0
-    await supabase.from('cash_flow').insert({ data: oggi, descrizione: `Pagamento ${fatt.fornitore_nome} - Ft ${fatt.numero} rata ${rata}`, conto: 'Conto 1', tipologia: 'Pagamento Fornitore', entrata: 0, uscita: imp, progetto_id: (fatt as any).progetto_id || null, riferimento_fattura: fatt.numero })
-    await logActivity('modifica', 'fatture_fornitori', id, `Pagamento rata ${rata} — ${fatt.numero} · ${fatt.fornitore_nome} · € ${imp}`)
-    load()
-  }
-
-  async function annullaRata(id: string, rata: number) {
-    if (!confirm(`Annullare il pagamento della rata ${rata}?\nNota: il movimento in cash flow NON viene rimosso automaticamente.`)) return
-    const fatt = fatture.find(f => f.id === id)
-    await supabase.from('fatture_fornitori').update({ [`rata${rata}_stato`]: 'Da Pagare', [`rata${rata}_data_pagamento`]: null }).eq('id', id)
-    await logActivity('modifica', 'fatture_fornitori', id, `Annullato pagamento rata ${rata} — ${fatt?.numero} · ${fatt?.fornitore_nome}`)
-    load()
-  }
-
-  async function elimina(id: string, numero: string) {
-    if (!confirm(`Eliminare la fattura ${numero}?\nAttenzione: i DDT abbinati torneranno a "Da Fatturare".`)) return
-    const fatt = fatture.find(f => f.id === id)
-    await supabase.from('ddt').update({ stato: 'Da Fatturare', fattura_abbinata: null }).eq('fattura_abbinata', numero)
-    await supabase.from('fatture_fornitori').delete().eq('id', id)
-    await logActivity('eliminazione', 'fatture_fornitori', id, `Fattura ${numero} — ${fatt?.fornitore_nome} · € ${fatt?.imponibile}`)
-    load()
-  }
-
-  // ── FIX: salvaModifica con gestione errori + aggiornamento rata_stato ──
-  async function salvaModifica() {
-    if (!modalModifica) return
-    setLoading(true)
-
-    const prj = progetti.find(p => p.id === modalModifica.progetto_id)
-    const imp = parseFloat(modalModifica.imponibile) || 0
-    const r1i = parseFloat(modalModifica.rata1_importo) || 0
-    const r2i = parseFloat(modalModifica.rata2_importo) || 0
-    const r3i = parseFloat(modalModifica.rata3_importo) || 0
-
-    // Se l'importo di una rata viene azzerato, azzera anche il suo stato
-    // Se una rata viene aggiunta (aveva importo 0 prima), imposta "Da Pagare"
-    const r1s_old = modalModifica.rata1_stato
-    const r2s_old = modalModifica.rata2_stato
-    const r3s_old = modalModifica.rata3_stato
-
-    const rata1_stato = r1i > 0 ? (r1s_old || 'Da Pagare') : null
-    const rata2_stato = r2i > 0 ? (r2s_old || 'Da Pagare') : null
-    const rata3_stato = r3i > 0 ? (r3s_old || 'Da Pagare') : null
-
-    const { error } = await supabase.from('fatture_fornitori').update({
-      data: modalModifica.data,
-      numero: modalModifica.numero,
-      descrizione: modalModifica.descrizione || '',
-      tipo: modalModifica.tipo || 'Fattura',
-      fattura_collegata_id: modalModifica.fattura_collegata_id || null,
-      progetto_id: modalModifica.progetto_id || null,
-      progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : (modalModifica.progetto_nome || ''),
-      imponibile: imp,
-      iva_percentuale: parseFloat(modalModifica.iva_percentuale) || 22,
-      modalita_pagamento: modalModifica.modalita_pagamento || 'Bonifico',
-      note: modalModifica.note || '',
-      categoria_fattura: modalModifica.categoria_fattura || null,
-      rata1_importo: r1i,
-      rata1_scadenza: modalModifica.rata1_scadenza || null,
-      rata1_stato,
-      rata2_importo: r2i,
-      rata2_scadenza: modalModifica.rata2_scadenza || null,
-      rata2_stato,
-      rata3_importo: r3i,
-      rata3_scadenza: modalModifica.rata3_scadenza || null,
-      rata3_stato,
-    }).eq('id', modalModifica.id)
-
-    if (error) {
-      // BUG FIX: prima il codice non catturava l'errore → le modifiche sparivano silenziosamente
-      showToast(`Errore salvataggio: ${error.message}`, 'err')
-      setLoading(false)
-      return
-    }
-
-    await logActivity('modifica', 'fatture_fornitori', modalModifica.id, `${modalModifica.tipo || 'Fattura'} ${modalModifica.numero} — ${modalModifica.fornitore_nome} · € ${imp}`)
-    showToast('Modifiche salvate', 'ok')
-    setModalModifica(null)
-    setLoading(false)
-    load()
-  }
+  const totaleVoci = useMemo(() => voci.reduce((s, v) => s + (v.importo_totale || 0), 0), [voci])
 
   async function salva() {
-    if (!form.numero || !form.imponibile || !form.fornitore_id) {
-      alert('Compilare N° fattura, fornitore e imponibile'); return
-    }
-    const { data: dup } = await supabase.from('fatture_fornitori').select('id').eq('numero', form.numero).eq('fornitore_id', form.fornitore_id)
-    if (dup && dup.length > 0) { alert(`⚠️ Fattura ${form.numero} di questo fornitore già presente.`); return }
+    if (!form.numero || !form.fornitore_id) { alert('Compilare N° DDT e fornitore'); return }
+    const vociValide = voci.filter(v => v.descrizione)
+    if (vociValide.length === 0) { alert('Inserisci almeno una voce con descrizione'); return }
+    const importoTotale = vociValide.reduce((s, v) => s + (v.importo_totale || 0), 0)
     setLoading(true)
     const for_ = fornitori.find(f => f.id === form.fornitore_id)
     const prj = progetti.find(p => p.id === form.progetto_id)
-    const imp = parseFloat(form.imponibile) || 0
-    const isNotaCredito = form.tipo === 'Nota di credito'
-    const { data: inserted, error } = await supabase.from('fatture_fornitori').insert({
+    const { data: inserted, error } = await supabase.from('ddt').insert({
       data: form.data || new Date().toISOString().split('T')[0],
       numero: form.numero, fornitore_id: form.fornitore_id,
       fornitore_nome: for_?.ragione_sociale || '',
       progetto_id: form.progetto_id || null,
       progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
-      descrizione: form.descrizione, imponibile: imp,
-      iva_percentuale: parseFloat(form.iva_percentuale) || 22,
-      tipo: form.tipo, fattura_collegata_id: form.fattura_collegata_id || null,
-      rata1_importo: isNotaCredito ? 0 : (parseFloat(form.r1i) || imp * (1 + parseFloat(form.iva_percentuale) / 100)),
-      rata1_scadenza: isNotaCredito ? null : (form.r1s || null),
-      rata1_stato: isNotaCredito ? null : 'Da Pagare',
-      rata2_importo: isNotaCredito ? 0 : (parseFloat(form.r2i) || 0),
-      rata2_scadenza: isNotaCredito ? null : (form.r2s || null),
-      rata2_stato: isNotaCredito ? null : (form.r2i ? 'Da Pagare' : null),
-      rata3_importo: isNotaCredito ? 0 : (parseFloat(form.r3i) || 0),
-      rata3_scadenza: isNotaCredito ? null : (form.r3s || null),
-      rata3_stato: isNotaCredito ? null : (form.r3i ? 'Da Pagare' : null),
-      modalita_pagamento: form.modalita_pagamento, note: form.note,
-      categoria_fattura: form.categoria_fattura || null
+      descrizione: form.descrizione || `DDT con ${vociValide.length} voci`,
+      importo: importoTotale, mese_fattura_previsto: form.mese_fattura_previsto,
+      stato: 'Da Fatturare', note: form.note, societa: form.societa,
     }).select('id').single()
-
-    if (error) {
-      showToast(`Errore inserimento: ${error.message}`, 'err')
-      setLoading(false)
-      return
+    if (error) { alert('Errore: ' + error.message); setLoading(false); return }
+    for (const v of vociValide) {
+      await supabase.from('ddt_voci').insert({
+        ddt_id: inserted!.id, descrizione: v.descrizione, categoria: v.categoria,
+        macro_categoria: v.macro_categoria, unita_misura: v.unita_misura,
+        quantita: v.quantita, prezzo_unitario: v.prezzo_unitario, importo_totale: v.importo_totale,
+        fornitore_id: form.fornitore_id, fornitore_nome: for_?.ragione_sociale || '',
+        data_ddt: form.data || new Date().toISOString().split('T')[0]
+      })
     }
-    // Aggiorna categoria_fattura_default del fornitore per il prossimo auto-suggest
-    if (form.categoria_fattura && form.fornitore_id) {
-      await supabase.from('fornitori').update({ categoria_fattura_default: form.categoria_fattura }).eq('id', form.fornitore_id)
-    }
-    await logActivity('inserimento', 'fatture_fornitori', inserted?.id || '', `${form.tipo} ${form.numero} — ${for_?.ragione_sociale} · € ${imp}`)
-    showToast('Fattura inserita', 'ok')
+    await logActivity('inserimento', 'ddt', inserted?.id || '', `DDT ${form.numero} — ${for_?.ragione_sociale} · € ${importoTotale} [${form.societa}]`)
     setModal(false)
+    setForm({ data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '', mese_fattura_previsto: '', note: '', societa: societaAttiva })
+    setVoci([])
+    load()
     setLoading(false)
+  }
+
+  async function apriDettaglio(d: any) {
+    setModalDettaglio(d)
+    const { data: v } = await supabase.from('ddt_voci').select('*').eq('ddt_id', d.id).order('id')
+    setVociDettaglio(v || [])
+  }
+
+  function apriModifica(d: any) {
+    setForm({
+      data: d.data, numero: d.numero, fornitore_id: d.fornitore_id || '',
+      progetto_id: d.progetto_id || '', descrizione: d.descrizione || '',
+      mese_fattura_previsto: d.mese_fattura_previsto || '', note: d.note || '',
+      societa: d.societa || 'BC General Service'
+    })
+    setModalDettaglio(d)
+    setModalModifica(true)
+    supabase.from('ddt_voci').select('*').eq('ddt_id', d.id).order('id').then(({ data }) => {
+      setVoci((data || []).map((v: any) => ({ ...v })))
+      setVociDettaglio(data || [])
+    })
+  }
+
+  async function salvaModifica() {
+    if (!modalDettaglio) return
+    if (!form.numero || !form.fornitore_id) { alert('Compilare N° DDT e fornitore'); return }
+    setLoading(true)
+    const for_ = fornitori.find(f => f.id === form.fornitore_id)
+    const prj = progetti.find(p => p.id === form.progetto_id)
+    const vociValide = voci.filter(v => v.descrizione)
+    const importoTotale = vociValide.reduce((s, v) => s + (v.importo_totale || 0), 0)
+    await supabase.from('ddt').update({
+      data: form.data, numero: form.numero, fornitore_id: form.fornitore_id,
+      fornitore_nome: for_?.ragione_sociale || '', progetto_id: form.progetto_id || null,
+      progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
+      descrizione: form.descrizione || `DDT con ${vociValide.length} voci`,
+      importo: importoTotale, mese_fattura_previsto: form.mese_fattura_previsto,
+      note: form.note, societa: form.societa,
+    }).eq('id', modalDettaglio.id)
+    await supabase.from('ddt_voci').delete().eq('ddt_id', modalDettaglio.id)
+    for (const v of vociValide) {
+      await supabase.from('ddt_voci').insert({
+        ddt_id: modalDettaglio.id, descrizione: v.descrizione, categoria: v.categoria,
+        macro_categoria: v.macro_categoria, unita_misura: v.unita_misura,
+        quantita: v.quantita, prezzo_unitario: v.prezzo_unitario, importo_totale: v.importo_totale,
+        fornitore_id: form.fornitore_id, fornitore_nome: for_?.ragione_sociale || '', data_ddt: form.data
+      })
+    }
+    await logActivity('modifica', 'ddt', modalDettaglio.id, `DDT ${form.numero} — ${for_?.ragione_sociale} · € ${importoTotale} [${form.societa}]`)
+    setModalModifica(false); setModalDettaglio(null); setVoci([]); setLoading(false)
     load()
   }
+
+  async function elimina(id: string) {
+    if (!confirm('Eliminare questo DDT e tutte le sue voci?')) return
+    const ddt = ddts.find(d => d.id === id)
+    await supabase.from('ddt_voci').delete().eq('ddt_id', id)
+    await supabase.from('ddt').delete().eq('id', id)
+    await logActivity('eliminazione', 'ddt', id, `DDT ${ddt?.numero} — ${ddt?.fornitore_nome} · € ${ddt?.importo}`)
+    setModalDettaglio(null)
+    load()
+  }
+
+  function resetFiltri() { setCercaNumero(''); setCercaFornitore(''); setFiltroStato('tutti'); setDataDA(''); setDataA('') }
+
+  const filtered = useMemo(() => ddts.filter(d => {
+    if ((d.societa || 'BC General Service') !== societaAttiva) return false
+    // Tab fatturazione
+    if (tabFatturazione === 'da_fatturare' && d.stato === 'Fatturato') return false
+    if (tabFatturazione === 'fatturati' && d.stato !== 'Fatturato') return false
+    if (cercaNumero && !d.numero?.toLowerCase().includes(cercaNumero.toLowerCase())) return false
+    if (cercaFornitore && !d.fornitore_nome?.toLowerCase().includes(cercaFornitore.toLowerCase())) return false
+    if (tabFatturazione === 'da_fatturare' && filtroStato !== 'tutti' && d.stato !== filtroStato) return false
+    if (dataDA && d.data < dataDA) return false
+    if (dataA && d.data > dataA) return false
+    return true
+  }), [ddts, societaAttiva, tabFatturazione, cercaNumero, cercaFornitore, filtroStato, dataDA, dataA])
+
+  const hasFiltriAttivi = cercaNumero || cercaFornitore || filtroStato !== 'tutti' || dataDA || dataA
+  const totaleFiltered = useMemo(() => filtered.reduce((s, d) => s + (d.importo || 0), 0), [filtered])
+  const nBC = useMemo(() => ddts.filter(d => (d.societa || 'BC General Service') === 'BC General Service').length, [ddts])
+  const nFil = useMemo(() => ddts.filter(d => d.societa === 'Filosofia').length, [ddts])
+  const progettiSocieta = useMemo(() => progetti.filter(p => (p.societa || 'BC General Service') === form.societa), [progetti, form.societa])
+
+  const statoBadge = (s: string) => {
+    if (s === 'Fatturato') return <span className="badge badge-green">Fatturato</span>
+    if (s === 'Parziale') return <span className="badge badge-amber">Parziale</span>
+    return <span className="badge badge-amber">Da Fatturare</span>
+  }
+
+  function chiudiModali() { setModal(false); setModalDettaglio(null); setModalModifica(false); setVoci([]); setVociDettaglio([]) }
+
+  function apriNuovoDDT() {
+    setForm({ data: '', numero: '', fornitore_id: '', progetto_id: '', descrizione: '', mese_fattura_previsto: '', note: '', societa: societaAttiva })
+    setVoci([])
+    setModal(true)
+  }
+
+  // Callback stabile per SocietaToggle nel form
+  const handleSocietaChange = useCallback((s: Societa) => {
+    setForm(f => ({ ...f, societa: s, progetto_id: '' }))
+  }, [])
 
   return (
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 p-6 overflow-auto">
-
-        {/* Toast */}
-        {toast && (
-          <div className={`fixed top-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-white text-sm font-medium transition-all ${toast.type === 'ok' ? 'bg-green-600' : 'bg-red-600'}`}>
-            {toast.type === 'ok' ? '✓ ' : '⚠️ '}{toast.msg}
-          </div>
-        )}
-
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-xl font-semibold">Fatture ricevute</h1>
-          <div className="flex gap-2">
-            <button className="btn text-sm" onClick={() => { setModalImport(true); setEsitoImport(null) }}>📥 Importa da Excel</button>
-            <button className="btn btn-primary text-sm" onClick={() => setModal(true)}>+ Nuova fattura</button>
-          </div>
+          <h1 className="text-xl font-semibold">DDT / Bolle di consegna</h1>
+          <button className="btn btn-primary text-sm" onClick={apriNuovoDDT}>+ Nuovo DDT</button>
+        </div>
+
+        <div className="flex gap-2 mb-4">
+          {(['BC General Service', 'Filosofia'] as Societa[]).map(soc => (
+            <button key={soc} onClick={() => setSocietaAttiva(soc)}
+              className={`flex-1 py-2.5 rounded-xl border-2 text-sm font-bold transition-all ${
+                soc === 'BC General Service'
+                  ? societaAttiva === soc ? 'bg-blue-600 text-white border-blue-600 shadow' : 'bg-blue-50 text-blue-700 border-blue-300'
+                  : societaAttiva === soc ? 'bg-orange-500 text-white border-orange-500 shadow' : 'bg-orange-50 text-orange-700 border-orange-300'
+              }`}>
+              {soc === 'BC General Service' ? '🏗' : '🏢'} {soc}
+              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${societaAttiva === soc ? 'bg-white/20' : 'bg-white'}`}>
+                {soc === 'BC General Service' ? nBC : nFil}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Tab Da Fatturare / Fatturati */}
+        <div className="flex gap-0 mb-4 border-b border-gray-200">
+          <button onClick={() => setTabFatturazione('da_fatturare')}
+            className={`px-5 py-2.5 text-sm font-semibold border-b-2 -mb-px mr-1 transition-colors ${tabFatturazione === 'da_fatturare' ? 'border-amber-500 text-amber-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            ⏳ Da Fatturare
+            <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${tabFatturazione === 'da_fatturare' ? 'bg-amber-100' : 'bg-gray-100'}`}>
+              {ddts.filter(d => (d.societa||'BC General Service')===societaAttiva && d.stato !== 'Fatturato').length}
+            </span>
+          </button>
+          <button onClick={() => setTabFatturazione('fatturati')}
+            className={`px-5 py-2.5 text-sm font-semibold border-b-2 -mb-px transition-colors ${tabFatturazione === 'fatturati' ? 'border-green-600 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            ✅ Fatturati
+            <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${tabFatturazione === 'fatturati' ? 'bg-green-100' : 'bg-gray-100'}`}>
+              {ddts.filter(d => (d.societa||'BC General Service')===societaAttiva && d.stato === 'Fatturato').length}
+            </span>
+          </button>
         </div>
 
         <div className="card mb-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
-            <div className="md:col-span-2">
-              <label className="label">🔍 Cerca</label>
-              <input className="input" placeholder="N° fattura, fornitore, cantiere..." value={ricerca} onChange={e => setRicerca(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Tipo documento</label>
-              <select className="input" value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}>
-                <option value="tutti">Tutti ({fatture.length})</option>
-                <option value="fattura">Solo fatture ({fatture.filter(f => !isNC(f)).length})</option>
-                <option value="nota_credito">Solo NC ({fatture.filter(f => isNC(f)).length})</option>
-              </select>
-            </div>
-            <div>
-              <label className="label">Stato pagamento</label>
-              <select className="input" value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
-                <option value="tutti">Tutti</option>
-                <option value="da_pagare">Da pagare</option>
-                <option value="parziale">Parziale</option>
-                <option value="pagata">Pagate</option>
-              </select>
-            </div>
-            <div>
-              <label className="label">Ordina per</label>
-              <select className="input" value={ordinamento} onChange={e => setOrdinamento(e.target.value)}>
-                <option value="data_desc">Data ↓ più recenti</option>
-                <option value="data_asc">Data ↑ più vecchie</option>
-                <option value="fornitore">Fornitore A→Z</option>
-                <option value="importo">Importo ↓</option>
-              </select>
-            </div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
+            <div><label className="label">N° DDT</label><input className="input" placeholder="Cerca numero..." value={cercaNumero} onChange={e => setCercaNumero(e.target.value)} /></div>
+            <div><label className="label">Fornitore</label><input className="input" placeholder="Cerca fornitore..." value={cercaFornitore} onChange={e => setCercaFornitore(e.target.value)} /></div>
+            {tabFatturazione === 'da_fatturare' && (
+              <div><label className="label">Stato</label>
+                <select className="input" value={filtroStato} onChange={e => setFiltroStato(e.target.value)}>
+                  <option value="tutti">Tutti</option>
+                  <option value="Da Fatturare">Da fatturare</option>
+                  <option value="Parziale">Parziali</option>
+                </select></div>
+            )}
             <div><label className="label">Data dal</label><input className="input" type="date" value={dataDA} onChange={e => setDataDA(e.target.value)} /></div>
             <div><label className="label">Data al</label><input className="input" type="date" value={dataA} onChange={e => setDataA(e.target.value)} /></div>
-            <div><label className="label">Imponibile da (€)</label><input className="input" type="number" placeholder="0" value={importoDA} onChange={e => setImportoDA(e.target.value)} /></div>
-            <div><label className="label">Imponibile a (€)</label><input className="input" type="number" placeholder="∞" value={importoA} onChange={e => setImportoA(e.target.value)} /></div>
           </div>
-          {haFiltri && (
+          {hasFiltriAttivi && (
             <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
-              <div className="text-xs text-gray-500 space-x-3">
-                <span>{fattureFiltrate.length} documenti</span>
-                <span>Fatture: <strong>{euro(totFatture)}</strong></span>
-                {totNC > 0 && <span className="text-purple-600">NC: <strong>- {euro(totNC)}</strong></span>}
-                <span className="font-semibold text-gray-800">Netto: <strong>{euro(totNetto)}</strong></span>
-              </div>
+              <span className="text-xs text-gray-500">{filtered.length} risultati — Totale: <strong>{euro(totaleFiltered)}</strong></span>
               <button onClick={resetFiltri} className="text-xs text-blue-600 hover:underline">× Azzera filtri</button>
             </div>
           )}
         </div>
 
         <div className="card overflow-x-auto">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-sm text-gray-500">{filtered.length} DDT {societaAttiva} — Totale: {euro(totaleFiltered)}</span>
+          </div>
           <table className="table-base">
             <thead><tr>
-              <th>Data</th><th>N° Fattura</th><th>Fornitore</th><th>Cantiere</th>
-              <th>Imponibile</th><th>Totale</th><th>Rata 1</th><th>Rata 2</th><th>Rata 3</th><th></th>
+              <th>Data</th><th>N° DDT</th><th>Fornitore</th><th>Cantiere</th>
+              <th>Importo</th><th>Stato</th><th>Fattura abbinata</th><th></th>
             </tr></thead>
             <tbody>
-              {fattureFiltrate.length === 0 ? (
-                <tr><td colSpan={10} className="text-center text-gray-400 py-8">
-                  {haFiltri ? 'Nessuna fattura con questi filtri.' : 'Nessuna fattura.'}
+              {filtered.length === 0 ? (
+                <tr><td colSpan={8} className="text-center text-gray-400 py-8">
+                  {hasFiltriAttivi ? 'Nessun DDT corrisponde ai filtri.' : `Nessun DDT per ${societaAttiva}.`}
                 </td></tr>
-              ) : fattureFiltrate.map(f => {
-                const stato = statoFattura(f)
-                const nc = isNC(f)
-                const collegata = nc && f.fattura_collegata_id ? fatture.find((x: any) => x.id === f.fattura_collegata_id) : null
-                return (
-                  <tr key={f.id} className={`cursor-pointer hover:bg-gray-50 ${nc ? 'bg-purple-50' : stato === 'pagata' ? 'opacity-60' : ''}`} onClick={() => apriDettaglioFattura(f)}>
-                    <td className="text-xs">{new Date(f.data).toLocaleDateString('it-IT')}</td>
-                    <td className="font-medium text-sm">
-                      {f.numero}
-                      {nc && <span className="ml-1 inline-block bg-purple-100 text-purple-700 text-xs px-1.5 py-0.5 rounded font-medium">NC</span>}
-                    </td>
-                    <td className="text-sm">{f.fornitore_nome}</td>
-                    <td className="text-xs text-gray-500">
-                      {f.progetto_nome || '—'}
-                      {collegata && <span className="block text-purple-500 text-xs">→ comp. {collegata.numero}</span>}
-                    </td>
-                    <td className={`text-sm font-medium ${nc ? 'text-purple-700' : ''}`}>
-                      {nc ? '- ' : ''}{euro(f.imponibile)}
-                      {!nc && (f.iva_percentuale || 0) > 0 && <span className="block text-xs text-gray-400 font-normal">IVA {f.iva_percentuale}%</span>}
-                      {!nc && (f.iva_percentuale || 0) === 0 && <span className="block text-xs text-gray-400 font-normal">RC</span>}
-                      {f.categoria_fattura && <span className="block mt-0.5 text-xs font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 inline-block">{f.categoria_fattura}</span>}
-                    </td>
-                    <td className="font-semibold text-sm">
-                      {nc ? <span className="text-purple-600 text-xs">—</span> : (
-                        <>
-                          {euro((f.imponibile || 0) * (1 + (f.iva_percentuale || 0) / 100))}
-                          {stato === 'pagata' && <span className="ml-1 text-xs text-green-600">✓</span>}
-                          {stato === 'parziale' && <span className="ml-1 text-xs text-amber-600">½</span>}
-                        </>
-                      )}
-                    </td>
-                    {nc ? (
-                      <td colSpan={3} className="text-xs text-purple-400 text-center">Nota di credito — nessuna rata</td>
-                    ) : [1,2,3].map(n => (
-                      <td key={n}>
-                        {f[`rata${n}_importo`] > 0 ? (
-                          <div className="text-xs">
-                            <div className="font-medium">{euro(f[`rata${n}_importo`])}</div>
-                            <div className="text-gray-400">{f[`rata${n}_scadenza`] ? new Date(f[`rata${n}_scadenza`]).toLocaleDateString('it-IT') : ''}</div>
-                            {f[`rata${n}_stato`] === 'Pagata' ? (
-                              <div className="flex gap-1 mt-1 items-center flex-wrap">
-                                <span className="badge badge-green">Pagata</span>
-                                {f[`rata${n}_data_pagamento`] && <span className="text-gray-400 text-xs">{new Date(f[`rata${n}_data_pagamento`]).toLocaleDateString('it-IT')}</span>}
-                                <button className="text-amber-600 hover:text-amber-800 text-sm font-bold px-1" onClick={() => annullaRata(f.id, n)} title="Annulla">↩</button>
-                              </div>
-                            ) : (
-                              <button className="btn btn-sm btn-success mt-1" onClick={() => pagaRata(f.id, n)}>Paga</button>
-                            )}
-                          </div>
-                        ) : <span className="text-gray-300">—</span>}
-                      </td>
-                    ))}
-                    <td>
-                      <div className="flex gap-1">
-                        {!nc && <button className="btn btn-sm text-amber-600 border-amber-200 hover:bg-amber-50" title="Autorizzazione pagamento"
-                          onClick={e => { e.stopPropagation(); generaAutoriz(f) }}>
-                          📄{f.data_autorizzazione && <span className="ml-0.5 text-xs text-amber-500" title={`Già generata il ${new Date(f.data_autorizzazione).toLocaleDateString('it-IT')}`}>✓</span>}
-                        </button>}
-                        <button className="btn btn-sm text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => setModalModifica({...f})}>✏️</button>
-                        <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(f.id, f.numero)}>✕</button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
+              ) : filtered.map(d => (
+                <tr key={d.id} className="cursor-pointer hover:bg-gray-50" onClick={() => apriDettaglio(d)}>
+                  <td className="text-xs">{d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—'}</td>
+                  <td className="font-medium text-sm">{d.numero}</td>
+                  <td className="text-sm">{d.fornitore_nome}</td>
+                  <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
+                  <td className="font-medium text-sm">{euro(d.importo)}</td>
+                  <td>{statoBadge(d.stato)}</td>
+                  <td className="text-xs text-gray-500">{d.fattura_abbinata || '—'}</td>
+                  <td onClick={e => e.stopPropagation()}>
+                    <button className="btn btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(d.id)}>✕</button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       </main>
 
-      {/* MODAL DETTAGLIO FATTURA — DDT abbinati */}
-      {modalDettaglioFattura && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
-            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
-              <div>
-                <h2 className="font-semibold text-base">{modalDettaglioFattura.numero}
-                  {modalDettaglioFattura.categoria_fattura && (
-                    <span className="ml-2 text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold">{modalDettaglioFattura.categoria_fattura}</span>
-                  )}
-                </h2>
-                <p className="text-xs text-gray-500">{modalDettaglioFattura.fornitore_nome} · {modalDettaglioFattura.data ? new Date(modalDettaglioFattura.data).toLocaleDateString('it-IT') : ''} · {euro(modalDettaglioFattura.imponibile)}</p>
-              </div>
-              <div className="flex gap-2 items-center">
-                {!isNC(modalDettaglioFattura) && (
-                  <button className="btn btn-sm text-amber-600 border-amber-200 hover:bg-amber-50" onClick={() => generaAutoriz(modalDettaglioFattura)}>
-                    📄 Autorizzazione
-                    {modalDettaglioFattura.data_autorizzazione && <span className="ml-1 text-xs text-gray-400">(già il {new Date(modalDettaglioFattura.data_autorizzazione).toLocaleDateString('it-IT')})</span>}
-                  </button>
-                )}
-                <button className="btn btn-sm btn-primary" onClick={() => { setModalDettaglioFattura(null); setModalModifica({...modalDettaglioFattura}) }}>✏️ Modifica</button>
-                <button onClick={() => setModalDettaglioFattura(null)} className="text-gray-400 text-xl ml-1">×</button>
-              </div>
+      {/* Modal nuovo DDT */}
+      {modal && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold">Nuovo DDT</h2>
+              <button onClick={chiudiModali} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
             </div>
-            <div className="flex-1 overflow-y-auto p-5">
-              {/* Info fattura */}
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-5 text-sm">
-                <div><span className="text-xs text-gray-400 block">Cantiere</span>{modalDettaglioFattura.progetto_nome || '—'}</div>
-                <div><span className="text-xs text-gray-400 block">Modalità pag.</span>{modalDettaglioFattura.modalita_pagamento || '—'}</div>
-                <div><span className="text-xs text-gray-400 block">IVA</span>{modalDettaglioFattura.iva_percentuale}%</div>
-                {modalDettaglioFattura.descrizione && <div className="col-span-3"><span className="text-xs text-gray-400 block">Descrizione</span>{modalDettaglioFattura.descrizione}</div>}
-                {modalDettaglioFattura.note && <div className="col-span-3"><span className="text-xs text-gray-400 block">Note</span><span className="italic text-gray-600">{modalDettaglioFattura.note}</span></div>}
-              </div>
-
-              {/* Rate */}
-              {!isNC(modalDettaglioFattura) && (
-                <div className="mb-5">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate di pagamento</p>
-                  <div className="space-y-1.5">
-                    {[1,2,3].filter(n => (modalDettaglioFattura[`rata${n}_importo`]||0) > 0).map(n => (
-                      <div key={n} className={`flex items-center justify-between rounded-lg px-3 py-2 border ${modalDettaglioFattura[`rata${n}_stato`]==='Pagata' ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
-                        <span className="text-sm">Rata {n}</span>
-                        <span className="text-xs text-gray-500">{modalDettaglioFattura[`rata${n}_scadenza`] ? new Date(modalDettaglioFattura[`rata${n}_scadenza`]).toLocaleDateString('it-IT') : '—'}</span>
-                        <span className="font-semibold text-sm">{euro(modalDettaglioFattura[`rata${n}_importo`])}</span>
-                        <span className={`text-xs font-semibold ${modalDettaglioFattura[`rata${n}_stato`]==='Pagata' ? 'text-green-700' : 'text-amber-700'}`}>{modalDettaglioFattura[`rata${n}_stato`] || 'Da Pagare'}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* DDT Abbinati */}
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                  DDT abbinati {loadingDdt ? '...' : `(${ddtAbbinati.length})`}
-                </p>
-                {loadingDdt ? (
-                  <p className="text-xs text-gray-400 py-3 text-center">Caricamento DDT...</p>
-                ) : ddtAbbinati.length === 0 ? (
-                  <p className="text-xs text-gray-400 py-3 text-center border border-dashed border-gray-200 rounded-lg">Nessun DDT abbinato a questa fattura</p>
-                ) : (
-                  <div className="border border-gray-200 rounded-lg overflow-hidden">
-                    <table className="table-base">
-                      <thead><tr>
-                        <th>Data</th><th>N° DDT</th><th>Cantiere</th><th>Descrizione</th><th>Importo</th>
-                      </tr></thead>
-                      <tbody>
-                        {ddtAbbinati.map(d => (
-                          <tr key={d.id}>
-                            <td className="text-xs">{d.data ? new Date(d.data).toLocaleDateString('it-IT') : '—'}</td>
-                            <td className="font-medium text-xs text-blue-700">{d.numero}</td>
-                            <td className="text-xs text-gray-600">{d.progetto_nome || '—'}</td>
-                            <td className="text-xs text-gray-500">{d.descrizione || '—'}</td>
-                            <td className="font-medium text-sm">{euro(d.importo)}</td>
-                          </tr>
-                        ))}
-                        <tr className="bg-gray-50">
-                          <td colSpan={4} className="text-xs font-semibold text-right text-gray-600">Totale DDT</td>
-                          <td className="font-bold text-sm">{euro(ddtAbbinati.reduce((s,d)=>s+(d.importo||0),0))}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <SocietaToggle value={form.societa} onChange={handleSocietaChange} />
+              <div><label className="label">Data</label>
+                <input className="input" type="date" value={form.data} onChange={e => setForm(f => ({...f, data: e.target.value}))} /></div>
+              <div><label className="label">N° DDT *</label>
+                <input className="input" placeholder="es. DDT/2026/001" value={form.numero} onChange={e => setForm(f => ({...f, numero: e.target.value}))} /></div>
+              <div><label className="label">Fornitore *</label>
+                <select className="input" value={form.fornitore_id} onChange={e => setForm(f => ({...f, fornitore_id: e.target.value}))}>
+                  <option value="">-- seleziona --</option>
+                  {fornitori.map(f => <option key={f.id} value={f.id}>{f.ragione_sociale}</option>)}
+                </select></div>
+              <div><label className="label">Cantiere</label>
+                <select className="input" value={form.progetto_id} onChange={e => setForm(f => ({...f, progetto_id: e.target.value}))}>
+                  <option value="">-- seleziona --</option>
+                  {progettiSocieta.map(p => <option key={p.id} value={p.id}>{p.codice} - {p.nome}</option>)}
+                </select></div>
+            </div>
+            <FormVoci voci={voci} onAdd={aggiungiVoce} onUpdate={aggiornaVoce} onDelete={eliminaVoceForm} />
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <div><label className="label">Mese fattura previsto</label>
+                <input className="input" type="month" value={form.mese_fattura_previsto} onChange={e => setForm(f => ({...f, mese_fattura_previsto: e.target.value}))} /></div>
+              <div className="col-span-2"><label className="label">Note</label>
+                <input className="input" value={form.note} onChange={e => setForm(f => ({...f, note: e.target.value}))} /></div>
+            </div>
+            <div className="flex gap-2 justify-end mt-4">
+              <button className="btn" onClick={chiudiModali}>Annulla</button>
+              <button className="btn btn-primary" onClick={salva} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva DDT'}</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL IMPORT */}
-      {modalImport && (
+      {/* Modal dettaglio / modifica */}
+      {modalDettaglio && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+          <div className="bg-white rounded-xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold">Importa fatture da Excel</h2>
-              <button onClick={() => setModalImport(false)} className="text-gray-400 text-xl">×</button>
+              <h2 className="text-base font-semibold">
+                {modalModifica ? `Modifica — ${modalDettaglio.numero}` : `Dettaglio DDT — ${modalDettaglio.numero}`}
+                <span className={`ml-2 text-xs px-2 py-0.5 rounded-full font-medium ${(modalDettaglio.societa || 'BC') === 'Filosofia' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'}`}>
+                  {modalDettaglio.societa || 'BC General Service'}
+                </span>
+              </h2>
+              <button onClick={chiudiModali} className="text-gray-400 hover:text-gray-600 text-xl">×</button>
             </div>
-            {!esitoImport ? (
+
+            {!modalModifica ? (
               <>
-                <div className="bg-blue-50 rounded-lg p-3 mb-4 text-xs text-blue-700 space-y-1">
-                  <p>File: export <strong>QuifatturA</strong> (.xlsx)</p>
-                  <p>Colonne: <strong>A</strong> Data · <strong>B</strong> Numero · <strong>D</strong> Fornitore · <strong>I</strong> P.IVA · <strong>L</strong> Netto a pagare</p>
-                  <p>Fatture già presenti: saltate. Cantiere e rate: da completare dopo.</p>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4 mb-4 text-sm">
+                  <div><span className="text-gray-400 text-xs block">Data</span>{new Date(modalDettaglio.data).toLocaleDateString('it-IT')}</div>
+                  <div><span className="text-gray-400 text-xs block">Fornitore</span>{modalDettaglio.fornitore_nome}</div>
+                  <div><span className="text-gray-400 text-xs block">Cantiere</span>{modalDettaglio.progetto_nome || '—'}</div>
+                  <div><span className="text-gray-400 text-xs block">Stato</span>{statoBadge(modalDettaglio.stato)}</div>
+                  <div className="col-span-2"><span className="text-gray-400 text-xs block">Note</span>{modalDettaglio.note || '—'}</div>
+                  <div><span className="text-gray-400 text-xs block">Fattura abbinata</span>{modalDettaglio.fattura_abbinata || '—'}</div>
                 </div>
-                <div className="border-2 border-dashed border-gray-200 rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 transition-colors" onClick={() => !importando && inputImportRef.current?.click()}>
-                  {importando ? (
-                    <><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div><p className="text-sm text-blue-600">Importazione in corso...</p></>
-                  ) : (
-                    <><p className="text-3xl mb-3">📊</p><p className="text-sm font-medium text-gray-700">Clicca per selezionare il file Excel</p><p className="text-xs text-gray-400 mt-1">.xlsx esportato da QuifatturA</p></>
-                  )}
-                  <input ref={inputImportRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) importaExcel(f) }} />
+                <h3 className="text-sm font-medium text-gray-600 mb-2">📦 Voci ({vociDettaglio.length})</h3>
+                {vociDettaglio.length === 0 ? (
+                  <p className="text-xs text-gray-400 py-3 text-center border border-dashed rounded-lg">Nessuna voce registrata.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="table-base">
+                      <thead><tr><th>Descrizione</th><th>Categoria</th><th>U.M.</th><th>Qtà</th><th>€/unit</th><th>Totale</th></tr></thead>
+                      <tbody>
+                        {vociDettaglio.map(v => (
+                          <tr key={v.id}>
+                            <td className="text-sm">{v.descrizione}</td>
+                            <td className="text-xs text-gray-500">{v.macro_categoria}</td>
+                            <td className="text-xs">{v.unita_misura}</td>
+                            <td className="text-xs">{v.quantita}</td>
+                            <td className="text-xs">{euro(v.prezzo_unitario)}</td>
+                            <td className="font-medium text-sm">{euro(v.importo_totale)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="flex justify-end mt-2 pt-2 border-t border-gray-100">
+                      <span className="font-semibold text-sm">Totale: {euro(modalDettaglio.importo)}</span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex gap-2 justify-end mt-4">
+                  <button className="btn text-red-600 border-red-200 hover:bg-red-50" onClick={() => elimina(modalDettaglio.id)}>✕ Elimina</button>
+                  <button className="btn btn-primary" onClick={() => apriModifica(modalDettaglio)}>✏️ Modifica</button>
                 </div>
               </>
             ) : (
-              <div className="space-y-3">
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                  <p className="text-sm font-semibold text-green-800 mb-2">✅ Importazione completata</p>
-                  <p className="text-lg font-bold text-green-700">{esitoImport.inserite} fatture inserite</p>
-                  <p className="text-sm text-gray-500 mt-1">{esitoImport.scartate} già presenti (saltate)</p>
+              <>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <SocietaToggle value={form.societa} onChange={handleSocietaChange} />
+                  <div><label className="label">Data</label>
+                    <input className="input" type="date" value={form.data} onChange={e => setForm(f => ({...f, data: e.target.value}))} /></div>
+                  <div><label className="label">N° DDT *</label>
+                    <input className="input" value={form.numero} onChange={e => setForm(f => ({...f, numero: e.target.value}))} /></div>
+                  <div><label className="label">Fornitore *</label>
+                    <select className="input" value={form.fornitore_id} onChange={e => setForm(f => ({...f, fornitore_id: e.target.value}))}>
+                      <option value="">-- seleziona --</option>
+                      {fornitori.map(f => <option key={f.id} value={f.id}>{f.ragione_sociale}</option>)}
+                    </select></div>
+                  <div><label className="label">Cantiere</label>
+                    <select className="input" value={form.progetto_id} onChange={e => setForm(f => ({...f, progetto_id: e.target.value}))}>
+                      <option value="">-- seleziona --</option>
+                      {progettiSocieta.map(p => <option key={p.id} value={p.id}>{p.codice} - {p.nome}</option>)}
+                    </select></div>
                 </div>
-                {esitoImport.errori.length > 0 && (
-                  <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                    <p className="text-xs font-medium text-red-700 mb-1">⚠️ {esitoImport.errori.length} errori</p>
-                    {esitoImport.errori.map((e, i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
-                  </div>
-                )}
-                <div className="flex gap-2 justify-end">
-                  <button className="btn" onClick={() => setEsitoImport(null)}>Importa altro file</button>
-                  <button className="btn btn-primary" onClick={() => setModalImport(false)}>Chiudi</button>
+                <FormVoci voci={voci} onAdd={aggiungiVoce} onUpdate={aggiornaVoce} onDelete={eliminaVoceForm} />
+                <div className="grid grid-cols-2 gap-3 mt-4">
+                  <div><label className="label">Mese fattura previsto</label>
+                    <input className="input" type="month" value={form.mese_fattura_previsto} onChange={e => setForm(f => ({...f, mese_fattura_previsto: e.target.value}))} /></div>
+                  <div className="col-span-2"><label className="label">Note</label>
+                    <input className="input" value={form.note} onChange={e => setForm(f => ({...f, note: e.target.value}))} /></div>
                 </div>
-              </div>
+                <div className="flex gap-2 justify-end mt-4">
+                  <button className="btn" onClick={() => setModalModifica(false)}>← Torna al dettaglio</button>
+                  <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva modifiche'}</button>
+                </div>
+              </>
             )}
           </div>
         </div>
       )}
-
-      {/* MODAL NUOVA FATTURA */}
-      {modal && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold">Nuova fattura fornitore</h2>
-              <button onClick={() => setModal(false)} className="text-gray-400 text-xl">×</button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="label">Tipo documento *</label>
-                <select className="input" value={form.tipo} onChange={e => setForm({...form, tipo: e.target.value, r1i: '', r1s: '', r2i: '', r2s: '', r3i: '', r3s: ''})}>
-                  <option value="Fattura">Fattura</option>
-                  <option value="Nota di credito">Nota di credito</option>
-                </select></div>
-              <div><label className="label">Data fattura</label><input className="input" type="date" value={form.data} onChange={e => setForm({...form, data: e.target.value})} /></div>
-              <div><label className="label">N° Fattura *</label><input className="input" placeholder="es. FF/2026/018" value={form.numero} onChange={e => setForm({...form, numero: e.target.value})} /></div>
-              <div><label className="label">Fornitore *</label>
-                <SearchableSelect
-                  value={form.fornitore_id}
-                  onChange={v => {
-                    const forn = fornitori.find(f => f.id === v)
-                    setForm({...form, fornitore_id: v, fattura_collegata_id: '',
-                      categoria_fattura: forn?.categoria_fattura_default || form.categoria_fattura || ''
-                    })
-                  }}
-                  options={fornitori.map(f => ({ value: f.id, label: f.ragione_sociale, sublabel: f.cf_piva }))}
-                  placeholder="— seleziona fornitore —"
-                /></div>
-              {form.tipo === 'Nota di credito' && (
-                <div className="col-span-2">
-                  <label className="label">Fattura di riferimento (opzionale)</label>
-                  <select className="input" value={form.fattura_collegata_id} onChange={e => setForm({...form, fattura_collegata_id: e.target.value})}>
-                    <option value="">-- nessuna (NC flottante) --</option>
-                    {fatture.filter(f => !isNC(f) && f.fornitore_id === form.fornitore_id).map(f => (
-                      <option key={f.id} value={f.id}>{f.numero} — {euro(f.imponibile)} — {new Date(f.data).toLocaleDateString('it-IT')}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div><label className="label">Cantiere</label>
-                <SearchableSelect
-                  value={form.progetto_id}
-                  onChange={v => setForm({...form, progetto_id: v})}
-                  options={progetti.map(p => ({ value: p.id, label: `${p.codice} — ${p.nome}` }))}
-                  placeholder="— nessun cantiere —"
-                /></div>
-              <div><label className="label">Imponibile (€) *</label><input className="input" type="number" step="0.01" value={form.imponibile} onChange={e => setForm({...form, imponibile: e.target.value})} /></div>
-              <div><label className="label">IVA %</label>
-                <select className="input" value={form.iva_percentuale} onChange={e => setForm({...form, iva_percentuale: e.target.value})}>
-                  <option value="22">22%</option><option value="10">10%</option><option value="0">0% (RC)</option>
-                </select></div>
-              <div><label className="label">Categoria fattura</label>
-                <select className="input" value={form.categoria_fattura} onChange={e => setForm({...form, categoria_fattura: e.target.value})}>
-                  <option value="">-- seleziona --</option>
-                  <option value="Materiali">Materiali</option>
-                  <option value="Utenze">Utenze</option>
-                  <option value="Subappaltatori">Subappaltatori</option>
-                  <option value="Servizi">Servizi</option>
-                </select></div>
-              <div className="col-span-2"><label className="label">Descrizione</label><input className="input" placeholder="es. Fornitura materiali edili..." value={form.descrizione} onChange={e => setForm({...form, descrizione: e.target.value})} /></div>
-              {form.imponibile && (
-                <div className="col-span-2 bg-gray-50 rounded-lg px-3 py-2 text-sm flex items-center justify-between">
-                  <span className="text-gray-500">Totale fattura (imponibile + IVA {form.iva_percentuale}%)</span>
-                  <span className="font-bold text-gray-900">
-                    {euro((parseFloat(form.imponibile) || 0) * (1 + (parseFloat(form.iva_percentuale) || 0) / 100))}
-                  </span>
-                </div>
-              )}
-              {form.tipo === 'Fattura' && (
-                <>
-                  <div className="col-span-2 mt-1 text-xs font-medium text-gray-500 border-t pt-2">Rate di pagamento</div>
-                  <div><label className="label">Rata 1 — Importo</label><input className="input" type="number" step="0.01" value={form.r1i} onChange={e => setForm({...form, r1i: e.target.value})} /></div>
-                  <div><label className="label">Rata 1 — Scadenza</label><input className="input" type="date" value={form.r1s} onChange={e => setForm({...form, r1s: e.target.value})} /></div>
-                  <div><label className="label">Rata 2 (opz.)</label><input className="input" type="number" step="0.01" value={form.r2i} onChange={e => setForm({...form, r2i: e.target.value})} /></div>
-                  <div><label className="label">Rata 2 — Scadenza</label><input className="input" type="date" value={form.r2s} onChange={e => setForm({...form, r2s: e.target.value})} /></div>
-                  <div><label className="label">Rata 3 (opz.)</label><input className="input" type="number" step="0.01" value={form.r3i} onChange={e => setForm({...form, r3i: e.target.value})} /></div>
-                  <div><label className="label">Rata 3 — Scadenza</label><input className="input" type="date" value={form.r3s} onChange={e => setForm({...form, r3s: e.target.value})} /></div>
-                </>
-              )}
-              <div className="col-span-2"><label className="label">Note</label><input className="input" value={form.note} onChange={e => setForm({...form, note: e.target.value})} /></div>
-            </div>
-            <div className="flex gap-2 justify-end mt-4">
-              <button className="btn" onClick={() => setModal(false)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salva} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL MODIFICA — FIX: aggiunto campo descrizione, gestione errori, rata_stato */}
-      {modalModifica && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-semibold">Modifica — {modalModifica.numero}</h2>
-              <button onClick={() => setModalModifica(null)} className="text-gray-400 text-xl">×</button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="label">Tipo documento</label>
-                <select className="input" value={modalModifica.tipo || 'Fattura'} onChange={e => setModalModifica({...modalModifica, tipo: e.target.value})}>
-                  <option value="Fattura">Fattura</option>
-                  <option value="Nota di credito">Nota di credito</option>
-                </select></div>
-              <div><label className="label">Data</label><input className="input" type="date" value={modalModifica.data || ''} onChange={e => setModalModifica({...modalModifica, data: e.target.value})} /></div>
-              <div><label className="label">N° Fattura</label><input className="input" value={modalModifica.numero || ''} onChange={e => setModalModifica({...modalModifica, numero: e.target.value})} /></div>
-              <div className="text-sm text-gray-500 flex items-center">
-                <span>Fornitore: <strong>{modalModifica.fornitore_nome}</strong></span>
-              </div>
-              {(modalModifica.tipo || 'Fattura') === 'Nota di credito' && (
-                <div className="col-span-2">
-                  <label className="label">Fattura di riferimento (opzionale)</label>
-                  <select className="input" value={modalModifica.fattura_collegata_id || ''} onChange={e => setModalModifica({...modalModifica, fattura_collegata_id: e.target.value || null})}>
-                    <option value="">-- nessuna (NC flottante) --</option>
-                    {fatture.filter(f => !isNC(f) && f.fornitore_id === modalModifica.fornitore_id).map(f => (
-                      <option key={f.id} value={f.id}>{f.numero} — {euro(f.imponibile)} — {new Date(f.data).toLocaleDateString('it-IT')}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div><label className="label">Cantiere</label>
-                <SearchableSelect
-                  value={modalModifica.progetto_id || ''}
-                  onChange={v => { const prj = progetti.find(p => p.id === v); setModalModifica({...modalModifica, progetto_id: v || null, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : ''}) }}
-                  options={progetti.map(p => ({ value: p.id, label: `${p.codice} — ${p.nome}` }))}
-                  placeholder="— nessun cantiere —"
-                /></div>
-              <div><label className="label">Imponibile (€)</label><input className="input" type="number" step="0.01" value={modalModifica.imponibile || ''} onChange={e => setModalModifica({...modalModifica, imponibile: e.target.value})} /></div>
-              <div><label className="label">IVA %</label>
-                <select className="input" value={modalModifica.iva_percentuale || '22'} onChange={e => setModalModifica({...modalModifica, iva_percentuale: e.target.value})}>
-                  <option value="22">22%</option><option value="10">10%</option><option value="0">0% (RC)</option>
-                </select></div>
-              <div><label className="label">Categoria fattura</label>
-                <select className="input" value={modalModifica.categoria_fattura || ''} onChange={e => setModalModifica({...modalModifica, categoria_fattura: e.target.value})}>
-                  <option value="">-- seleziona --</option>
-                  <option value="Materiali">Materiali</option>
-                  <option value="Utenze">Utenze</option>
-                  <option value="Subappaltatori">Subappaltatori</option>
-                  <option value="Servizi">Servizi</option>
-                </select></div>
-              {/* FIX: campo descrizione aggiunto al form modifica */}
-              <div className="col-span-2"><label className="label">Descrizione</label><input className="input" placeholder="es. Fornitura materiali edili..." value={modalModifica.descrizione || ''} onChange={e => setModalModifica({...modalModifica, descrizione: e.target.value})} /></div>
-              {modalModifica.imponibile && (
-                <div className="col-span-2 bg-blue-50 rounded-lg px-3 py-2 text-sm flex items-center justify-between">
-                  <span className="text-blue-600">Totale fattura (imponibile + IVA {modalModifica.iva_percentuale || 22}%)</span>
-                  <span className="font-bold text-blue-900">
-                    {euro((parseFloat(modalModifica.imponibile) || 0) * (1 + (parseFloat(modalModifica.iva_percentuale) || 22) / 100))}
-                  </span>
-                </div>
-              )}
-              {(modalModifica.tipo || 'Fattura') === 'Fattura' && (
-                <>
-                  <div className="col-span-2 mt-1 border-t pt-2">
-                    <p className="text-xs font-medium text-gray-500">Rate</p>
-                    {modalModifica.rata1_stato === 'Pagata' && <p className="text-xs text-amber-600 mt-1">⚠️ Rata 1 già pagata — l'importo non verrà resettato al pagamento.</p>}
-                  </div>
-                  <div><label className="label">Rata 1 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata1_importo || ''} onChange={e => setModalModifica({...modalModifica, rata1_importo: e.target.value})} /></div>
-                  <div><label className="label">Rata 1 — Scadenza</label><input className="input" type="date" value={modalModifica.rata1_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata1_scadenza: e.target.value})} /></div>
-                  <div><label className="label">Rata 2 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata2_importo || ''} onChange={e => setModalModifica({...modalModifica, rata2_importo: e.target.value})} /></div>
-                  <div><label className="label">Rata 2 — Scadenza</label><input className="input" type="date" value={modalModifica.rata2_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata2_scadenza: e.target.value})} /></div>
-                  <div><label className="label">Rata 3 — Importo</label><input className="input" type="number" step="0.01" value={modalModifica.rata3_importo || ''} onChange={e => setModalModifica({...modalModifica, rata3_importo: e.target.value})} /></div>
-                  <div><label className="label">Rata 3 — Scadenza</label><input className="input" type="date" value={modalModifica.rata3_scadenza || ''} onChange={e => setModalModifica({...modalModifica, rata3_scadenza: e.target.value})} /></div>
-                </>
-              )}
-              <div><label className="label">Modalità pagamento</label>
-                <select className="input" value={modalModifica.modalita_pagamento || 'Bonifico'} onChange={e => setModalModifica({...modalModifica, modalita_pagamento: e.target.value})}>
-                  <option>Bonifico</option><option>RiBa</option><option>Contanti</option><option>Assegno</option><option>Altro</option>
-                </select></div>
-              <div></div>
-              <div className="col-span-2"><label className="label">Note</label><input className="input" value={modalModifica.note || ''} onChange={e => setModalModifica({...modalModifica, note: e.target.value})} /></div>
-            </div>
-            <div className="flex gap-2 justify-end mt-4">
-              <button className="btn" onClick={() => setModalModifica(null)}>Annulla</button>
-              <button className="btn btn-primary" onClick={salvaModifica} disabled={loading}>{loading ? 'Salvataggio...' : 'Salva modifiche'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ════════ MODAL AUTORIZZAZIONE AL PAGAMENTO ════════ */}
-      {modalAutorizza && (() => {
-        const f = modalAutorizza
-        const totale = (f.imponibile || 0) * (1 + (f.iva_percentuale || 0) / 100)
-        const oggi = new Date().toLocaleDateString('it-IT')
-        const rate = [1,2,3].filter(n => (f[`rata${n}_importo`] || 0) > 0).map(n => ({
-          n, importo: f[`rata${n}_importo`], scadenza: f[`rata${n}_scadenza`], stato: f[`rata${n}_stato`]
-        }))
-        return (
-          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 print:hidden">
-                <h2 className="text-base font-semibold">📄 Autorizzazione al pagamento</h2>
-                <div className="flex gap-2">
-                  <button className="btn btn-primary btn-sm" onClick={() => window.print()}>🖨️ Stampa</button>
-                  <button onClick={() => setModalAutorizza(null)} className="text-gray-400 text-xl">×</button>
-                </div>
-              </div>
-              <div id="autorizzazione-pagamento" className="p-8" style={{ fontFamily: 'Georgia, serif' }}>
-                <div className="flex items-start justify-between mb-8">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-blue-900 rounded-full flex items-center justify-center flex-shrink-0">
-                      <span className="text-white font-black text-sm">BC</span>
-                    </div>
-                    <div>
-                      <p className="font-bold text-blue-900 text-sm">BC GENERAL SERVICE Soc. Consortile A R.L.</p>
-                      <p className="text-xs text-gray-500">Via Duca d'Este 7 — 41036 Medolla (MO) · P.IVA 03943310361</p>
-                      <p className="text-xs text-gray-500">Tel. 340 8933491 / 349 3995255 · SDI: BA6ET11</p>
-                    </div>
-                  </div>
-                  <div className="text-right text-xs text-gray-500">
-                    <p className="font-semibold text-gray-700">Medolla, {oggi}</p>
-                    <p className="mt-1">Rif. fattura: <strong className="text-gray-900">{f.numero}</strong></p>
-                  </div>
-                </div>
-
-                <div className="text-center mb-8">
-                  <h1 className="text-xl font-bold text-gray-900 tracking-wide border-b-2 border-gray-900 pb-2 inline-block px-8">
-                    AUTORIZZAZIONE AL PAGAMENTO
-                  </h1>
-                </div>
-
-                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Beneficiario</p>
-                  <p className="text-base font-bold text-gray-900">{f.fornitore_nome}</p>
-                  {f.descrizione && <p className="text-sm text-gray-600 mt-1">{f.descrizione}</p>}
-                  {f.progetto_nome && <p className="text-sm text-gray-500 mt-1">Cantiere: <strong>{f.progetto_nome}</strong></p>}
-                </div>
-
-                <div className="mb-6">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Dati documento</p>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                    <tbody>
-                      {[
-                        ['N° Fattura', f.numero],
-                        ['Data fattura', new Date(f.data).toLocaleDateString('it-IT')],
-                        ['Imponibile', euro(f.imponibile)],
-                        [`IVA ${f.iva_percentuale}%`, euro((f.imponibile || 0) * (f.iva_percentuale || 0) / 100)],
-                      ].map(([label, val]) => (
-                        <tr key={label as string} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                          <td style={{ padding: '8px 0', color: '#6b7280', width: '40%' }}>{label}</td>
-                          <td style={{ padding: '8px 0', fontWeight: 600 }}>{val}</td>
-                        </tr>
-                      ))}
-                      <tr style={{ borderBottom: '2px solid #1e3a8a', background: '#eff6ff' }}>
-                        <td style={{ padding: '10px 0', color: '#1e40af', fontWeight: 700 }}>TOTALE DA PAGARE</td>
-                        <td style={{ padding: '10px 0', color: '#1e40af', fontWeight: 700, fontSize: 16 }}>{euro(totale)}</td>
-                      </tr>
-                      <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                        <td style={{ padding: '8px 0', color: '#6b7280' }}>Modalità pagamento</td>
-                        <td style={{ padding: '8px 0', fontWeight: 600 }}>{f.modalita_pagamento || 'Bonifico'}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-
-                {rate.length > 0 && (
-                  <div className="mb-6">
-                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Scadenze di pagamento</p>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ background: '#1e3a8a', color: 'white' }}>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Rata</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Importo</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Scadenza</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left' }}>Stato</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rate.map(r => (
-                          <tr key={r.n} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                            <td style={{ padding: '8px 12px' }}>Rata {r.n}</td>
-                            <td style={{ padding: '8px 12px', fontWeight: 600 }}>{euro(r.importo)}</td>
-                            <td style={{ padding: '8px 12px' }}>{r.scadenza ? new Date(r.scadenza).toLocaleDateString('it-IT') : '—'}</td>
-                            <td style={{ padding: '8px 12px' }}>
-                              <span style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 600,
-                                background: r.stato === 'Pagata' ? '#dcfce7' : '#fef9c3',
-                                color: r.stato === 'Pagata' ? '#166534' : '#854d0e' }}>
-                                {r.stato || 'Da Pagare'}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-
-                {f.note && (
-                  <div className="mb-6 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-gray-700">
-                    <strong>Note:</strong> {f.note}
-                  </div>
-                )}
-
-                <div className="mt-10 pt-6 border-t border-gray-200 grid grid-cols-2 gap-8">
-                  <div>
-                    <p className="text-xs text-gray-500 mb-8">Il sottoscritto autorizza il pagamento della fattura sopra indicata</p>
-                    <div style={{ borderBottom: '1px solid #374151', marginBottom: 4 }}></div>
-                    <p className="text-xs text-gray-500">Firma autorizzante</p>
-                    <p className="text-xs text-gray-400 mt-1">Data: _______________</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 mb-8">Pagamento effettuato da</p>
-                    <div style={{ borderBottom: '1px solid #374151', marginBottom: 4 }}></div>
-                    <p className="text-xs text-gray-500">Firma addetto pagamento</p>
-                    <p className="text-xs text-gray-400 mt-1">Data: _______________</p>
-                  </div>
-                </div>
-
-                <div className="mt-8 pt-4 border-t border-gray-100 text-center">
-                  <p className="text-xs text-gray-400">BC GENERAL SERVICE Soc. Consortile A R.L. — direzione@bcgeneralservice.it — PEC: bcgeneralservice@pec.it</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
-
-      <style jsx global>{`
-        @media print {
-          body > * { visibility: hidden !important; }
-          #autorizzazione-pagamento { visibility: visible !important; position: fixed; top: 0; left: 0; width: 100%; padding: 20mm; }
-          #autorizzazione-pagamento * { visibility: visible !important; }
-        }
-      `}</style>
     </div>
   )
 }
