@@ -266,12 +266,8 @@ export default function ImportSDI() {
         }
       }
 
-      // Legge categoria default del fornitore se già in anagrafica
+      // categoria_fattura lasciata vuota al parse — l'utente la imposta in tabella o si auto-compila dall'anagrafica all'import
         let categoriaDefault = ''
-        if (fornitoreId) {
-          const fornMatch = fornitoriRic.find((f: any) => f.id === fornitoreId)
-          categoriaDefault = fornMatch?.categoria_fattura_default || ''
-        }
         parsed.push({ data: dataStr, numero, fornitore, piva, totale, netto, data_ricezione: dataRicezione, rate: calcolaRate(totale, dataStr, presetRic), categoria_fattura: categoriaDefault, selezionata: stato === 'ok', stato, motivo, fattura_esistente })
     }
     setRigheRic(parsed); setLoadingRic(false)
@@ -354,17 +350,23 @@ export default function ImportSDI() {
           rateFields[`rata${i+1}_scadenza`] = rt.scadenza || null
           rateFields[`rata${i+1}_stato`] = 'Da Pagare'
         })
+        // Se l'utente non ha scelto la categoria, prende quella di default del fornitore
+        let categoriaFattura = r.categoria_fattura || ''
+        if (!categoriaFattura && fornitoreId) {
+          const { data: fornCat } = await supabase.from('fornitori').select('categoria_fattura_default').eq('id', fornitoreId).single()
+          categoriaFattura = fornCat?.categoria_fattura_default || ''
+        }
         const { error } = await supabase.from('fatture_fornitori').insert({
           data: r.data || new Date().toISOString().split('T')[0],
           numero: r.numero, fornitore_id: fornitoreId || null, fornitore_nome: r.fornitore,
           progetto_id: progettoDefaultRic || null, progetto_nome: prj ? `${prj.codice} - ${prj.nome}` : '',
           imponibile, iva_percentuale: ivaPerc, ...rateFields,
-          categoria_fattura: r.categoria_fattura || null,
+          categoria_fattura: categoriaFattura || null,
           note: `SDI - Ricezione: ${r.data_ricezione}`
         })
         // Salva categoria come default fornitore per il prossimo import
-        if (r.categoria_fattura && fornitoreId)
-          await supabase.from('fornitori').update({ categoria_fattura_default: r.categoria_fattura }).eq('id', fornitoreId)
+        if (categoriaFattura && fornitoreId)
+          await supabase.from('fornitori').update({ categoria_fattura_default: categoriaFattura }).eq('id', fornitoreId)
         if (error) errori++; else importate++
       } catch { errori++ }
     }
