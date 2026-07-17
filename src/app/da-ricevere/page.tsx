@@ -82,8 +82,10 @@ export default function DaRiceverePage() {
   const [dataDAStorico, setDataDAStorico] = useState('')
   const [dataAStorico, setDataAStorico] = useState('')
   const [noteStorico, setNoteStorico] = useState<Record<string, string>>({})
-  const [fattureFornitoreAperte, setFattureFornitoreAperte] = useState<any[]>([])
+  const [fattureFornitoreAperte, setFattureFornitoreAperte] = useState<any[]>([])   // suggerite (stesso fornitore)
+  const [tutteFattureAperte, setTutteFattureAperte] = useState<any[]>([])            // elenco completo da cercare
   const [fatturaEsistenteSel, setFatturaEsistenteSel] = useState<any | null>(null)
+  const [cercaFatturaLibera, setCercaFatturaLibera] = useState('')
 
   useEffect(() => { load() }, [])
 
@@ -112,12 +114,19 @@ export default function DaRiceverePage() {
     setSelezionati(new Set()); setFiltroCantiere('')
     setNFattura(''); setImpFattura(''); setScadenza(''); setNoteAbbinamento('')
     setCostiExtra([]); setFatturaEsistenteSel(null)
-    const { data } = await supabase.from('fatture_fornitori')
-      .select('id,numero,data,imponibile,rata1_stato,rata2_stato,rata3_stato')
+    const { data: suggerite } = await supabase.from('fatture_fornitori')
+      .select('id,numero,data,imponibile,fornitore_nome,rata1_stato,rata2_stato,rata3_stato')
       .eq('fornitore_nome', fornitore)
       .or('rata1_stato.eq.Da Pagare,rata2_stato.eq.Da Pagare,rata3_stato.eq.Da Pagare')
       .order('data', { ascending: false })
-    setFattureFornitoreAperte(data || [])
+    setFattureFornitoreAperte(suggerite || [])
+    const { data: tutte } = await supabase.from('fatture_fornitori')
+      .select('id,numero,data,imponibile,fornitore_nome,rata1_stato,rata2_stato,rata3_stato')
+      .or('rata1_stato.eq.Da Pagare,rata2_stato.eq.Da Pagare,rata3_stato.eq.Da Pagare')
+      .order('data', { ascending: false })
+      .limit(300)
+    setTutteFattureAperte(tutte || [])
+    setCercaFatturaLibera('')
     setModal(true)
   }
 
@@ -341,63 +350,95 @@ export default function DaRiceverePage() {
             </div>
 
             {/* SELEZIONE FATTURA */}
-            <div className="mb-5">
-              <label className="label">Fattura ricevuta *</label>
+            <div className="mb-5 space-y-4">
 
-              {fattureFornitoreAperte.length > 0 && (
-                <div className="mb-3 border border-blue-200 rounded-lg overflow-hidden">
-                  <div className="px-3 py-2 bg-blue-50 border-b border-blue-100">
-                    <p className="text-xs font-semibold text-blue-800">
-                      Fatture già registrate per {fornSel} — selezionane una per collegarla senza creare duplicati
-                    </p>
+              {/* ── FATTURA SELEZIONATA — riepilogo fisso ── */}
+              {fatturaEsistenteSel && (
+                <div className="flex items-center justify-between bg-green-50 border-2 border-green-400 rounded-lg px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <span className="text-base font-bold text-green-800">N° {nFattura}</span>
+                    <span className="text-sm text-green-700">{euro(parseFloat(impFattura || '0'))}</span>
+                    <span className="text-xs text-green-600">{fatturaEsistenteSel.fornitore_nome}</span>
+                    <span className="badge badge-green text-xs">✓ Collegata — nessun duplicato</span>
                   </div>
-                  {fattureFornitoreAperte.map(f => {
-                    const sel = fatturaEsistenteSel?.id === f.id
-                    return (
-                      <button key={f.id} onClick={() => {
-                        if (sel) { setFatturaEsistenteSel(null); setNFattura(''); setImpFattura('') }
-                        else { setFatturaEsistenteSel(f); setNFattura(f.numero || ''); setImpFattura(String(f.imponibile || '')) }
-                      }} className={`w-full text-left px-4 py-3 border-b border-gray-100 flex items-center justify-between transition-colors ${sel ? 'bg-green-50 border-l-4 border-l-green-500' : 'hover:bg-blue-50'}`}>
-                        <div className="flex items-center gap-3">
-                          <div className={`w-5 h-5 rounded-full border-2 flex-shrink-0 flex items-center justify-center text-xs font-bold ${sel ? 'bg-green-600 border-green-600 text-white' : 'border-gray-300 text-transparent'}`}>
-                            {sel ? '✓' : ''}
-                          </div>
-                          <div>
-                            <p className={`text-sm font-bold ${sel ? 'text-green-700' : 'text-blue-700'}`}>N° {f.numero}</p>
-                            <p className="text-xs text-gray-400">{f.data ? new Date(f.data).toLocaleDateString('it-IT') : ''}</p>
-                          </div>
+                  <button className="text-xs text-gray-400 hover:text-red-600 ml-4"
+                    onClick={() => { setFatturaEsistenteSel(null); setNFattura(''); setImpFattura(''); setCercaFatturaLibera('') }}>
+                    × Deseleziona
+                  </button>
+                </div>
+              )}
+
+              {!fatturaEsistenteSel && (<>
+
+                {/* ── IN ALTO: SUGGERITE (stesso fornitore) ── */}
+                {fattureFornitoreAperte.length > 0 && (
+                  <div className="border border-blue-200 rounded-lg overflow-hidden">
+                    <div className="px-3 py-2 bg-blue-600 text-white flex items-center gap-2">
+                      <span className="text-xs font-bold">⭐ Suggerite — fatture aperte di {fornSel}</span>
+                      <span className="text-xs bg-white/20 px-1.5 py-0.5 rounded">{fattureFornitoreAperte.length}</span>
+                    </div>
+                    {fattureFornitoreAperte.map(f => (
+                      <button key={f.id} onClick={() => { setFatturaEsistenteSel(f); setNFattura(f.numero || ''); setImpFattura(String(f.imponibile || '')) }}
+                        className="w-full text-left px-4 py-3 border-b border-gray-100 flex items-center justify-between hover:bg-blue-50 transition-colors">
+                        <div>
+                          <p className="text-sm font-bold text-blue-700">N° {f.numero}</p>
+                          <p className="text-xs text-gray-400">{f.data ? new Date(f.data).toLocaleDateString('it-IT') : ''}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-sm font-semibold text-gray-700">{euro(f.imponibile)}</p>
-                          {sel && <p className="text-xs text-green-600 font-medium">Selezionata</p>}
+                          <p className="text-sm font-semibold text-gray-800">{euro(f.imponibile)}</p>
+                          <p className="text-xs text-blue-500">Seleziona →</p>
                         </div>
                       </button>
-                    )
-                  })}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
 
-              {fatturaEsistenteSel ? (
-                <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-lg px-4 py-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-bold text-green-800">N° {nFattura}</span>
-                    <span className="text-sm text-green-700">{euro(parseFloat(impFattura || '0'))}</span>
-                    <span className="text-xs text-green-600">Fattura gia registrata — verranno collegati i DDT senza creare duplicati</span>
+                {/* ── IN BASSO: ELENCO COMPLETO CON RICERCA ── */}
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <div className="px-3 py-2 bg-gray-50 border-b border-gray-200">
+                    <p className="text-xs font-semibold text-gray-600 mb-1.5">🔍 Tutte le fatture aperte — cerca per numero o fornitore</p>
+                    <input className="input text-sm" placeholder="es. FF/2026/018 oppure nome fornitore..."
+                      value={cercaFatturaLibera} onChange={e => setCercaFatturaLibera(e.target.value)} autoFocus={fattureFornitoreAperte.length === 0} />
                   </div>
-                  <button className="text-xs text-gray-400 hover:text-red-600 ml-4" onClick={() => { setFatturaEsistenteSel(null); setNFattura(''); setImpFattura('') }}>x Deseleziona</button>
+                  <div className="max-h-52 overflow-y-auto">
+                    {(() => {
+                      const q = cercaFatturaLibera.toLowerCase()
+                      const filtrate = tutteFattureAperte.filter(f =>
+                        !q || (f.numero || '').toLowerCase().includes(q) || (f.fornitore_nome || '').toLowerCase().includes(q)
+                      )
+                      if (filtrate.length === 0) return (
+                        <p className="text-xs text-gray-400 text-center py-6">Nessuna fattura aperta trovata{q ? ` per "${cercaFatturaLibera}"` : ''}</p>
+                      )
+                      return filtrate.slice(0, 50).map(f => (
+                        <button key={f.id} onClick={() => { setFatturaEsistenteSel(f); setNFattura(f.numero || ''); setImpFattura(String(f.imponibile || '')) }}
+                          className="w-full text-left px-4 py-2.5 border-b border-gray-50 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-gray-800">N° {f.numero}</p>
+                            <p className="text-xs text-gray-400 truncate">{f.fornitore_nome} · {f.data ? new Date(f.data).toLocaleDateString('it-IT') : ''}</p>
+                          </div>
+                          <span className="text-sm font-semibold text-gray-600 ml-3 flex-shrink-0">{euro(f.imponibile)}</span>
+                        </button>
+                      ))
+                    })()}
+                  </div>
                 </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="label text-xs">{fattureFornitoreAperte.length > 0 ? 'Oppure: N° Fattura nuova' : 'N° Fattura ricevuta *'}</label>
-                    <input className="input" placeholder="es. FF/2026/018" value={nFattura} onChange={e => setNFattura(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="label text-xs">Imponibile (€) *</label>
-                    <input className="input" type="number" step="0.01" placeholder="0.00" value={impFattura} onChange={e => setImpFattura(e.target.value)} />
+
+                {/* ── OPPURE NUOVA FATTURA ── */}
+                <div className="border border-dashed border-gray-300 rounded-lg p-3">
+                  <p className="text-xs text-gray-500 mb-2 font-medium">Oppure inserisci una fattura non ancora registrata:</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="label text-xs">N° Fattura *</label>
+                      <input className="input" placeholder="es. FF/2026/018" value={nFattura} onChange={e => setNFattura(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="label text-xs">Imponibile (€) *</label>
+                      <input className="input" type="number" step="0.01" placeholder="0.00" value={impFattura} onChange={e => setImpFattura(e.target.value)} />
+                    </div>
                   </div>
                 </div>
-              )}
+
+              </>)}
             </div>
 
             <div className="grid grid-cols-2 gap-3 mb-4">
