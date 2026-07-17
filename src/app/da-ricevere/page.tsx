@@ -82,7 +82,8 @@ export default function DaRiceverePage() {
   const [dataDAStorico, setDataDAStorico] = useState('')
   const [dataAStorico, setDataAStorico] = useState('')
   const [noteStorico, setNoteStorico] = useState<Record<string, string>>({})
-  const [fattureFornitoreAperte, setFattureFornitoreAperte] = useState<any[]>([])   // suggerite (stesso fornitore)
+  const [fattureFornitoreAperte, setFattureFornitoreAperte] = useState<any[]>([])
+  const [cercaDdtModal, setCercaDdtModal] = useState('')   // suggerite (stesso fornitore)
   const [tutteFattureAperte, setTutteFattureAperte] = useState<any[]>([])            // elenco completo da cercare
   const [fatturaEsistenteSel, setFatturaEsistenteSel] = useState<any | null>(null)
   const [cercaFatturaLibera, setCercaFatturaLibera] = useState('')
@@ -113,7 +114,7 @@ export default function DaRiceverePage() {
     setDdtFornitore(g ? g.ddt : [])
     setSelezionati(new Set()); setFiltroCantiere('')
     setNFattura(''); setImpFattura(''); setScadenza(''); setNoteAbbinamento('')
-    setCostiExtra([]); setFatturaEsistenteSel(null)
+    setCostiExtra([]); setFatturaEsistenteSel(null); setCercaDdtModal('')
     const { data: suggerite } = await supabase.from('fatture_fornitori')
       .select('id,numero,data,imponibile,fornitore_nome,rata1_stato,rata2_stato,rata3_stato')
       .eq('fornitore_nome', fornitore)
@@ -136,7 +137,14 @@ export default function DaRiceverePage() {
   function rimuoviCostoExtra(idx: number) { setCostiExtra(prev => prev.filter((_, i) => i !== idx)) }
 
   const cantieriFornitore = [...new Set(ddtFornitore.map(d => d.progetto_nome || '—'))].sort()
-  const ddtFiltrati = filtroCantiere ? ddtFornitore.filter(d => (d.progetto_nome || '—') === filtroCantiere) : ddtFornitore
+  const ddtFiltrati = ddtFornitore.filter(d => {
+    if (filtroCantiere && (d.progetto_nome || '—') !== filtroCantiere) return false
+    if (cercaDdtModal) {
+      const q = cercaDdtModal.toLowerCase()
+      if (!d.numero?.toLowerCase().includes(q) && !d.descrizione?.toLowerCase().includes(q) && !(d.progetto_nome||'').toLowerCase().includes(q)) return false
+    }
+    return true
+  })
   const ddtPerCantiere: Record<string, any[]> = {}
   ddtFiltrati.forEach(d => { const key = d.progetto_nome || '— Senza cantiere'; if (!ddtPerCantiere[key]) ddtPerCantiere[key] = []; ddtPerCantiere[key].push(d) })
   const totSel = ddtFornitore.filter(d => selezionati.has(d.id)).reduce((s, d) => s + d.importo, 0)
@@ -456,7 +464,12 @@ export default function DaRiceverePage() {
             </div>
 
             <div className="mb-4 space-y-3">
-              <p className="text-xs font-medium text-gray-600">Spunta i DDT coperti da questa fattura:</p>
+              <div className="flex gap-2 items-center mb-2">
+                <p className="text-xs font-medium text-gray-600 flex-shrink-0">Spunta i DDT coperti da questa fattura:</p>
+                <input className="input text-xs py-1 flex-1" placeholder="🔍 Cerca per N° DDT, descrizione, cantiere..." value={cercaDdtModal} onChange={e => setCercaDdtModal(e.target.value)} />
+                {cercaDdtModal && <button className="text-xs text-gray-400 hover:text-gray-700" onClick={() => setCercaDdtModal('')}>×</button>}
+              </div>
+              {cercaDdtModal && <p className="text-xs text-gray-400 mb-2">{ddtFiltrati.length} DDT trovati</p>}
               {Object.entries(ddtPerCantiere).map(([cantiere, ddt]) => (
                 <div key={cantiere} className="border border-gray-200 rounded-lg overflow-hidden">
                   <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
