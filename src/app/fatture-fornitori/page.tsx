@@ -965,9 +965,11 @@ export default function FattureFornitori() {
 
       <style jsx global>{`
         @media print {
-          body > * { visibility: hidden !important; }
-          #autorizzazione-pagamento { visibility: visible !important; position: fixed; top: 0; left: 0; width: 100%; padding: 20mm; }
-          #autorizzazione-pagamento * { visibility: visible !important; }
+          @page { size: A4; margin: 15mm; }
+          body * { visibility: hidden !important; }
+          #autorizzazione-pagamento, #autorizzazione-pagamento * { visibility: visible !important; }
+          #autorizzazione-pagamento { position: static !important; width: 100% !important; padding: 0 !important; }
+          .print\\:hidden { display: none !important; }
         }
       `}</style>
     </div>
