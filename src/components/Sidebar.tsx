@@ -15,7 +15,6 @@ const nav = [
     { href: '/costi-cantiere', label: 'Costi cantiere', icon: '💰', perm: 'perm_costi_cantiere' },
     { href: '/programmi', label: 'Programmi', icon: '📋', perm: 'perm_programmi' },
     { href: '/presenze', label: 'Presenze', icon: '📅', perm: 'perm_presenze' },
-    { href: '/cantieri', label: 'Cantieri', icon: '🏗️', perm: 'perm_cantieri' },
     { href: '/cassa-edile', label: 'Cassa Edile', icon: '🏗️', perm: 'perm_cassa_edile' },
   ]},
   { section: 'Ciclo Passivo', items: [
@@ -24,6 +23,7 @@ const nav = [
     { href: '/da-ricevere', label: 'Da ricevere', icon: '⏳', perm: 'perm_da_ricevere' },
     { href: '/fatture-fornitori', label: 'Fatt. fornitori', icon: '📄', perm: 'perm_fatture_fornitori' },
     { href: '/import-sdi', label: 'Import SDI', icon: '📥', perm: 'perm_import_sdi' },
+    { href: '/rifiuti', label: 'Rifiuti', icon: '♻️', perm: 'perm_rifiuti' },
     { href: '/prezzario', label: 'Prezzario', icon: '💹', perm: 'perm_prezzario' },
   ]},
   { section: 'Ciclo Attivo', items: [
@@ -112,10 +112,7 @@ export default function Sidebar() {
         inAllertaConPreavviso(m.scadenza_bollo, 30) ||
         inAllertaConPreavviso(m.scadenza_revisione, 30)
       ).length
-      const { data: scad } = await supabase
-        .from('scadenze_aziendali')
-        .select('scadenza')
-        .eq('attiva', true)
+      const { data: scad } = await supabase.from('scadenze_aziendali').select('scadenza').eq('attiva', true)
       const oggi = new Date(); oggi.setHours(0,0,0,0)
       const scadenzeInAllerta = (scad || []).filter(s => {
         const giorni = Math.ceil((new Date(s.scadenza).getTime() - oggi.getTime()) / 86400000)
@@ -157,7 +154,7 @@ export default function Sidebar() {
             <div key={group.section} className="mb-1">
               <p className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wide">{group.section}</p>
               {visibleItems.map(item => {
-                const badgeCount = item.badgeKey ? (badges[item.badgeKey] || 0) : 0
+                const badgeCount = (item as any).badgeKey ? (badges[(item as any).badgeKey] || 0) : 0
                 return (
                   <Link key={item.href} href={item.href}
                     className={`flex items-center gap-2 px-4 py-2 text-sm transition-colors border-l-2
